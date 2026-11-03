@@ -4163,6 +4163,7 @@ execute_instruction(void)
                 completed = 0;
 
                 halted    = 1;
+                CPU_NOTE_HALT(); /* KairoX86 */
             }
 
             if (is_nec)

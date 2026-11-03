@@ -25,6 +25,33 @@ shared\tools\build.ps1 -Install <adb serial>
 
 Every change to the core's code is exact or it does not go in: the guest state at a fixed emulated time must match the reference fingerprint bit for bit (Kairo9X `PERF-FINDINGS.md`, `poc/vm/ab.sh`).
 
+## Host tests
+
+The core builds for the host with llvm-mingw (`shared\tools\test-core.ps1` configures `.build\host`). `core/test/boot_test` runs machine folders in turn in one process, as the app runs one machine after another, and checks each leaves no thread behind; run it under `shared\tools\run-limited.ps1`:
+
+```
+boot_test <ROM set> <work folder> <machine folder>[><stop text>][|...] <seconds> [snapshot seconds] [frame:scancode,...]
+```
+
+A machine given with `>stop text` must stop before `<seconds>` with a reason containing that text; any other must not stop.
+
+### Stop tests
+
+`python core/test/stops/make_floppies.py <folder>` writes one machine folder for each way a PC stops (KairoX86#34), each booting a floppy whose boot sector (`core/test/stops/boot.S`) stops it that way, and prints the machine list that expects each stop:
+
+| Machine | Its boot sector | The stop |
+| --- | --- | --- |
+| `idle` | waits for interrupts | none |
+| `halt` | CLI, then HLT | "The PC halted: its processor stopped with interrupts off" |
+| `keyboard` | the AT keyboard's set scan code set command with set 5 | 86Box's `fatal()` on the machine's thread |
+| `power-off` | the PIIX4's ACPI soft off (ABIT BX6) | "The PC turned itself off" |
+| `voodoo` | a Voodoo 2 blit with an undefined command (ABIT BX6) | 86Box's `fatal()` on the Voodoo's FIFO thread |
+
+```powershell
+python core\test\stops\make_floppies.py .build\stops > .build\stops-list.txt
+shared\tools\run-limited.ps1 .build\host\boot_test.exe bios .build\stops-out (Get-Content .build\stops-list.txt -Raw).Trim() 20
+```
+
 ## Catalog
 
 KairoX86 has no game catalog. `catalog/system-v2.json` is the system definition (the controls every entry starts from); `python shared/tools/app_catalog.py .` builds the catalog's parts and update from it and an empty research file (`tools/catalog_config.py`), and `--check` fails when they are out of date.

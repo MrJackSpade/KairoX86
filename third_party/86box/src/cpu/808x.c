@@ -3233,6 +3233,7 @@ execx86_instruction(void)
                 } else {
                     repeating = 1;
                     completed = 0;
+                    CPU_NOTE_HALT(); /* KairoX86 */
                     clock_end();
                 }
                 break;

@@ -2,12 +2,14 @@
 // at the given guest seconds and at the end, and reporting the frames, the picture sizes, the sound
 // and how fast the host ran it.
 //
-//   boot_test <rom folder> <out folder> <machine folder> <seconds> [snapshot seconds, comma separated]
+//   boot_test <rom folder> <out folder> <machine folder>[>stop text][|...] <seconds>
+//             [snapshot seconds, comma separated] [frame:scancode,...]
 //
 // in the shared host test's order (shared/tools/test-core.ps1: firmware, work folder, media, seconds).
 //
 // The machine folder holds the machine's 86box.cfg and the disks it names (86Box's own layout); the
-// rom folder is the 86Box ROM set itself (its machines/, video/... folders). Runs one machine, then ends.
+// rom folder is the 86Box ROM set itself (its machines/, video/... folders). The machines run in
+// turn in one process; one given with ">stop text" must stop with a reason containing it.
 
 #include <png.h>
 
@@ -121,10 +123,14 @@ struct Press {
 constexpr unsigned long kHeldFrames = 4;
 
 // One machine run: boots [folder], runs it [seconds] of guest time with [presses], writes its
-// pictures into [out] named after run [index], closes it and checks it left no thread behind.
+// pictures into [out] named after run [index], closes it and checks it left no thread behind. With
+// [expected_stop], the machine must stop before then, with a reason containing that text (the
+// stop tests, core/test/stops/); without it, it must not stop.
 bool run_machine(int index, const std::string &rom_folder, const std::string &folder, const std::string &out,
-                 double seconds, const std::set<int> &snapshots, const std::vector<Press> &presses) {
-    std::printf("run %d: %s\n", index, folder.c_str());
+                 double seconds, const std::set<int> &snapshots, const std::vector<Press> &presses,
+                 const std::string &expected_stop) {
+    std::printf("run %d: %s%s%s\n", index, folder.c_str(), expected_stop.empty() ? "" : ", to stop with: ",
+                expected_stop.c_str());
     kairox86::Config config;
     config.machine_folder = folder;
     config.rom_folder = rom_folder;
@@ -146,15 +152,16 @@ bool run_machine(int index, const std::string &rom_folder, const std::string &fo
     uint32_t width = 0, height = 0;
     const uint8_t *pixels = nullptr;
     const std::string prefix = out + "/run" + std::to_string(index) + "-";
+    std::string stop;
     while (guest < seconds) {
         for (const Press &press : presses) {
             if (press.frame == frames) machine->key(press.code, true);
             if (press.frame + kHeldFrames == frames) machine->key(press.code, false);
         }
         if (!machine->run_frame(error)) {
-            std::fprintf(stderr, "run %d: stopped at %.3f s: %s\n", index, guest, error.c_str());
-            if (pixels) write_png(prefix + "crash.png", pixels, width, height);
-            return false;
+            stop = error;
+            std::printf("  stopped at %.3f s: %s\n", guest, stop.c_str());
+            break;
         }
         guest += machine->frame_seconds();
         ++frames;
@@ -192,11 +199,20 @@ bool run_machine(int index, const std::string &rom_folder, const std::string &fo
     const int threads_after = thread_count();
     std::printf("  threads: %d before the machine, %d after it closed\n", threads_before, threads_after);
     std::fflush(stdout);
+    bool passed = true;
     if (threads_after != threads_before) {
         std::fprintf(stderr, "run %d: the closed machine left %d thread(s) running\n", index, threads_after - threads_before);
-        return false;
+        passed = false;
     }
-    return true;
+    if (expected_stop.empty() && !stop.empty()) {
+        std::fprintf(stderr, "run %d: stopped: %s\n", index, stop.c_str());
+        passed = false;
+    } else if (!expected_stop.empty() && stop.find(expected_stop) == std::string::npos) {
+        std::fprintf(stderr, "run %d: expected a stop with \"%s\", got %s\n", index, expected_stop.c_str(),
+                     stop.empty() ? "none" : ("\"" + stop + "\"").c_str());
+        passed = false;
+    }
+    return passed;
 }
 
 std::vector<std::string> split(const std::string &text, char separator) {
@@ -233,8 +249,16 @@ int main(int argc, char **argv) {
             }
             presses.push_back({std::stoul(item.substr(0, colon)), int(std::stoul(item.substr(colon + 1), nullptr, 0))});
         }
-    const std::vector<std::string> folders = split(argv[3], '|');
-    for (size_t i = 0; i < folders.size(); ++i)
-        if (!run_machine(int(i), argv[1], folders[i], out, seconds, snapshots, presses)) return 1;
-    return 0;
+    // Each machine is "<folder>" or "<folder>><expected stop text>" ('>' is in no Windows or
+    // Android path). Every machine runs, so one stop test failing still shows the others.
+    const std::vector<std::string> machines = split(argv[3], '|');
+    int failed = 0;
+    for (size_t i = 0; i < machines.size(); ++i) {
+        const size_t mark = machines[i].find('>');
+        const std::string folder = machines[i].substr(0, mark);
+        const std::string expected_stop = mark == std::string::npos ? "" : machines[i].substr(mark + 1);
+        if (!run_machine(int(i), argv[1], folder, out, seconds, snapshots, presses, expected_stop)) ++failed;
+    }
+    if (failed) std::fprintf(stderr, "%d of %zu runs failed\n", failed, machines.size());
+    return failed ? 1 : 0;
 }

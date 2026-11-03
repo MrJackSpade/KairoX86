@@ -4671,6 +4671,8 @@ m808x_86box_export_arch_state(const m808x_cpu_t *icpu)
     cpu_state.eaaddr = icpu->ea_addr;
     in_lock = icpu->in_lock ? 1 : 0;
     pfq_pos = (int) queue_effective_len(&icpu->biu.queue);
+    if (icpu->halted)
+        CPU_NOTE_HALT(); /* KairoX86 */
 }
 
 void

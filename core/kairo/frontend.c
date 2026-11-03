@@ -35,6 +35,11 @@
 #include <86box/ui.h>
 #include <86box/sound.h>
 #include <86box/gameport.h>
+#include "cpu.h"
+
+#ifdef _WIN32
+#    include <process.h>
+#endif
 
 #include "kairo_x86.h"
 
@@ -61,10 +66,16 @@ joystick_state_t      joystick_state[GAMEPORT_MAX][MAX_JOYSTICKS];
 static struct KairoX86Host host;
 static pthread_t           host_thread;
 static jmp_buf             stopped;   /* where do_stop() returns to on the host's thread */
-static bool                running;   /* a start or run_frame is on the stack, with stopped set */
-static bool                dead;      /* the machine stopped: nothing runs it again */
+static bool                running;   /* a call into 86Box is on the host's stack, with stopped set */
+static atomic_bool         dead;      /* the machine stopped: nothing runs it again */
+static bool                closed;    /* pc_close ended 86Box's threads */
 static int                 frame_ms;  /* the guest time the last frame lasted */
 static int                 nvr_ms;    /* guest time since the CMOS was last saved */
+static int                 halted_ms; /* guest time the processor has sat on a HLT with interrupts off */
+
+/* How long the processor must sit on a HLT with interrupts off before the machine counts as
+   stopped: only an NMI or SMI can wake it, and a second rules out a short wait for either. */
+#define HALT_STOP_MS 1000
 
 static pthread_mutex_t blit_lock = PTHREAD_MUTEX_INITIALIZER;
 static char            title[512] = EMU_NAME;
@@ -85,6 +96,15 @@ report(void (*to)(void *, const char *), const char *message)
 {
     if (to != NULL)
         to(host.context, message);
+}
+
+/* The machine is over, for the reason given: the host ends the game with it (host->fatal keeps the
+   first reason), and run_frame returns false from now on. */
+static void
+machine_over(const char *reason)
+{
+    report(host.fatal, reason);
+    atomic_store(&dead, true);
 }
 
 /* ---- Sound: every stream resampled to OUTPUT_RATE and mixed ---- */
@@ -223,20 +243,24 @@ blit(int x, int y, int w, int h, int monitor_index)
         if ((y + h) > target->h)
             h = target->h - y;
         pthread_mutex_lock(&picture_lock);
+        bool room = true;
         if ((w * h) > picture_alloc) {
             uint32_t *grown = realloc(picture, (size_t) w * (size_t) h * sizeof(uint32_t));
             if (grown == NULL) {
-                pthread_mutex_unlock(&picture_lock);
-                report(host.fatal, "Out of memory for the picture");
-                abort();
+                /* The last picture stays as it was; the machine ends with why. */
+                room = false;
+                machine_over("The PC stopped: no memory for its picture");
+            } else {
+                picture       = grown;
+                picture_alloc = w * h;
             }
-            picture       = grown;
-            picture_alloc = w * h;
         }
-        for (int row = 0; row < h; row++)
-            memcpy(&picture[row * w], &target->line[y + row][x], (size_t) w * sizeof(uint32_t));
-        picture_width  = w;
-        picture_height = h;
+        if (room) {
+            for (int row = 0; row < h; row++)
+                memcpy(&picture[row * w], &target->line[y + row][x], (size_t) w * sizeof(uint32_t));
+            picture_width  = w;
+            picture_height = h;
+        }
         pthread_mutex_unlock(&picture_lock);
     }
     video_blit_complete_monitor(monitor_index);
@@ -252,15 +276,23 @@ api_screen(int *width, int *height, int *pitch)
     return picture;
 }
 
+/* The host's thread holds blit_lock (pc_run takes it around the CPU's block): a fatal() inside the
+   block unwinds past endblit(), so do_stop() releases it. */
+static bool blit_held_by_host;
+
 void
 startblit(void)
 {
     pthread_mutex_lock(&blit_lock);
+    if (pthread_equal(pthread_self(), host_thread))
+        blit_held_by_host = true;
 }
 
 void
 endblit(void)
 {
+    if (pthread_equal(pthread_self(), host_thread))
+        blit_held_by_host = false;
     pthread_mutex_unlock(&blit_lock);
 }
 
@@ -320,7 +352,9 @@ ui_msgbox_header(int flags, char *header, char *message)
 
     snprintf(text, sizeof(text), "%s%s%s", header ? header : "", (header && message) ? ": " : "", message ? message : "");
     if (flags & MBX_FATAL) {
-        report(host.fatal, text);
+        char reason[1100];
+        snprintf(reason, sizeof(reason), "The PC stopped: %s", text);
+        machine_over(reason);
         /* fatal() then calls do_stop(), which ends the machine run. */
     } else
         report(host.notice, text);
@@ -360,17 +394,29 @@ void ui_sb_mt32lcd(UNUSED(char *str)) { }
 void ui_hard_reset_completed(void) { }
 void ui_update_force_interpreter(void) { }
 
-/* fatal() ends here after reporting: the run unwinds to the host, whose machine is then over. */
+/* fatal() ends here after reporting (ui_msgbox), never reaching its exit(). */
 void
 do_stop(void)
 {
     is_quit = 1;
-    dead    = true;
-    if (running && pthread_equal(pthread_self(), host_thread))
+    atomic_store(&dead, true);
+    /* On the host's thread, the call into 86Box unwinds to the host, whose machine is then over. */
+    if (running && pthread_equal(pthread_self(), host_thread)) {
+        if (blit_held_by_host) {
+            blit_held_by_host = false;
+            pthread_mutex_unlock(&blit_lock);
+        }
         longjmp(stopped, 1);
-    /* 86Box failed on one of its own threads, which cannot unwind the host's: the message went to
-       the host before this (ui_msgbox), and the process ends here instead of in exit(). */
-    abort();
+    }
+    /* Every call into 86Box comes from the host's thread inside a setjmp (start, run_frame,
+       reset, stop), so this is one of 86Box's own threads (the blit, a renderer, a sound thread):
+       it ends here, and the host sees the machine over at its next frame. pc_close then joins it
+       with the rest. */
+#ifdef _WIN32
+    _endthreadex(1);
+#else
+    pthread_exit(NULL);
+#endif
 }
 
 /* ---- Input ---- */
@@ -450,15 +496,13 @@ api_start(const char *vm_folder, const char *rom_folder, const struct KairoX86Ho
     }
     running = true;
     if (!pc_init(6, argv)) {
-        report(host.fatal, "86Box could not read its command line");
+        machine_over("86Box could not read its command line");
         running = false;
-        dead    = true;
         return false;
     }
     if (!pc_init_roms()) {
-        report(host.fatal, "86Box found no firmware");
+        machine_over("86Box found no firmware");
         running = false;
-        dead    = true;
         return false;
     }
     pc_init_modules();
@@ -473,10 +517,18 @@ api_start(const char *vm_folder, const char *rom_folder, const struct KairoX86Ho
     return true;
 }
 
+/* At a frame's end: whether the processor sits on the HLT it last stayed halted on (CPU_NOTE_HALT,
+   KairoX86's patch to every CPU core) with interrupts off, where only an NMI or SMI can wake it. */
+static bool
+halted_with_interrupts_off(void)
+{
+    return cpu_halt_seen && !(cpu_state.flags & I_FLAG) && (CS == cpu_halt_cs) && (cpu_state.pc == cpu_halt_pc);
+}
+
 static bool
 api_run_frame(void)
 {
-    if (dead)
+    if (atomic_load(&dead))
         return false;
     if (setjmp(stopped)) {
         running = false;
@@ -488,6 +540,12 @@ api_run_frame(void)
     while ((monitors[0].mon_renderedframes == frames) && (frame_ms < KAIRO_X86_MAX_FRAME_MS)) {
         pc_run();
         frame_ms++;
+        /* The guest turned the PC off (ACPI, APM or a soft power switch: plat_power_off, which
+           saved its disks, CMOS and configuration). */
+        if (!cpu_thread_run) {
+            machine_over("The PC turned itself off");
+            break;
+        }
         if (++nvr_ms >= 2000) {
             nvr_ms = 0;
             if (nvr_dosave) {
@@ -498,8 +556,14 @@ api_run_frame(void)
     }
     /* The blit thread copies the frame: wait until it has, so screen() reads it whole. */
     video_wait_for_blit_monitor(0);
+    if (halted_with_interrupts_off()) {
+        halted_ms += frame_ms;
+        if (halted_ms >= HALT_STOP_MS)
+            machine_over("The PC halted: its processor stopped with interrupts off");
+    } else
+        halted_ms = 0;
     running = false;
-    return !dead;
+    return !atomic_load(&dead);
 }
 
 static double
@@ -511,14 +575,27 @@ api_frame_seconds(void)
 static void
 api_reset(void)
 {
+    if (atomic_load(&dead))
+        return;
+    if (setjmp(stopped)) {
+        running = false;
+        return;
+    }
+    running = true;
     pc_reset_hard();
+    halted_ms = 0;
+    running   = false;
 }
 
+/* Ends 86Box's threads and saves its CMOS, also after it stopped (a fatal error, the guest turning
+   the PC off, a halt), so its library copy can go. */
 static void
 api_stop(void)
 {
-    if (dead)
+    if (closed)
         return;
+    closed = true;
+    atomic_store(&dead, true);
     if (setjmp(stopped)) {
         running = false;
         return;
@@ -526,7 +603,6 @@ api_stop(void)
     running = true;
     pc_close(NULL);
     running = false;
-    dead    = true;
 }
 
 static const struct KairoX86Api api = {

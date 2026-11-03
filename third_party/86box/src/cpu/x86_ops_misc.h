@@ -716,6 +716,7 @@ opHLT(UNUSED(uint32_t fetchdat))
         if (!((cpu_state.flags & I_FLAG) && x86_external_interrupt_pending())) {
             cpu_state.pc--;
             cpu_halted = 1; /* an interrupt taken here returns past the HLT */
+            CPU_NOTE_HALT(); /* KairoX86 */
         }
     } else {
         CLOCK_CYCLES(5);

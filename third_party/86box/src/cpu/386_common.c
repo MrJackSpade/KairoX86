@@ -92,6 +92,10 @@ int smi_latched = 0;
 int smm_in_hlt  = 0;
 int smi_block   = 0;
 K9X_HOT int cpu_halted  = 0;
+/* KairoX86: the CS:IP of the last HLT any CPU core stayed halted on (CPU_NOTE_HALT). */
+uint16_t cpu_halt_cs   = 0;
+uint32_t cpu_halt_pc   = 0;
+int      cpu_halt_seen = 0;
 
 /* RSM restarted a HLT and a latched SMI is about to be entered. */
 static int smm_rsm_restart = 0;

@@ -1201,6 +1201,65 @@ KAIROX86_LIBRARY = [
      + 'endif()' + _NL),
 ]
 
+# KairoX86#34: a machine that stops ends the game with its reason. Every CPU core's HLT that stays
+# halted notes where (CPU_NOTE_HALT), so the frontend can tell a processor stopped with interrupts
+# off (core/kairo/frontend.c) from one that is only waiting for its next interrupt.
+KAIROX86_STOP = [
+    ('86box/src/cpu/386_common.c',
+     'K9X_HOT int cpu_halted  = 0;' + _NL,
+     'K9X_HOT int cpu_halted  = 0;' + _NL
+     + '/* KairoX86: the CS:IP of the last HLT any CPU core stayed halted on (CPU_NOTE_HALT). */' + _NL
+     + 'uint16_t cpu_halt_cs   = 0;' + _NL
+     + 'uint32_t cpu_halt_pc   = 0;' + _NL
+     + 'int      cpu_halt_seen = 0;' + _NL),
+    ('86box/src/cpu/cpu.h',
+     'extern int cpu_halted;' + _NL,
+     'extern int cpu_halted;' + _NL
+     + '/* KairoX86: where a core\'s HLT stayed halted (386_common.c). A frontend reads it with the' + _NL
+     + '   flags: a processor still on that HLT with interrupts off has stopped. */' + _NL
+     + 'extern uint16_t cpu_halt_cs;' + _NL
+     + 'extern uint32_t cpu_halt_pc;' + _NL
+     + 'extern int      cpu_halt_seen;' + _NL
+     + '#define CPU_NOTE_HALT()               \\' + _NL
+     + '    do {                              \\' + _NL
+     + '        cpu_halt_cs   = CS;           \\' + _NL
+     + '        cpu_halt_pc   = cpu_state.pc; \\' + _NL
+     + '        cpu_halt_seen = 1;            \\' + _NL
+     + '    } while (0)' + _NL),
+    ('86box/src/cpu/x86_ops_misc.h',
+     '            cpu_halted = 1; /* an interrupt taken here returns past the HLT */' + _NL,
+     '            cpu_halted = 1; /* an interrupt taken here returns past the HLT */' + _NL
+     + '            CPU_NOTE_HALT(); /* KairoX86 */' + _NL),
+    ('86box/src/cpu/808x.c',
+     '                } else {' + _NL
+     + '                    repeating = 1;' + _NL
+     + '                    completed = 0;' + _NL
+     + '                    clock_end();' + _NL
+     + '                }' + _NL
+     + '                break;' + _NL
+     + '            case 0xf5:             /* CMC */' + _NL,
+     '                } else {' + _NL
+     + '                    repeating = 1;' + _NL
+     + '                    completed = 0;' + _NL
+     + '                    CPU_NOTE_HALT(); /* KairoX86 */' + _NL
+     + '                    clock_end();' + _NL
+     + '                }' + _NL
+     + '                break;' + _NL
+     + '            case 0xf5:             /* CMC */' + _NL),
+    ('86box/src/cpu/vx0.c',
+     '                halted    = 1;' + _NL
+     + '            }' + _NL,
+     '                halted    = 1;' + _NL
+     + '                CPU_NOTE_HALT(); /* KairoX86 */' + _NL
+     + '            }' + _NL),
+    ('86box/src/cpu/808x_marty_86box.c',
+     '    pfq_pos = (int) queue_effective_len(&icpu->biu.queue);' + _NL + '}' + _NL,
+     '    pfq_pos = (int) queue_effective_len(&icpu->biu.queue);' + _NL
+     + '    if (icpu->halted)' + _NL
+     + '        CPU_NOTE_HALT(); /* KairoX86 */' + _NL
+     + '}' + _NL),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -1210,6 +1269,7 @@ PATCHES = {
     'kairo9x-sound': KAIRO9X_SOUND,
     'kairox86-license': KAIROX86_LICENSE,
     'kairox86-library': KAIROX86_LIBRARY,
+    'kairox86-stop': KAIROX86_STOP,
 }
 
 ADDED = [

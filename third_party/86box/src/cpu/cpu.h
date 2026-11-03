@@ -595,6 +595,17 @@ extern int smi_block;
 /* The processor stopped in HLT, its PC on the HLT (opHLT): an interrupt
    taken from there returns past it. */
 extern int cpu_halted;
+/* KairoX86: where a core's HLT stayed halted (386_common.c). A frontend reads it with the
+   flags: a processor still on that HLT with interrupts off has stopped. */
+extern uint16_t cpu_halt_cs;
+extern uint32_t cpu_halt_pc;
+extern int      cpu_halt_seen;
+#define CPU_NOTE_HALT()               \
+    do {                              \
+        cpu_halt_cs   = CS;           \
+        cpu_halt_pc   = cpu_state.pc; \
+        cpu_halt_seen = 1;            \
+    } while (0)
 extern int cpu_is_p5(void);
 extern int cpu_init_keeps_state(void);
 
