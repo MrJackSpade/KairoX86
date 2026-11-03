@@ -25,9 +25,11 @@
 
 #if defined(_WIN32)
 #include <windows.h>
+#include <psapi.h>
 #include <tlhelp32.h>
 #else
 #include <dirent.h>
+#include <unistd.h>
 #endif
 
 namespace {
@@ -83,6 +85,29 @@ int thread_count() {
     return count;
 #endif
 }
+
+// The process's memory in use, in bytes, to show a closed machine gave back what it took (KairoX86#186):
+// its private committed memory on Windows, its resident set elsewhere; -1 when it cannot be told.
+long long memory_in_use() {
+#if defined(_WIN32)
+    PROCESS_MEMORY_COUNTERS_EX counters{};
+    if (!GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS *>(&counters),
+                              sizeof(counters)))
+        return -1;
+    return static_cast<long long>(counters.PrivateUsage);
+#else
+    FILE *statm = std::fopen("/proc/self/statm", "r");
+    if (!statm) return -1;
+    long long pages = 0, resident = 0;
+    const int read = std::fscanf(statm, "%lld %lld", &pages, &resident);
+    std::fclose(statm);
+    return read == 2 ? resident * sysconf(_SC_PAGESIZE) : -1;
+#endif
+}
+
+// How much more than the first run a later run may leave in use: the C library's heap and the
+// system's own caches move by a few megabytes from run to run; a machine's own memory is hundreds.
+constexpr long long kMemoryKept = 32ll << 20;
 
 bool write_png(const std::string &path, const uint8_t *bgra, uint32_t width, uint32_t height) {
     FILE *file = std::fopen(path.c_str(), "wb");
@@ -196,12 +221,25 @@ bool run_machine(int index, const std::string &rom_folder, const std::string &fo
     std::printf("  %lu frames, %.2f guest s in %.2f host s (%.0f%%), %llu audio frames, peak %d\n", frames, guest, wall,
                 100.0 * guest / wall, static_cast<unsigned long long>(audio_frames), peak);
     machine->close();
+    machine.reset();
     const int threads_after = thread_count();
+    const long long memory_after = memory_in_use();
     std::printf("  threads: %d before the machine, %d after it closed\n", threads_before, threads_after);
     std::fflush(stdout);
     bool passed = true;
     if (threads_after != threads_before) {
         std::fprintf(stderr, "run %d: the closed machine left %d thread(s) running\n", index, threads_after - threads_before);
+        passed = false;
+    }
+    // What a closed machine keeps (KairoX86#186): every run ends within kMemoryKept of where the first
+    // run ended, once the C library's heap has grown to what a machine uses.
+    static long long first_memory = -1;
+    if (first_memory < 0) first_memory = memory_after;
+    std::printf("  memory: %lld MB in use after it closed, %lld MB after the first run closed\n", memory_after >> 20,
+                first_memory >> 20);
+    if ((memory_after < 0) || (memory_after - first_memory > kMemoryKept)) {
+        std::fprintf(stderr, "run %d: the closed machine kept %lld MB more than the first run\n", index,
+                     (memory_after - first_memory) >> 20);
         passed = false;
     }
     if (expected_stop.empty() && !stop.empty()) {

@@ -76,6 +76,9 @@ add_subdirectory("${KAIROX86_THIRD_PARTY}/86box" 86box)
 set_target_properties(86Box PROPERTIES OUTPUT_NAME kairox86_86box C_VISIBILITY_PRESET hidden CXX_VISIBILITY_PRESET hidden)
 target_include_directories(plat PRIVATE "${CMAKE_CURRENT_LIST_DIR}/kairo")
 target_link_libraries(86Box chdr-static kairo_zlib)
+# A machine owns what it allocates (KairoX86#186): the library's malloc family goes through the
+# frontend's record (core/kairo/frontend.c), which frees what is left when the machine closes.
+target_link_options(86Box PRIVATE "LINKER:--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=free")
 if(WIN32)
     # The host loads a copy of the DLL from the program's own folder (x86_library.cpp).
     set_target_properties(86Box PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
@@ -97,6 +100,10 @@ endif()
 # The app's build names its own targets, so it never builds this one.
 add_executable(boot_test EXCLUDE_FROM_ALL test/boot_test.cpp)
 target_link_libraries(boot_test PRIVATE kairox86_core kairo_png)
+if(WIN32)
+    # The process's memory in use after each machine (KairoX86#186).
+    target_link_libraries(boot_test PRIVATE psapi)
+endif()
 
 # The measurement tool (KairoX86#56), likewise: host and device.
 add_executable(game_profile EXCLUDE_FROM_ALL test/game_profile.cpp)

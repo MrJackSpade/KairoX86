@@ -238,6 +238,232 @@ void al_capture_stop(void) { }
 void al_capture_get_data(UNUSED(int16_t *buf), size_t *len) { *len = 0; }
 void al_set_midi(UNUSED(const int freq), UNUSED(const int buf_size)) { }
 
+/* ---- Memory the machine allocates (KairoX86#186) ---- */
+
+/* The library's malloc, calloc, realloc and free (the linker's --wrap, core/CMakeLists.txt) record
+   every block 86Box and this frontend allocate, until it is freed: what is left when the machine
+   closes is freed then. A block the record does not hold (one the C library allocated itself, as
+   strdup's) is the C library's to free. The record is an open-addressing table of block addresses. */
+extern void *__real_malloc(size_t size);
+extern void *__real_calloc(size_t count, size_t size);
+extern void *__real_realloc(void *ptr, size_t size);
+extern void  __real_free(void *ptr);
+
+#define BLOCK_FREE ((void *) 0)
+#define BLOCK_GONE ((void *) 1)
+/* A lock that never allocates: winpthreads allocates a static mutex on its first lock, through malloc. */
+static atomic_flag blocks_busy = ATOMIC_FLAG_INIT;
+
+static void
+blocks_lock(void)
+{
+    while (atomic_flag_test_and_set_explicit(&blocks_busy, memory_order_acquire))
+        ;
+}
+
+static void
+blocks_unlock(void)
+{
+    atomic_flag_clear_explicit(&blocks_busy, memory_order_release);
+}
+static void          **blocks;      /* the table: a block's address, BLOCK_FREE or BLOCK_GONE */
+static size_t          block_slots; /* a power of two */
+static size_t          block_count; /* addresses in the table */
+static size_t          block_used;  /* addresses and BLOCK_GONE marks */
+
+static size_t
+block_slot(const void *at)
+{
+    uintptr_t key = (uintptr_t) at;
+    key ^= key >> 33;
+    key *= UINT64_C(0xff51afd7ed558ccd);
+    key ^= key >> 33;
+    return (size_t) key & (block_slots - 1);
+}
+
+static void block_add(void *at);
+
+/* Room for one more address: a table at most half used, rebuilt without its BLOCK_GONE marks. */
+static void
+blocks_make_room(void)
+{
+    if (((block_used + 1) * 2) <= block_slots)
+        return;
+    void       **old   = blocks;
+    const size_t slots = block_slots;
+    block_slots = ((block_count + 1) * 4 > 1024) ? (size_t) 1 << (64 - __builtin_clzll((block_count + 1) * 4 - 1)) : 1024;
+    blocks      = __real_calloc(block_slots, sizeof(void *));
+    if (blocks == NULL)
+        fatal("The PC stopped: no memory to record its memory\n");
+    block_count = block_used = 0;
+    for (size_t i = 0; i < slots; i++)
+        if ((old[i] != BLOCK_FREE) && (old[i] != BLOCK_GONE))
+            block_add(old[i]);
+    __real_free(old);
+}
+
+static void
+block_add(void *at)
+{
+    blocks_make_room();
+    size_t slot = block_slot(at);
+    while ((blocks[slot] != BLOCK_FREE) && (blocks[slot] != BLOCK_GONE))
+        slot = (slot + 1) & (block_slots - 1);
+    if (blocks[slot] == BLOCK_FREE)
+        block_used++;
+    blocks[slot] = at;
+    block_count++;
+}
+
+/* Takes at out of the table: false when it was not there. */
+static bool
+block_remove(const void *at)
+{
+    if (block_slots == 0)
+        return false;
+    for (size_t slot = block_slot(at); blocks[slot] != BLOCK_FREE; slot = (slot + 1) & (block_slots - 1))
+        if (blocks[slot] == at) {
+            blocks[slot] = BLOCK_GONE;
+            block_count--;
+            return true;
+        }
+    return false;
+}
+
+void *
+__wrap_malloc(size_t size)
+{
+    void *at = __real_malloc(size);
+    if (at != NULL) {
+        blocks_lock();
+        block_add(at);
+        blocks_unlock();
+    }
+    return at;
+}
+
+void *
+__wrap_calloc(size_t count, size_t size)
+{
+    void *at = __real_calloc(count, size);
+    if (at != NULL) {
+        blocks_lock();
+        block_add(at);
+        blocks_unlock();
+    }
+    return at;
+}
+
+void *
+__wrap_realloc(void *ptr, size_t size)
+{
+    if (ptr == NULL)
+        return __wrap_malloc(size);
+    blocks_lock();
+    const bool ours = block_remove(ptr);
+    blocks_unlock();
+    void *at = __real_realloc(ptr, size);
+    if (ours) {
+        blocks_lock();
+        /* A failed realloc leaves the block where it was. */
+        block_add((at != NULL) ? at : ptr);
+        blocks_unlock();
+    }
+    return at;
+}
+
+void
+__wrap_free(void *ptr)
+{
+    if (ptr == NULL)
+        return;
+    blocks_lock();
+    block_remove(ptr);
+    blocks_unlock();
+    __real_free(ptr);
+}
+
+/* After pc_close: every block 86Box left goes back. */
+static void
+release_blocks(void)
+{
+    blocks_lock();
+    for (size_t i = 0; i < block_slots; i++)
+        if ((blocks[i] != BLOCK_FREE) && (blocks[i] != BLOCK_GONE))
+            __real_free(blocks[i]);
+    __real_free(blocks);
+    blocks      = NULL;
+    block_slots = block_count = block_used = 0;
+    blocks_unlock();
+}
+
+/* ---- Memory the machine maps (KairoX86#186) ---- */
+
+/* 86Box's own mappings (the platform files' plat_mmap_os, kairox86-own-memory), each recorded until
+   86Box unmaps it: what is left when the machine closes (the recompiler's pool and tables) is
+   released then, so a closed machine gives its memory back. */
+extern void *plat_mmap_os(size_t size, uint8_t executable, uint8_t *large);
+extern void  plat_munmap_os(void *ptr, size_t size);
+
+struct mapping {
+    void  *at;
+    size_t size;
+};
+static pthread_mutex_t mappings_lock = PTHREAD_MUTEX_INITIALIZER;
+static struct mapping *mappings;
+static int             mapping_count;
+static int             mapping_room;
+
+void *
+plat_mmap(size_t size, uint8_t executable, uint8_t *large)
+{
+    void *at = plat_mmap_os(size, executable, large);
+
+    if (at == NULL)
+        return NULL;
+    pthread_mutex_lock(&mappings_lock);
+    if (mapping_count == mapping_room) {
+        const int       room  = mapping_room ? (mapping_room * 2) : 16;
+        struct mapping *grown = realloc(mappings, (size_t) room * sizeof(struct mapping));
+        if (grown == NULL) {
+            pthread_mutex_unlock(&mappings_lock);
+            fatal("plat_mmap: no memory to record a mapping\n");
+        }
+        mappings     = grown;
+        mapping_room = room;
+    }
+    mappings[mapping_count++] = (struct mapping) { at, size };
+    pthread_mutex_unlock(&mappings_lock);
+    return at;
+}
+
+void
+plat_munmap(void *ptr, size_t size)
+{
+    pthread_mutex_lock(&mappings_lock);
+    for (int i = 0; i < mapping_count; i++)
+        if (mappings[i].at == ptr) {
+            mappings[i] = mappings[--mapping_count];
+            break;
+        }
+    pthread_mutex_unlock(&mappings_lock);
+    plat_munmap_os(ptr, size);
+}
+
+/* After pc_close: every mapping 86Box left goes back. */
+static void
+release_mappings(void)
+{
+    pthread_mutex_lock(&mappings_lock);
+    for (int i = 0; i < mapping_count; i++)
+        plat_munmap_os(mappings[i].at, mappings[i].size);
+    mapping_count = 0;
+    free(mappings);
+    mappings     = NULL;
+    mapping_room = 0;
+    pthread_mutex_unlock(&mappings_lock);
+}
+
 /* ---- Video ---- */
 
 /* On 86Box's blit thread: the video card finished a frame in its bitmap. */
@@ -1073,6 +1299,8 @@ api_stop(void)
     atomic_store(&dead, true);
     if (setjmp(stopped)) {
         running = false;
+        release_mappings();
+        release_blocks();
         return;
     }
     running = true;
@@ -1081,6 +1309,8 @@ api_stop(void)
     media_restore();
     pc_close(NULL);
     running = false;
+    release_mappings();
+    release_blocks();
 }
 
 static const struct KairoX86Api api = {

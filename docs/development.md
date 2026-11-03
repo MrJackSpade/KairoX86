@@ -27,7 +27,7 @@ Every change to the core's code is exact or it does not go in: the guest state a
 
 ## Host tests
 
-The core builds for the host with llvm-mingw (`shared\tools\test-core.ps1` configures `.build\host`). `core/test/boot_test` runs machine folders in turn in one process, as the app runs one machine after another, and checks each leaves no thread behind; run it under `shared\tools\run-limited.ps1`:
+The core builds for the host with llvm-mingw (`shared\tools\test-core.ps1` configures `.build\host`). `core/test/boot_test` runs machine folders in turn in one process, as the app runs one machine after another, and checks each leaves no thread behind and gives its memory back (each run ends within 32 MB of where the first ended, KairoX86#186); run it under `shared\tools\run-limited.ps1`:
 
 ```
 boot_test <ROM set> <work folder> <machine folder>[><stop text>][|...] <seconds> [snapshot seconds] [frame:scancode,...]

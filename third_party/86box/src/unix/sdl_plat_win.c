@@ -223,8 +223,9 @@ plat_get_block_device_size(UNUSED(const char *path))
  * Memory management
  */
 
+/* KairoX86#186: the frontend's plat_mmap records the mapping (core/kairo/frontend.c). */
 void *
-plat_mmap(size_t size, uint8_t executable, uint8_t* large)
+plat_mmap_os(size_t size, uint8_t executable, uint8_t* large)
 {
     if (large)
         *large = 0;
@@ -257,7 +258,7 @@ plat_mmap(size_t size, uint8_t executable, uint8_t* large)
 }
 
 void
-plat_munmap(void *ptr, UNUSED(size_t size))
+plat_munmap_os(void *ptr, UNUSED(size_t size))
 {
     VirtualFree(ptr, 0, MEM_RELEASE);
 }

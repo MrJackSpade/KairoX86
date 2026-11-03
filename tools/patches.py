@@ -1479,6 +1479,26 @@ KAIROX86_NATIVE_SIZE = [
      + '                        cga_do_blit(xsize, cga->firstline, cga->lastline, cga->double_type);' + _NL),
 ]
 
+# KairoX86#186: a machine owns what it maps. The platform files' mappings become plat_mmap_os and
+# plat_munmap_os, which the frontend's plat_mmap and plat_munmap call, recording each mapping; the
+# machine's close releases what 86Box left mapped (the recompiler's pool and tables among it).
+KAIROX86_OWN_MEMORY = [
+    ('86box/src/unix/sdl_plat_unix.c',
+     'void *' + _NL + 'plat_mmap(size_t size, uint8_t executable, uint8_t* large)' + _NL,
+     '/* KairoX86#186: the frontend\'s plat_mmap records the mapping (core/kairo/frontend.c). */' + _NL
+     + 'void *' + _NL + 'plat_mmap_os(size_t size, uint8_t executable, uint8_t* large)' + _NL),
+    ('86box/src/unix/sdl_plat_unix.c',
+     'void' + _NL + 'plat_munmap(void *ptr, size_t size)' + _NL,
+     'void' + _NL + 'plat_munmap_os(void *ptr, size_t size)' + _NL),
+    ('86box/src/unix/sdl_plat_win.c',
+     'void *' + _NL + 'plat_mmap(size_t size, uint8_t executable, uint8_t* large)' + _NL,
+     '/* KairoX86#186: the frontend\'s plat_mmap records the mapping (core/kairo/frontend.c). */' + _NL
+     + 'void *' + _NL + 'plat_mmap_os(size_t size, uint8_t executable, uint8_t* large)' + _NL),
+    ('86box/src/unix/sdl_plat_win.c',
+     'void' + _NL + 'plat_munmap(void *ptr, UNUSED(size_t size))' + _NL,
+     'void' + _NL + 'plat_munmap_os(void *ptr, UNUSED(size_t size))' + _NL),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -1494,6 +1514,7 @@ PATCHES = {
     'kairox86-raster': KAIROX86_RASTER,
     'kairox86-guest-input': KAIROX86_GUEST_INPUT,
     'kairox86-native-size': KAIROX86_NATIVE_SIZE,
+    'kairox86-own-memory': KAIROX86_OWN_MEMORY,
 }
 
 ADDED = [
