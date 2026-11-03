@@ -30,6 +30,5 @@ Since 86Box is GPL-2.0-or-later, KairoX86 links the shared RetroArch Slang shade
 
 None of the 86Box ROM set ships with KairoX86: its files belong to their copyright owners. The app carries only free firmware, which runs inside the emulated PC, not linked into the app:
 
-- [GLaBIOS](https://glabios.org/), a free BIOS for the IBM PC and XT, under GPL-3.0.
-- The [XTIDE Universal BIOS](https://www.xtideuniversalbios.org/), the hard disk BIOS of the free XT, built from its GPL-2.0-or-later source.
-- A character ROM (the MDA and CGA fonts) made for KairoX86 from a free font.
+- [GLaBIOS](https://glabios.org/) 0.4.0, a free BIOS for the IBM PC and XT, under GPL-3.0: the project's release images, with their source in `third_party/glabios/`.
+- A character ROM (the MDA and CGA fonts, `firmware/video/mda/mda.rom`) made for KairoX86 by `tools/make_font_rom.py` from Joseph Gil's public-domain PC fonts (`third_party/seabios-fonts/`, from SeaBIOS).

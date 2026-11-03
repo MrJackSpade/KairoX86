@@ -13,6 +13,14 @@ later version. Its authors are listed in AUTHORS of its source. A few of its fil
 terms, given below. Its license statement and the GPL version 2 text follow. KairoX86 replaces its
 GPL-2.0-only cassette code with its own (GPL-2.0-or-later) and does not build its VDE networking.'''
 
+GLABIOS_TERMS = '''GLaBIOS is a free BIOS for the IBM PC and XT, distributed under the GNU General Public License,
+version 3. KairoX86 ships its 0.4.0 release images (GLABIOS_0.4.0_8P.ROM, GLABIOS_0.4.0_VP.ROM),
+which run inside the emulated PC as its firmware; their source is in third_party/glabios of
+KairoX86's source. Its license follows.'''
+
+FONT_TERMS = '''KairoX86's character ROM (the MDA and CGA fonts, firmware/video/mda/mda.rom, written by
+tools/make_font_rom.py) is made from the PC fonts in SeaBIOS's vgasrc/vgafonts.c, which say:'''
+
 # (title, source, [text]) in the order shown.
 SECTIONS = [
     ('86Box', 'https://86box.net/, third_party/86box',
@@ -34,6 +42,10 @@ SECTIONS = [
      [text('libsndfile/COPYING')]),
     ('FreeType 2.13.3 (FreeType License)', 'https://freetype.org/, third_party/freetype',
      [text('freetype/docs/FTL.TXT')]),
+    ('GLaBIOS 0.4.0 (GPL-3.0)', 'https://github.com/640-KB/GLaBIOS, third_party/glabios',
+     [GLABIOS_TERMS, text('glabios/LICENSE')]),
+    ('PC fonts by Joseph Gil (public domain)', 'third_party/seabios-fonts/vgafonts.c (from SeaBIOS)',
+     [FONT_TERMS, excerpt('seabios-fonts/vgafonts.c', 'These fonts come from', 'The individual fonts are public domain')]),
     ('zlib 1.3.2', 'https://zlib.net/, shared/third_party/zlib', [text('../shared/third_party/zlib/LICENSE')]),
     ('libpng 1.6.59', 'http://www.libpng.org/pub/png/libpng.html, shared/third_party/libpng',
      [text('../shared/third_party/libpng/LICENSE')]),

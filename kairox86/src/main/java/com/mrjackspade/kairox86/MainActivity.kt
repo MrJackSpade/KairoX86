@@ -14,6 +14,7 @@ import com.mrjackspade.kairo.frontend.MachineFirstRun
 import com.mrjackspade.kairo.frontend.MachineLibrary
 import com.mrjackspade.kairo.frontend.NativeMachine
 import com.mrjackspade.kairo.frontend.ScanDepth
+import com.mrjackspade.kairo.frontend.ShippedAssets
 import com.mrjackspade.kairo.frontend.UiText
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
@@ -92,13 +93,22 @@ class MainActivity : MachineActivity<X86Entry>() {
     override fun startGame(entry: X86Entry, game: CatalogGame, cancelled: AtomicBoolean, progress: (String) -> Unit) {
         val tree = checkNotNull(tree) { getString(FrontendR.string.kairo_library_choose_in_manage) }
         progress(getString(R.string.machine_preparing, entry.displayName))
+        installFreeFirmware(progress)
         val prepared = machines.prepare(entry, tree, cancelled)
         session = prepared
-        firmwareFolder.mkdirs()
         // The core's media (x86_core.cpp): the machine folder 86Box runs.
         check(bridge.start(firmwareFolder.absolutePath, prepared.dir.absolutePath, listOf(prepared.dir.absolutePath),
             emptyMap())) { "Another machine is still running" }
         awaitRunning()
+    }
+
+    /**
+     * The free firmware the app ships (assets/free-firmware: GLaBIOS, the character ROM), each file
+     * installed at its place in the ROM folder beside the player's own, with the shared install, which
+     * writes a file again only when the app changed.
+     */
+    private fun installFreeFirmware(progress: (String) -> Unit) {
+        for (file in FREE_FIRMWARE) ShippedAssets.install(this, "free-firmware/$file", File(firmwareFolder, file), progress)
     }
 
     override fun sessionEnded() {
@@ -119,5 +129,9 @@ class MainActivity : MachineActivity<X86Entry>() {
     private companion object {
         /** The wordmark's accent; KairoX86#5 sets it from the icon art. */
         const val BRAND_ACCENT = 0xff4FC3F7.toInt()
+
+        /** The free firmware's files, at their places in the ROM set (kairox86/build.gradle.kts). */
+        val FREE_FIRMWARE = listOf("machines/glabios/GLABIOS_0.4.0_8P.ROM", "machines/glabios/GLABIOS_0.4.0_VP.ROM",
+            "video/mda/mda.rom")
     }
 }

@@ -30,7 +30,31 @@
 
 namespace {
 
-// The process's threads, to show a closed machine left none of its own behind.
+#if defined(_WIN32)
+// The module a thread started in, by its start address; "" when it cannot be told.
+std::string thread_module(DWORD id) {
+    using Query = LONG(WINAPI *)(HANDLE, int, void *, ULONG, ULONG *);
+    static const auto query = reinterpret_cast<Query>(
+        reinterpret_cast<void *>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQueryInformationThread")));
+    HANDLE thread = OpenThread(THREAD_QUERY_INFORMATION, FALSE, id);
+    if (!thread || !query) return "";
+    void *start = nullptr;
+    // ThreadQuerySetWin32StartAddress
+    const LONG status = query(thread, 9, &start, sizeof(start), nullptr);
+    CloseHandle(thread);
+    HMODULE module = nullptr;
+    if (status != 0 || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                           static_cast<LPCWSTR>(start), &module))
+        return "";
+    char name[MAX_PATH];
+    const DWORD length = GetModuleFileNameA(module, name, MAX_PATH);
+    return std::string(name, length);
+}
+#endif
+
+// The process's threads, to show a closed machine left none of its own behind. On Windows, without
+// the system's own worker threads (started in ntdll.dll), which it starts and retires in a process
+// whatever the program does; the core's threads start in the C runtime's thread start.
 int thread_count() {
 #if defined(_WIN32)
     const DWORD process = GetCurrentProcessId();
@@ -40,7 +64,11 @@ int thread_count() {
     entry.dwSize = sizeof(entry);
     int count = 0;
     for (BOOL more = Thread32First(snapshot, &entry); more; more = Thread32Next(snapshot, &entry))
-        if (entry.th32OwnerProcessID == process) ++count;
+        if (entry.th32OwnerProcessID == process) {
+            std::string module = thread_module(entry.th32ThreadID);
+            for (char &c : module) c = char(std::tolower(static_cast<unsigned char>(c)));
+            if (module.find("ntdll.dll") == std::string::npos) ++count;
+        }
     CloseHandle(snapshot);
     return count;
 #else

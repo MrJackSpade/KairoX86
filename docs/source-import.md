@@ -28,3 +28,15 @@
 - **Imported:** 2026-11-02.
 
 zlib, libpng and libchdr come from the shared frontend (`shared/third_party/`, `shared/cmake/KairoLibraries.cmake`, `KairoChd.cmake`).
+
+## GLaBIOS
+
+- **Source:** https://github.com/640-KB/GLaBIOS, tag `v0.4.0` (commit `8d126e03d619cf60fbe343cb6999bf1c4c453c09`), the release of 2025-07-18.
+- **Copied to:** `third_party/glabios/`: the tag's source (`src/`, `LICENSE`, `README.md`; the GitHub tarball, SHA-256 `b5a0b2d5c9d10db8833534b670860349ccc9b954035dae07a3cd0e6d446e107d`, without its `images/` and `doc/`) and the release's two images 86Box names, `GLABIOS_0.4.0_8P.ROM` (8088, SHA-1 `fd023bbf445ed64e42ec0cf4ff10e907ccff4017`) and `GLABIOS_0.4.0_VP.ROM` (V20, SHA-1 `24e19f12baa2e4241f9b85c4127a68b617627882`), the same files as in 86Box's ROM set. Unchanged. GLaBIOS is assembled with a DOS assembler; the images are the project's own release builds of that source.
+- **Imported:** 2026-11-03.
+
+## PC fonts (from SeaBIOS)
+
+- **Source:** https://github.com/coreboot/seabios, tag `rel-1.16.3` (commit `a6ed6b701f0a57db0569ab98b0661c12a6ec3ff8`), `vgasrc/vgafonts.c` (SHA-256 `a992a54dbc051be8b03067becb88e9f2fde580e8ba6b65797a3a069c96a96d81`): Joseph Gil's 8x8, 8x14 and 8x16 code page 437 fonts, public domain.
+- **Copied to:** `third_party/seabios-fonts/vgafonts.c`, unchanged. `tools/make_font_rom.py` writes `firmware/video/mda/mda.rom` (the IBM MDA/CGA character ROM's layout) from it; `--check` (in `tools/checks.sh`) fails when the committed ROM is out of date.
+- **Imported:** 2026-11-03.
