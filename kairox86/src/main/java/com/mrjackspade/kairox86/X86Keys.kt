@@ -5,6 +5,7 @@ import com.mrjackspade.kairo.frontend.ControllerBindingsCodec
 import com.mrjackspade.kairo.frontend.GuestKeyboardLayout
 import com.mrjackspade.kairo.frontend.PcKey
 import com.mrjackspade.kairo.frontend.PcKeyboard
+import com.mrjackspade.kairo.frontend.PcKeyboardModel
 import com.mrjackspade.kairo.frontend.UiText
 
 /**
@@ -16,7 +17,18 @@ object X86Keys {
     /** The largest scan code a key has. */
     const val MAX_CODE = 0x1FF
 
-    val layout: GuestKeyboardLayout = PcKeyboard.layout("KAIROX86") { it.scanCode }
+    private val layouts = PcKeyboardModel.entries.associateWith { model -> PcKeyboard.layout("KAIROX86", model) { it.scanCode } }
+
+    val layout: GuestKeyboardLayout = layoutOf(PcKeyboardModel.ANSI)
+
+    fun layoutOf(model: PcKeyboardModel): GuestKeyboardLayout = layouts.getValue(model)
+
+    /**
+     * The layout of the keyboard the core says the machine runs with (x86_core.cpp details,
+     * KairoX86#65); a machine's own keyboard ("internal") has the US legends.
+     */
+    fun layoutFor(keyboard: String): GuestKeyboardLayout =
+        if (keyboard == "internal") layoutOf(PcKeyboardModel.ANSI) else layoutOf(PcKeyboardModel.of(keyboard))
 
     fun fromAndroid(androidKey: Int): Int? = PcKey.fromAndroid(androidKey)?.scanCode
 
@@ -27,8 +39,8 @@ object X86Keys {
     val modifiers = setOf(PcKey.LEFT_SHIFT, PcKey.RIGHT_SHIFT, PcKey.LEFT_CTRL, PcKey.RIGHT_CTRL, PcKey.LEFT_ALT,
         PcKey.RIGHT_ALT).map { it.scanCode }.toSet()
 
-    /** Caps Lock, Num Lock and Scroll Lock, the lock keys' bits in the core's order (X86Core::locks). */
-    val locks = listOf(PcKey.CAPS_LOCK, PcKey.NUM_LOCK, PcKey.SCROLL_LOCK).map { it.scanCode }
+    /** Caps Lock, Num Lock, Scroll Lock and Kana, the lock keys' bits in the core's order (X86Core::locks). */
+    val locks = listOf(PcKey.CAPS_LOCK, PcKey.NUM_LOCK, PcKey.SCROLL_LOCK, PcKey.KANA).map { it.scanCode }
 
     /**
      * The game port's controls in the core's order (x86_core.cpp): the first joystick's directions

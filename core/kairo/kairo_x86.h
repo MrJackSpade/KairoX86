@@ -60,6 +60,8 @@ struct KairoX86GuestInput {
 #define KAIRO_X86_CAPS_LOCK 1
 #define KAIRO_X86_NUM_LOCK 2
 #define KAIRO_X86_SCROLL_LOCK 4
+/* The Japanese keyboards' kana lamp (KairoX86#65). */
+#define KAIRO_X86_KANA_LOCK 8
 
 /* The machine's side, called on the host's thread with its context. */
 struct KairoX86Host {
@@ -115,6 +117,10 @@ struct KairoX86Api {
 	void (*joystick_button)(int button, bool down);
 	/* The lock keys' lamps (KAIRO_X86_*_LOCK). */
 	int (*locks)(void);
+	/* The keyboard the machine runs with, for the host's legends (KairoX86#65): its keys as 86Box
+	 * names them, "83" (XT), "84" (AT), "101" (ANSI), "102" (ISO), "106" (JIS), "103" (KSC) or
+	 * "104" (ABNT2), or "internal" for a machine's own keyboard. Valid once the machine started. */
+	const char *(*keyboard_model)(void);
 	/* Whether the last frame was loading from a floppy disk (a drive worked in it, KairoX86#41):
 	 * the host runs such frames flat out. Hard disks and CDs do not count: a game reads them as
 	 * it plays. */

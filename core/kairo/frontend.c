@@ -23,6 +23,7 @@
 #include <wchar.h>
 
 #include <86box/86box.h>
+#include <86box/device.h>
 #include <86box/keyboard.h>
 #include <86box/mouse.h>
 #include <86box/plat.h>
@@ -39,7 +40,6 @@
 #include <86box/fdd.h>
 #include <86box/cdrom.h>
 #include <86box/mem.h>
-#include <86box/device.h>
 #include <86box/machine.h>
 #include <86box/ini.h>
 #include <86box/config.h>
@@ -1188,7 +1188,38 @@ api_locks(void)
     uint8_t caps = 0, num = 0, scroll = 0, kana = 0;
 
     keyboard_get_states(&caps, &num, &scroll, &kana);
-    return (caps ? KAIRO_X86_CAPS_LOCK : 0) | (num ? KAIRO_X86_NUM_LOCK : 0) | (scroll ? KAIRO_X86_SCROLL_LOCK : 0);
+    return (caps ? KAIRO_X86_CAPS_LOCK : 0) | (num ? KAIRO_X86_NUM_LOCK : 0) | (scroll ? KAIRO_X86_SCROLL_LOCK : 0)
+        | (kana ? KAIRO_X86_KANA_LOCK : 0);
+}
+
+/* The keyboard's model (kairo_x86.h, KairoX86#65): the "keys" its 86box.cfg section sets for a
+   keyboard that has the choice, else the keys 86Box builds the keyboard with (the AX and PS/55
+   keyboards are JIS). */
+static const char *
+api_keyboard_model(void)
+{
+    if (keyboard_type == KEYBOARD_TYPE_INTERNAL)
+        return "internal";
+    /* 86Box's USB keyboard has no choice of keys: it is the standard 101-key one. */
+    if (keyboard_type == KEYBOARD_TYPE_USB)
+        return "101";
+    const device_t *device = keyboard_get_device(keyboard_type);
+    if (device == NULL)
+        fatal("KairoX86 knows no keyboard %d\n", keyboard_type);
+    const int keys = (device->config != NULL) ? config_get_int((char *) device->name, "keys", device->config[0].default_int)
+                                              : (int) (device->local & 0x07);
+    switch (keys) {
+        case KBD_83_KEY:  return "83";
+        case KBD_84_KEY:  return "84";
+        case KBD_101_KEY: return "101";
+        case KBD_102_KEY: return "102";
+        case KBD_JIS:     return "106";
+        case KBD_KSC:     return "103";
+        case KBD_ABNT2:   return "104";
+        default:
+            fatal("KairoX86 knows no keyboard with keys %d\n", keys);
+            return "";
+    }
 }
 
 /* ---- Lifecycle ---- */
@@ -1358,6 +1389,7 @@ static const struct KairoX86Api api = {
     .joystick_axis   = api_joystick_axis,
     .joystick_button = api_joystick_button,
     .locks           = api_locks,
+    .keyboard_model  = api_keyboard_model,
     .loading         = api_loading,
     .guest_input     = api_guest_input,
     .media           = api_media,

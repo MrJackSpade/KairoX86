@@ -35,7 +35,7 @@ boot_test <ROM set> <work folder> <machine folder>[><stop text>][|...] <seconds>
 
 A machine given with `>stop text` must stop before `<seconds>` with a reason containing that text; any other must not stop.
 
-Each run reports the guest seconds the app would run flat out as loading (`loading:`): floppy activity, and the power-on self test while Skip memory check is on (KairoX86#60). A machine with `[Kairo]` `skip_memory_check = off` in its `86box.cfg` shows the difference.
+Each run reports the keyboard the machine runs with (`keyboard:`, the model the app's on-screen keyboard follows, KairoX86#65) and the guest seconds the app would run flat out as loading (`loading:`): floppy activity, and the power-on self test while Skip memory check is on (KairoX86#60). A machine with `[Kairo]` `skip_memory_check = off` in its `86box.cfg` shows the difference.
 
 ### Measuring and repeatability
 

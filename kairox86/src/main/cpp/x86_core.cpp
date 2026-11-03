@@ -29,7 +29,9 @@ constexpr uint64_t kPositionReadFrames = 30;
 
 class X86Core : public kairo::MachineCore {
 public:
-    explicit X86Core(std::unique_ptr<X86Machine> machine) : machine_(std::move(machine)) {}
+    // The keyboard's model is fixed for the run: its settings apply on the next start.
+    explicit X86Core(std::unique_ptr<X86Machine> machine)
+        : machine_(std::move(machine)), details_("keyboard=" + machine_->keyboard_model()) {}
 
     bool run_frame() override {
         // Whether the program asks the mouse driver for the position: direct touch then places the
@@ -56,6 +58,8 @@ public:
     uint32_t read_audio(int16_t *stereo, uint32_t max_frames) override { return machine_->read_audio(stereo, max_frames); }
     // Bit 0 Caps Lock, 1 Num Lock, 2 Scroll Lock, as NativeMachine lists them (MainActivity).
     int locks() override { return machine_->locks(); }
+    // The running keyboard's model, for the app's legends (MainActivity.followKeyboard, KairoX86#65).
+    std::string details() override { return details_; }
     // A frame a floppy drive worked in: the frame host runs it flat out (KairoX86#41).
     bool loading() override { return machine_->loading(); }
     // The guest's BIOS keyboard calls and mouse driver reads, for the Auto touch mode (KairoX86#43).
@@ -154,6 +158,7 @@ public:
 
 private:
     std::unique_ptr<X86Machine> machine_;
+    const std::string details_;
     std::string error_;
     std::array<bool, kKeyCodes> keys_{};
     std::array<bool, kJoystickControls> controls_{};

@@ -128,6 +128,7 @@ void X86Machine::mouse_button(int button, bool down) {
 void X86Machine::joystick_axis(int axis, int value) { impl_->api->joystick_axis(axis, value); }
 void X86Machine::joystick_button(int button, bool down) { impl_->api->joystick_button(button, down); }
 int X86Machine::locks() const { return impl_->api->locks(); }
+std::string X86Machine::keyboard_model() const { return impl_->api->keyboard_model(); }
 bool X86Machine::loading() const { return impl_->api->loading(); }
 
 X86Machine::GuestInput X86Machine::guest_input() const {

@@ -66,8 +66,10 @@ public:
     // counted joystick by joystick in the order 86Box lists the model's inputs.
     void joystick_axis(int axis, int value);
     void joystick_button(int button, bool down);
-    // The lock keys' lamps: bit 0 Caps Lock, 1 Num Lock, 2 Scroll Lock.
+    // The lock keys' lamps: bit 0 Caps Lock, 1 Num Lock, 2 Scroll Lock, 3 Kana.
     int locks() const;
+    // The keyboard the machine runs with (kairo_x86.h keyboard_model), such as "101" or "106".
+    std::string keyboard_model() const;
     // Whether the last frame was loading from a floppy disk (kairo_x86.h): the host runs it flat out.
     bool loading() const;
     // How the guest reads its input since the machine started (kairo_x86.h), for the Auto touch mode.

@@ -167,6 +167,7 @@ bool run_machine(int index, const std::string &rom_folder, const std::string &fo
         std::fprintf(stderr, "run %d: start failed: %s\n", index, error.c_str());
         return false;
     }
+    std::printf("  keyboard: %s\n", machine->keyboard_model().c_str());
 
     double guest = 0;
     int next_second = 0;

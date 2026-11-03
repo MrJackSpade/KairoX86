@@ -14,6 +14,7 @@ import com.mrjackspade.kairo.frontend.MachineActivity
 import com.mrjackspade.kairo.frontend.MachineFirstRun
 import com.mrjackspade.kairo.frontend.MachineLibrary
 import com.mrjackspade.kairo.frontend.MachineOption
+import com.mrjackspade.kairo.frontend.MachineStatus
 import com.mrjackspade.kairo.frontend.GameMachineStore
 import com.mrjackspade.kairo.frontend.StartupCommands
 import com.mrjackspade.kairox86.X86Library.DiskKind
@@ -167,8 +168,28 @@ class MainActivity : MachineActivity<X86Entry>() {
         check(bridge.start(firmwareFolder.absolutePath, prepared.dir.absolutePath, listOf(prepared.dir.absolutePath),
             settings)) { "Another machine is still running" }
         awaitRunning()
+        followKeyboard()
         // What the machine's drives hold, from its 86box.cfg, as the Disks page shows it.
         mediaStarted(bridge.mediaPaths().orEmpty().map { path -> path.takeIf { it.isNotEmpty() }?.let(prepared::diskAt) })
+    }
+
+    /**
+     * The on-screen keyboard of the machine that runs, once its first frame names it (x86_core.cpp
+     * details, KairoX86#65): the legends of its keyboard model, JIS with its kana, Korean, Brazilian,
+     * ISO, or the XT's and AT's fewer keys.
+     */
+    private fun followKeyboard() {
+        while (true) {
+            val status = MachineStatus(bridge.status())
+            if (status.state == "Error") error(status.error)
+            val keyboard = status.core["keyboard"]
+            if (keyboard != null) {
+                val layout = X86Keys.layoutFor(keyboard)
+                runOnUiThread { useKeyboard(layout) }
+                return
+            }
+            Thread.sleep(20)
+        }
     }
 
     /**
