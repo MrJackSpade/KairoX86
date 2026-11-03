@@ -487,6 +487,12 @@ plat_run_command(const char *cmd, const char **env, const char *title)
         new_env[c] = NULL;
     }
 
+#ifdef __ANDROID__
+    /* KairoX86: an Android app runs no host programs; the command fails, as its caller reports. */
+    (void) cmd;
+    (void) title;
+    int ret = 0;
+#else
     /* Execute command under a terminal emulator if requested. */
     int         ret;
     pid_t       pid;
@@ -542,6 +548,7 @@ plat_run_command(const char *cmd, const char **env, const char *title)
         ret = !posix_spawn(&pid, args[4], NULL, NULL, (char * const *) &args[4], new_env ? (char * const *) new_env : (char * const *) environ);
     }
 
+#endif
     if (new_env)
         free(new_env);
     return ret;

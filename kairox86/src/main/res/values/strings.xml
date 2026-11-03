@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- KairoX86's own words. The frontend's are in shared/frontend's values/strings*.xml. -->
+<resources>
+    <!-- %1$s is the app's name, KairoX86; %2$s the emulator it runs, 86Box; %3$s the machine, IBM PC compatible;
+         %4$s the bundled firmware, GLaBIOS; %5$s its GitHub repository. -->
+    <string name="credits">%1$s uses %2$s\'s %3$s emulation and the %4$s firmware. Source and provenance: github.com/%5$s.</string>
+    <string name="library_empty">Choose a games folder to find the machines in it: each is a folder holding an 86box.cfg and its disks</string>
+    <!-- %1$s is the machine's name, IBM PC compatible; %2$s the app's name, KairoX86. -->
+    <string name="folder_description">Select the folder for your %1$s machines. %2$s finds every folder in it that holds an 86box.cfg, with its disks.</string>
+
+    <string name="joystick_help">The game port\'s two joysticks.</string>
+    <!-- A joystick button: %1$d is its number. -->
+    <string name="joystick_button">Button %1$d</string>
+    <!-- A direction of the second joystick: %1$s is the direction, such as Up. -->
+    <string name="joystick_2">Joystick 2 %1$s</string>
+
+    <!-- What a library entry is, on its chip: a PC set up in a folder. -->
+    <string name="media_machine">Machine</string>
+    <!-- %1$s is the machine's name. -->
+    <string name="machine_config_missing">%1$s has no 86box.cfg</string>
+    <!-- %1$s is the folder's path in the games folder. -->
+    <string name="machine_folder_missing">The folder %1$s is gone</string>
+    <string name="machine_external">Another app can open a disk image, but KairoX86 runs machines: put the machine\'s folder in the games folder</string>
+    <string name="machine_delete">KairoX86 does not delete a machine\'s folder: remove it in a file manager</string>
+    <!-- %1$s is the machine's name. -->
+    <string name="machine_preparing">Preparing %1$s…</string>
+    <string name="machine_write_back_failed">The machine\'s settings and CMOS could not be saved to its folder</string>
+</resources>

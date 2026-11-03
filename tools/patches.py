@@ -1108,6 +1108,23 @@ KAIROX86_LIBRARY = [
      + '        }' + _NL
      + '        if (pool == MAP_FAILED)' + _NL
      + '            fatal("plat_mmap: no room for the recompiler within 4 GiB of the program\\n");' + _NL),
+    # timespec_get is in Android's C library from API 29 only, and the app runs from Android 8 (26):
+    # clock_gettime gives the same clock (TIME_UTC is CLOCK_REALTIME) on every version.
+    ('86box/src/video/vid_powervr_pcx.c',
+     '    timespec_get(&ts, TIME_UTC);' + _NL,
+     '    clock_gettime(CLOCK_REALTIME, &ts); /* KairoX86: timespec_get needs Android API 29 */' + _NL),
+    # An Android app runs no host programs (the serial port's "run a command" mode opens a terminal
+    # on a desktop): the command fails, which its caller reports, and posix_spawn (API 28) is not built.
+    ('86box/src/unix/sdl_plat_unix.c',
+     '    /* Execute command under a terminal emulator if requested. */' + _NL,
+     '#ifdef __ANDROID__' + _NL
+     + '    /* KairoX86: an Android app runs no host programs; the command fails, as its caller reports. */' + _NL
+     + '    (void) cmd;' + _NL + '    (void) title;' + _NL + '    int ret = 0;' + _NL
+     + '#else' + _NL
+     + '    /* Execute command under a terminal emulator if requested. */' + _NL),
+    ('86box/src/unix/sdl_plat_unix.c',
+     '    if (new_env)' + _NL + '        free(new_env);' + _NL + '    return ret;' + _NL,
+     '#endif' + _NL + '    if (new_env)' + _NL + '        free(new_env);' + _NL + '    return ret;' + _NL),
 ] + [
     ('86box/src/include/86box/version.h.in', line + _NL, line.replace('@CMAKE_PROJECT_', '@PROJECT_') + _NL)
     for line in (

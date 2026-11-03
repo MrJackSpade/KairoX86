@@ -322,7 +322,7 @@ static double
 pcx_now_ms(void)
 {
     struct timespec ts;
-    timespec_get(&ts, TIME_UTC);
+    clock_gettime(CLOCK_REALTIME, &ts); /* KairoX86: timespec_get needs Android API 29 */
     return ts.tv_sec * 1000.0 + ts.tv_nsec / 1.0e6;
 }
 
