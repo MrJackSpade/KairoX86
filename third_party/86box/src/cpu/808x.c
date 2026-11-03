@@ -2882,7 +2882,9 @@ execx86_instruction(void)
                 break;
             case 0xcd:             /* INT */
                 wait_cycs(1, 0);
-                interrupt(pfq_fetchb());
+                temp = pfq_fetchb();
+                kairo_observe_int(temp, AX, cpu_state.seg_cs.base); /* KairoX86#43 */
+                interrupt(temp);
                 break;
             case 0xce:             /* INTO */
                 wait_cycs(3, 0);

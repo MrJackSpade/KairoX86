@@ -57,6 +57,10 @@ It runs a fresh copy of the folder each time (86Box writes the CMOS and `86box.c
 
 `python core/test/input/make_mouse.py <folder>` writes two machines (the 486 with a three-button PS/2 mouse, and with a Microsoft serial mouse on COM1) booting a floppy (`core/test/input/mouse.S`) that reads the mouse straight from its port and shows its buttons and the sum of its motion, and prints the `game_profile` script that moves the mouse (`x`/`y` codes) and presses each button in turn (`--shots 30`; frame 900 untouched, then one input every 60 frames). Each step must show exactly the motion sent, in picture pixels, or exactly one button (KairoX86#50).
 
+### The Auto touch mode test
+
+`python core/test/input/make_auto.py <folder>` writes three machines standing in for games, one for each way a game reads its input: `auto-wait` gets keys through the BIOS (`core/test/input/keys.S`), `auto-poll` checks for a key over and over, and `auto-mouse` asks the mouse driver for the mouse on every pass (`mouse.S` with `INT33`). `game_profile`'s `input` line must show waits and "waiting 1", polls and "waiting 0", and mouse reads with nothing waiting (KairoX86#43).
+
 ### Stop tests
 
 `python core/test/stops/make_floppies.py <folder>` writes one machine folder for each way a PC stops (KairoX86#34), each booting a floppy whose boot sector (`core/test/stops/boot.S`) stops it that way, and prints the machine list that expects each stop:

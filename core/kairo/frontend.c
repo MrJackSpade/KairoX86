@@ -38,6 +38,7 @@
 #include <86box/random.h>
 #include <86box/fdd.h>
 #include <86box/cdrom.h>
+#include <86box/mem.h>
 #include "cpu.h"
 
 #ifdef _WIN32
@@ -519,6 +520,45 @@ media_restore(void)
         }
 }
 
+/* ---- Guest input (KairoX86#43) ---- */
+
+/* How the guest reads its input, for the Auto touch mode, counted as KairoDos counts DOSBox's: the
+   BIOS keyboard calls (INT 16h) that wait for a key or check for one, and the mouse driver's
+   (INT 33h) reads of the mouse. A real BIOS waits inside one INT 16h call, so a wait lasts until
+   the program runs on: until its own code (outside the ROMs, which the BIOS's own calls come from)
+   runs its next INT. */
+static atomic_uint_fast64_t keyboard_waits;
+static atomic_uint_fast64_t keyboard_polls;
+static atomic_uint_fast64_t mouse_reads;
+static atomic_bool          keyboard_wait; /* the last wait has not returned to its program yet */
+
+#define BDA_KEYBOARD_HEAD 0x41a
+#define BDA_KEYBOARD_TAIL 0x41c
+/* The adapter and system ROMs, C0000h to FFFFFh. */
+#define ROM_START 0xc0000
+#define ROM_END   0x100000
+
+/* Every INT n the guest runs, with its AX, from code at linear code_base (the processors' INT
+   decoders, kairox86-guest-input). */
+void
+kairo_observe_int(uint8_t num, uint16_t ax, uint32_t code_base)
+{
+    const uint8_t ah = ax >> 8;
+
+    if ((code_base < ROM_START) || (code_base >= ROM_END))
+        atomic_store(&keyboard_wait, false);
+    if (num == 0x16) {
+        /* Get a keystroke: a wait when the buffer is empty, else a key read at once. */
+        if (((ah == 0x00) || (ah == 0x10)) && (mem_readw_phys(BDA_KEYBOARD_HEAD) == mem_readw_phys(BDA_KEYBOARD_TAIL))) {
+            atomic_fetch_add_explicit(&keyboard_waits, 1, memory_order_relaxed);
+            atomic_store(&keyboard_wait, true);
+        } else if ((ah == 0x01) || (ah == 0x11))
+            atomic_fetch_add_explicit(&keyboard_polls, 1, memory_order_relaxed); /* check for a keystroke */
+    } else if ((num == 0x33) && ((ax == 0x03) || (ax == 0x05) || (ax == 0x06) || (ax == 0x0b)))
+        /* The position and buttons, a button's presses or releases, the motion counters. */
+        atomic_fetch_add_explicit(&mouse_reads, 1, memory_order_relaxed);
+}
+
 /* ---- Input ---- */
 
 void
@@ -625,6 +665,15 @@ api_media_path(int slot, char *path, int size)
         return false;
     snprintf(path, (size_t) size, "%s", media_held(slot));
     return true;
+}
+
+static void
+api_guest_input(struct KairoX86GuestInput *input)
+{
+    input->keyboard_waits = atomic_load(&keyboard_waits);
+    input->keyboard_polls = atomic_load(&keyboard_polls);
+    input->mouse_reads    = atomic_load(&mouse_reads);
+    input->keyboard_waiting = atomic_load(&keyboard_wait);
 }
 
 static bool
@@ -797,6 +846,7 @@ static const struct KairoX86Api api = {
     .joystick_button = api_joystick_button,
     .locks           = api_locks,
     .loading         = api_loading,
+    .guest_input     = api_guest_input,
     .media           = api_media,
     .media_path      = api_media_path,
     .reset           = api_reset,

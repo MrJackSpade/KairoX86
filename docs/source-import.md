@@ -18,6 +18,7 @@
 - **`kairox86-repeatable` group:** the SN76489 (the PCjr's and Tandy's sound) took its noise counters' start values from the C library's random numbers after seeding them from the host's clock, which also undid a repeatable run's seed for every other `rand()`. It takes them from 86Box's own random numbers (`random_generate`), seeded in a repeatable run and as random as before otherwise (KairoX86#36).
 - **`kairox86-sync-render` group:** with `KAIROX86_SYNC_RENDER` defined (test builds only), every 8bpp line is drawn in place, to compare the threaded renderer against (KairoX86#38).
 - **`kairox86-raster` group:** the threaded 8bpp renderer (`kairo9x-video`) drew a queued line later from VRAM and the live palette, so palette changes and VRAM written after the line was scanned showed in it, unlike drawing in place. A queued line now holds its VRAM bytes and the palette as the guest scanned it (KairoX86#38).
+- **`kairox86-guest-input` group:** every processor's INT decoder (the 386 and later interpreters, which the recompiler runs INT through, the 8088, the cycle-exact 8088 and the NEC V20/V30) passes each INT n, with AX and the caller's code address, to the frontend's `kairo_observe_int`, which counts the BIOS keyboard waits and polls (INT 16h) and the mouse driver's reads (INT 33h) for the Auto touch mode (KairoX86#43).
 
 ## libsndfile
 

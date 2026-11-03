@@ -76,6 +76,12 @@ void X86Machine::joystick_button(int button, bool down) { impl_->api->joystick_b
 int X86Machine::locks() const { return impl_->api->locks(); }
 bool X86Machine::loading() const { return impl_->api->loading(); }
 
+X86Machine::GuestInput X86Machine::guest_input() const {
+    KairoX86GuestInput input{};
+    impl_->api->guest_input(&input);
+    return {input.keyboard_waits, input.keyboard_polls, input.mouse_reads, input.keyboard_waiting};
+}
+
 bool X86Machine::media(int slot, const std::string &path) { return impl_->api->media(slot, path.c_str()) == 0; }
 
 std::vector<std::string> X86Machine::media_paths() const {

@@ -41,6 +41,16 @@ extern "C" {
 #define KAIRO_X86_JOYSTICK_BUTTONS 4
 #define KAIRO_X86_AXIS_MAX 32767
 
+/* How the guest reads its input since the machine started (KairoX86#43): its BIOS keyboard calls
+ * (INT 16h) that waited for a key and that checked for one, its mouse driver's (INT 33h) reads of
+ * the mouse, and whether it waits for a key now. */
+struct KairoX86GuestInput {
+	uint64_t keyboard_waits;
+	uint64_t keyboard_polls;
+	uint64_t mouse_reads;
+	bool keyboard_waiting;
+};
+
 /* The removable drives a machine's media go in (KairoX86#48), as slots: floppy drives A and B,
  * then the first CD-ROM drive. */
 #define KAIRO_X86_MEDIA_SLOTS 3
@@ -94,6 +104,8 @@ struct KairoX86Api {
 	 * the host runs such frames flat out. Hard disks and CDs do not count: a game reads them as
 	 * it plays. */
 	bool (*loading)(void);
+	/* How the guest reads its input, for the Auto touch mode (KairoX86#43). */
+	void (*guest_input)(struct KairoX86GuestInput *input);
 	/* Puts the image at path in slot (KAIRO_X86_MEDIA_SLOTS), or empties it for an empty path: 0
 	 * when the drive holds what was asked, -1 when the machine has no such drive or the image did
 	 * not open. An image from outside the machine's folder is for this run only: the drive gets

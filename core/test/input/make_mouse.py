@@ -40,7 +40,7 @@ mouse_type = {mouse}
 {extra}
 [Floppy and CD-ROM drives]
 fdd_01_type = 35_2hd
-fdd_01_fn = mouse.img
+fdd_01_fn = {image}
 fdd_02_type = none
 """
 
@@ -78,7 +78,7 @@ def main():
         machine.mkdir(parents=True, exist_ok=True)
         sector = boot_sector(HERE / 'mouse.S', out / '.asm', f'mouse-{name}', [f'MODE={mode}'])
         write_floppy(machine / 'mouse.img', sector)
-        (machine / '86box.cfg').write_text(CONFIG.format(mouse=mouse, extra=extra), encoding='utf-8', newline='\n')
+        (machine / '86box.cfg').write_text(CONFIG.format(mouse=mouse, extra=extra, image='mouse.img'), encoding='utf-8', newline='\n')
     print(script())
 
 

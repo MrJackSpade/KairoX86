@@ -8,6 +8,10 @@
  *                reporting enabled, polled with interrupts off.
  *   MODE_SERIAL  A Microsoft serial mouse on COM1 (3F8h), 1200 baud 7N1, DTR and RTS raised.
  *
+ * With INT33 defined, it also asks a mouse driver for the mouse's position and buttons (INT 33h
+ * AX=03h) on every pass, as a DOS mouse game does; its own handler answers nothing (KairoX86#43's
+ * Auto touch mode counts the calls).
+ *
  * Over and over, at the top left of the screen: "P" (PS/2) or "S" (serial), the left, right and
  * middle buttons ('1' pressed, '0' not), then the sum of every packet's X and Y motion so far (four
  * hex digits each, from 0000). The serial mouse's Y grows downwards, the PS/2 mouse's upwards.
@@ -31,6 +35,10 @@ _start:
     xorw    %si, %si            /* the X sum */
     xorw    %di, %di            /* the Y sum */
     xorb    %bl, %bl            /* the buttons: bit 0 left, 1 right, 2 middle */
+#ifdef INT33
+    movw    $driver, 0x33 * 4   /* the mouse driver's vector */
+    movw    $0, 0x33 * 4 + 2
+#endif
 
 #if MODE == MODE_PS2
     call    flush
@@ -100,6 +108,10 @@ show:
     call    puthex
 
 next:
+#ifdef INT33
+    movw    $0x03, %ax          /* get the position and buttons */
+    int     $0x33
+#endif
 #if MODE == MODE_PS2
     inb     $0x64, %al
     testb   $0x01, %al
@@ -237,6 +249,12 @@ puthex:
     decb    %dl
     jnz     1b
     ret
+
+#ifdef INT33
+/* A mouse driver that answers nothing. */
+driver:
+    iret
+#endif
 
 packet:
     .byte   0, 0, 0

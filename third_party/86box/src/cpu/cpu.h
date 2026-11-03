@@ -821,6 +821,8 @@ extern void x86_reset_deferred(void);
 extern void hardresetx86(void);
 extern void x86_int(int num);
 extern void x86_int_sw(int num);
+/* KairoX86#43: the guest runs INT num with AX, from code at linear code_base (core/kairo/frontend.c). */
+extern void kairo_observe_int(uint8_t num, uint16_t ax, uint32_t code_base);
 extern int  x86_int_sw_rm(int num);
 
 #ifdef ENABLE_808X_LOG

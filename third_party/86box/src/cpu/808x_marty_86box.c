@@ -4287,6 +4287,7 @@ execute_instruction(m808x_cpu_t *icpu)
 
         case 0xcdu: {
             const uint8_t vector = queue_read(icpu, false);
+            kairo_observe_int(vector, AX, (uint32_t) icpu->segs[SEG_CS] << 4); /* KairoX86#43 */
             software_interrupt(icpu, vector);
             return !icpu->fatal;
         }

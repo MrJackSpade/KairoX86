@@ -39,6 +39,17 @@ public:
     int locks() override { return machine_->locks(); }
     // A frame a floppy drive worked in: the frame host runs it flat out (KairoX86#41).
     bool loading() override { return machine_->loading(); }
+    // The guest's BIOS keyboard calls and mouse driver reads, for the Auto touch mode (KairoX86#43).
+    // The core sees the reads themselves, so it never reports the mouse as set up instead.
+    bool guest_input(GuestInput &input) override {
+        const X86Machine::GuestInput guest = machine_->guest_input();
+        input.keyboard_waits = guest.keyboard_waits;
+        input.keyboard_polls = guest.keyboard_polls;
+        input.mouse_reads = guest.mouse_reads;
+        input.keyboard_waiting = guest.keyboard_waiting;
+        input.mouse_enabled = false;
+        return true;
+    }
     // The removable drives (MainActivity.mediaSlots): floppy drives A and B, the first CD-ROM drive.
     int media(int slot, const std::string &path) override {
         return machine_->media(slot, path) ? 0 : kFailed;

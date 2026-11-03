@@ -57,6 +57,14 @@ public:
     int locks() const;
     // Whether the last frame was loading from a floppy disk (kairo_x86.h): the host runs it flat out.
     bool loading() const;
+    // How the guest reads its input since the machine started (kairo_x86.h), for the Auto touch mode.
+    struct GuestInput {
+        uint64_t keyboard_waits = 0;
+        uint64_t keyboard_polls = 0;
+        uint64_t mouse_reads = 0;
+        bool keyboard_waiting = false;
+    };
+    GuestInput guest_input() const;
     // The removable drives (kairo_x86.h): slot 0 and 1 floppy drives A and B, 2 the first CD-ROM
     // drive. Puts path in slot ("" empties it): false when the machine has no such drive or the image
     // did not open. An image from outside the machine's folder is for this run only.
