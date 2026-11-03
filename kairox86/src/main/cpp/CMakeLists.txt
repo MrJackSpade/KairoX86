@@ -9,3 +9,7 @@ add_subdirectory("${KAIROX86_ROOT}/core" core)
 
 kairo_machine_library(kairox86 x86_core.cpp)
 target_link_libraries(kairox86 PRIVATE kairox86_core)
+if(ANDROID)
+    # The machine settings' hardware queries (Kairo#143, X86Hardware.kt).
+    target_sources(kairox86 PRIVATE x86_hardware_jni.cpp)
+endif()

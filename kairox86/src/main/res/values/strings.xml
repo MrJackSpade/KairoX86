@@ -35,6 +35,18 @@
     <!-- %1$s is the file's name. -->
     <string name="machine_not_disk">%1$s is no floppy or CD image</string>
     <string name="machine_disk_no_machine">A disk goes in a running machine</string>
+    <!-- The machine settings (86box.cfg), each with 86Box's own choices (Kairo#143). -->
+    <string name="setting_machine">Machine</string>
+    <string name="setting_processor">Processor</string>
+    <string name="setting_memory">Memory</string>
+    <string name="setting_video">Video card</string>
+    <string name="setting_sound">Sound card</string>
+    <string name="setting_network">Network card</string>
+    <string name="setting_hdc">Hard disk controller</string>
+    <string name="setting_scsi">SCSI controller</string>
+    <string name="setting_fdc">Floppy controller</string>
+    <!-- Why a machine or card cannot be picked. -->
+    <string name="setting_firmware_missing">Its firmware is not in your 86Box ROM set</string>
     <!-- A machine setting (86box.cfg time_sync): the clock the guest reads. -->
     <string name="setting_clock">Clock</string>
     <string name="setting_clock_local">Local time</string>

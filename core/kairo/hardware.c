@@ -112,6 +112,9 @@ put_cards(const struct kind *kind, int m)
         const device_t *device = kind->device(card);
         if (!strcmp(id, "internal") && !(kind->onboard && machine_has_flags(m, kind->onboard)))
             continue;
+        /* A board whose video is its only video takes no other (86Box's config keeps it internal). */
+        if ((kind->onboard == MACHINE_VIDEO) && machine_has_flags(m, MACHINE_VIDEO_ONLY) && strcmp(id, "internal"))
+            continue;
         if (!device_is_valid(device, m))
             continue;
         put(first ? "{\"id\":" : ",{\"id\":");

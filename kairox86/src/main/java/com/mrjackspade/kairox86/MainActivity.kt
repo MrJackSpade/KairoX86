@@ -2,6 +2,7 @@ package com.mrjackspade.kairox86
 
 import com.mrjackspade.kairo.frontend.R as FrontendR
 import android.net.Uri
+import android.os.Bundle
 import com.mrjackspade.kairo.frontend.BlankDisk
 import com.mrjackspade.kairo.frontend.CatalogGame
 import com.mrjackspade.kairo.frontend.ControllerGuestSpec
@@ -47,16 +48,26 @@ class MainActivity : MachineActivity<X86Entry>() {
      * A machine's settings live in its folder's 86box.cfg (Kairo#142, X86Settings); one changed while
      * the machine runs goes over what 86Box saves as it ends.
      */
-    override val machineStore = object : GameMachineStore<X86Entry> {
-        override fun read(entry: X86Entry, option: MachineOption): String? {
-            val setting = X86Settings.of(option)
-            return machines.setting(entry, libraryTree(), setting.section, setting.key)
+    private val configStore = ConfigStore()
+    override val machineStore: GameMachineStore<X86Entry> get() = configStore
+
+    private inner class ConfigStore : GameMachineStore<X86Entry> {
+        // Each machine's 86box.cfg as last read, until a setting is written or its machine ends.
+        private val configs = HashMap<String, IniText>()
+
+        @Synchronized private fun config(entry: X86Entry) = configs.getOrPut(entry.id) { machines.config(entry, libraryTree()) }
+
+        @Synchronized fun forget(entryId: String) {
+            configs.remove(entryId)
         }
 
+        override fun read(entry: X86Entry, option: MachineOption): String? = X86Settings.of(option).read(config(entry))
+
         override fun write(entry: X86Entry, option: MachineOption, value: String?) {
-            val setting = X86Settings.of(option)
-            machines.setSetting(entry, libraryTree(), setting.section, setting.key, value)
-            session?.takeIf { it.entryId == entry.id }?.edit(setting.section, setting.key, value)
+            val changes = X86Settings.of(option).changes(value)
+            forget(entry.id)
+            machines.change(entry, libraryTree(), changes)
+            session?.takeIf { it.entryId == entry.id }?.let { running -> changes.forEach { running.edit(it.section, it.key, it.value) } }
         }
     }
 
@@ -169,6 +180,12 @@ class MainActivity : MachineActivity<X86Entry>() {
         for (file in FREE_FIRMWARE) ShippedAssets.install(this, "free-firmware/$file", File(firmwareFolder, file), progress)
     }
 
+    override fun onCreate(savedInstanceState: Bundle?) {
+        // The machine settings' hardware choices come from the player's ROM set (Kairo#143).
+        X86Hardware.roms = firmwareFolder
+        super.onCreate(savedInstanceState)
+    }
+
     override fun sessionEnded() {
         super.sessionEnded()
         val ended = session ?: return
@@ -176,6 +193,8 @@ class MainActivity : MachineActivity<X86Entry>() {
         Thread {
             try {
                 ended.writeBack()
+                // 86Box saved its configuration over the folder's: the settings read it again.
+                configStore.forget(ended.entryId)
             } catch (failure: Exception) {
                 runOnUiThread { toast(failure.message ?: getString(R.string.machine_write_back_failed), long = true) }
             } finally {

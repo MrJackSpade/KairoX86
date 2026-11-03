@@ -242,17 +242,13 @@ class X86Library(private val context: Context) {
         }
     }
 
-    /**
-     * The machine's own setting [key] in [section] of its folder's 86box.cfg (Kairo#142), or null when
-     * the file names none, so 86Box takes its default.
-     */
-    fun setting(entry: X86Entry, tree: Uri, section: String, key: String): String? =
-        IniText(readConfig(tree, entry))[section, key]
+    /** The machine folder's 86box.cfg (Kairo#142), as it is now. */
+    fun config(entry: X86Entry, tree: Uri): IniText = IniText(readConfig(tree, entry))
 
-    /** Sets the machine's [key] in [section] of its folder's 86box.cfg to [value]; null removes it. */
-    fun setSetting(entry: X86Entry, tree: Uri, section: String, key: String, value: String?) {
-        val text = IniText(readConfig(tree, entry))
-        text[section, key] = value
+    /** Makes [changes] to the machine folder's 86box.cfg (Kairo#142): each key set, or removed for null. */
+    fun change(entry: X86Entry, tree: Uri, changes: List<X86Settings.Change>) {
+        val text = config(entry, tree)
+        for (change in changes) text[change.section, change.key] = change.value
         val uri = configUri(tree, entry)
         checkNotNull(context.contentResolver.openOutputStream(uri, "wt")) { "Could not write ${entry.path}/$CONFIG" }
             .use { it.write(text.toString().toByteArray(Charsets.UTF_8)) }
