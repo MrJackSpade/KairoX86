@@ -127,8 +127,8 @@ class MainActivity : MachineActivity<X86Entry>() {
     }
 
     private companion object {
-        /** The wordmark's accent; KairoX86#5 sets it from the icon art. */
-        const val BRAND_ACCENT = 0xff4FC3F7.toInt()
+        /** The wordmark's accent: the icon's (shared tools/app_icon/presets/kairox86.json). */
+        const val BRAND_ACCENT = 0xff1FD6E8.toInt()
 
         /** The free firmware's files, at their places in the ROM set (kairox86/build.gradle.kts). */
         val FREE_FIRMWARE = listOf("machines/glabios/GLABIOS_0.4.0_8P.ROM", "machines/glabios/GLABIOS_0.4.0_VP.ROM",
