@@ -61,6 +61,7 @@ mem_mapping_t bios_mapping;
 mem_mapping_t bios_high_mapping;
 
 page_t  *pages;       /* RAM page table */
+int      mem_pages_as_reset = 0;
 uint32_t pages_sz;    /* #pages in table */
 
 K9X_HOT uint8_t *ram;  /* the virtual RAM */
@@ -3336,6 +3337,8 @@ mem_reset(void)
         pages[c].byte_dirty_mask        = &byte_dirty_mask[c * 64];
         pages[c].byte_code_present_mask = &byte_code_present_mask[c * 64];
     }
+    /* KairoX86#200: as mem_reset_page_blocks leaves them: the RAM handlers, no blocks (calloc). */
+    mem_pages_as_reset = 1;
 
     memset(_mem_exec, 0x00, sizeof(_mem_exec));
     /* Reads of absent physical memory return floating high bits - see rammap() above. */
@@ -3438,6 +3441,7 @@ mem_remap_top_ex_common(int kb, uint32_t start, int mid)
     remap_start_addr  = start << 10;
     remap_start_addr2 = (start << 10) + 0x00020000;
 
+    mem_pages_as_reset = 0; /* KairoX86#200 */
     for (c = ((start * 1024) >> 12); c < (((start + size) * 1024) >> 12); c++) {
         offset = c - ((start * 1024) >> 12);
         /* Use A0000-BFFFF, D0000-EFFFF instead of C0000-DFFFF, E0000-FFFFF. */
@@ -3459,6 +3463,7 @@ mem_remap_top_ex_common(int kb, uint32_t start, int mid)
 
     mem_set_mem_state_both(start * 1024, size * 1024, set ? (MEM_READ_INTERNAL | MEM_WRITE_INTERNAL) : (MEM_READ_EXTERNAL | MEM_WRITE_EXTERNAL));
 
+    mem_pages_as_reset = 0; /* KairoX86#200 */
     for (c = 0xa0; c < 0xf0; c++) {
         if ((c >= 0xc0) && (c <= 0xcf))
             continue;
@@ -3548,6 +3553,10 @@ mem_reset_page_blocks(void)
 {
     if (pages == NULL)
         return;
+    /* KairoX86#200: a 386's table covers 4 GB; writing it again when it is already so faulted in
+       and cleared its 100 MB a second time on every start. */
+    if (mem_pages_as_reset)
+        return;
 
     for (uint32_t c = 0; c < pages_sz; c++) {
         pages[c].write_b = mem_write_ramb_page;
@@ -3557,6 +3566,7 @@ mem_reset_page_blocks(void)
         pages[c].block_2 = BLOCK_INVALID;
         pages[c].head    = BLOCK_INVALID;
     }
+    mem_pages_as_reset = 1;
 }
 
 /* A chipset that makes the A20 gate itself: it is told of the requests (the

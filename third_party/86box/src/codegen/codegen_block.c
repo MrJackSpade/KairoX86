@@ -609,6 +609,8 @@ block_free_list_get(void)
 {
     codeblock_t *block = NULL;
 
+    /*A block taken is put on its pages (KairoX86#200).*/
+    mem_pages_as_reset = 0;
     if (!block_free_list && block_fresh_top) {
         const uint32_t c = block_fresh_top--;
 

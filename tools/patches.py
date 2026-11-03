@@ -1562,6 +1562,38 @@ KAIROX86_LAZY_BLOCKS = [
      '    /*Only blocks ever handed out were written (KairoX86#200): block 0 and block_touched_low up.*/\n    const uint32_t low = block_touched_low;\n\n    for (c = (low > 1) ? low : 1; c < BLOCK_SIZE; c++) {\n        codeblock_t *block = &codeblock[c];\n\n        if (block->valid) {\n            block->phys   = 0;\n            block->phys_2 = 0;\n            delete_block(block);\n        }\n    }\n\n    memset(&codeblock[0], 0, sizeof(codeblock_t));\n    if (low < BLOCK_SIZE)\n        memset(&codeblock[low], 0, (BLOCK_SIZE - low) * sizeof(codeblock_t));\n    memset(codeblock_hash, 0, HASH_SIZE * sizeof(uint32_t));\n    mem_reset_page_blocks();\n\n    block_free_list = 0;\n    block_free_list_add(&codeblock[0]);\n    /*What adding the blocks ever used did for their versions, in the same order; the others have none.*/\n    for (c = (low > 1) ? low : 1; c < BLOCK_SIZE; c++)\n        block_versions_free_all(c);\n    block_free_list_build();\n#ifdef CODEGEN_BACKEND_HAS_BLOCK_LINK\n    codegen_link_reset_used();\n'),
 ]
 
+# KairoX86#200: mem_reset_page_blocks skips writing a page table that is as it would leave it (just
+# filled by mem_reset and untouched since): a 386's table covers 4 GB, and every start wrote it twice.
+KAIROX86_PAGES_AS_RESET = [
+    ('86box/src/include/86box/mem.h',
+     'extern void mem_reset_page_blocks(void);\n',
+     "extern void mem_reset_page_blocks(void);\n/* KairoX86#200: whether every page's write handlers and code blocks are as mem_reset_page_blocks\n   leaves them, so it need not write them again. */\nextern int  mem_pages_as_reset;\n"),
+    ('86box/src/mem/mem.c',
+     'page_t  *pages;       /* RAM page table */\n',
+     'page_t  *pages;       /* RAM page table */\nint      mem_pages_as_reset = 0;\n'),
+    ('86box/src/mem/mem.c',
+     '        pages[c].byte_code_present_mask = &byte_code_present_mask[c * 64];\n    }\n\n    memset(_mem_exec, 0x00, sizeof(_mem_exec));\n',
+     '        pages[c].byte_code_present_mask = &byte_code_present_mask[c * 64];\n    }\n    /* KairoX86#200: as mem_reset_page_blocks leaves them: the RAM handlers, no blocks (calloc). */\n    mem_pages_as_reset = 1;\n\n    memset(_mem_exec, 0x00, sizeof(_mem_exec));\n'),
+    ('86box/src/mem/mem.c',
+     'mem_reset_page_blocks(void)\n{\n    if (pages == NULL)\n        return;\n\n',
+     "mem_reset_page_blocks(void)\n{\n    if (pages == NULL)\n        return;\n    /* KairoX86#200: a 386's table covers 4 GB; writing it again when it is already so faulted in\n       and cleared its 100 MB a second time on every start. */\n    if (mem_pages_as_reset)\n        return;\n\n"),
+    ('86box/src/mem/mem.c',
+     '        pages[c].head    = BLOCK_INVALID;\n    }\n}\n',
+     '        pages[c].head    = BLOCK_INVALID;\n    }\n    mem_pages_as_reset = 1;\n}\n'),
+    ('86box/src/mem/mem.c',
+     '    for (c = ((start * 1024) >> 12); c < (((start + size) * 1024) >> 12); c++) {\n',
+     '    mem_pages_as_reset = 0; /* KairoX86#200 */\n    for (c = ((start * 1024) >> 12); c < (((start + size) * 1024) >> 12); c++) {\n'),
+    ('86box/src/mem/mem.c',
+     '    for (c = 0xa0; c < 0xf0; c++) {\n        if ((c >= 0xc0) && (c <= 0xcf))\n            continue;\n',
+     '    mem_pages_as_reset = 0; /* KairoX86#200 */\n    for (c = 0xa0; c < 0xf0; c++) {\n        if ((c >= 0xc0) && (c <= 0xcf))\n            continue;\n'),
+    ('86box/src/machine/m_ps2_mca.c',
+     '    for (c = (start >> 12); c < ((start + (size << 10)) >> 12); c++) {\n        const uint32_t offset = c - (start >> 12);\n',
+     '    mem_pages_as_reset = 0; /* KairoX86#200 */\n    for (c = (start >> 12); c < ((start + (size << 10)) >> 12); c++) {\n        const uint32_t offset = c - (start >> 12);\n'),
+    ('86box/src/codegen/codegen_block.c',
+     '    codeblock_t *block = NULL;\n\n    if (!block_free_list && block_fresh_top) {\n',
+     '    codeblock_t *block = NULL;\n\n    /*A block taken is put on its pages (KairoX86#200).*/\n    mem_pages_as_reset = 0;\n    if (!block_free_list && block_fresh_top) {\n'),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -1581,6 +1613,7 @@ PATCHES = {
     'kairox86-path-append': KAIROX86_PATH_APPEND,
     'kairox86-mouse-enable': KAIROX86_MOUSE_ENABLE,
     'kairox86-lazy-blocks': KAIROX86_LAZY_BLOCKS,
+    'kairox86-pages-as-reset': KAIROX86_PAGES_AS_RESET,
 }
 
 ADDED = [

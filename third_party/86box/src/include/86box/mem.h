@@ -456,6 +456,9 @@ extern void mem_write_raml_page(uint32_t addr, uint32_t val, page_t *page);
 extern void mem_flush_write_page(uint32_t addr, uint32_t virt);
 
 extern void mem_reset_page_blocks(void);
+/* KairoX86#200: whether every page's write handlers and code blocks are as mem_reset_page_blocks
+   leaves them, so it need not write them again. */
+extern int  mem_pages_as_reset;
 
 extern void flushmmucache(void);
 extern uint64_t pae_pdpte[4];

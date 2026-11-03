@@ -1968,6 +1968,7 @@ mem_remap_top_ps2(int kb, uint32_t start, uint32_t phys_base)
     if (size > kb)
         size = kb;
 
+    mem_pages_as_reset = 0; /* KairoX86#200 */
     for (c = (start >> 12); c < ((start + (size << 10)) >> 12); c++) {
         const uint32_t offset = c - (start >> 12);
         addr = phys_base + (offset << 12);
