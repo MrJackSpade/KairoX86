@@ -467,13 +467,23 @@ media_held(int slot)
     return (slot < 2) ? drives[slot].image_path : cdrom[0].image_path;
 }
 
-/* Whether path is in the machine's folder (86Box's usr_path): a disk of the machine itself. */
+static bool
+media_separator(char c)
+{
+    return (c == '/') || (c == '\\');
+}
+
+/* Whether path is in the machine's folder (86Box's usr_path): a disk of the machine itself. Either
+   separator matches the other (a Windows host's paths mix them). */
 static bool
 media_in_machine(const char *path)
 {
-    const size_t length = strlen(usr_path);
-    return (strncmp(path, usr_path, length) == 0) && ((path[length] == '/') || (path[length] == '\\') ||
-                                                   (length > 0 && ((usr_path[length - 1] == '/') || (usr_path[length - 1] == '\\'))));
+    size_t i = 0;
+
+    for (; usr_path[i] != 0; i++)
+        if ((path[i] != usr_path[i]) && !(media_separator(path[i]) && media_separator(usr_path[i])))
+            return false;
+    return (i > 0) && (media_separator(usr_path[i - 1]) || media_separator(path[i]));
 }
 
 /* Puts path in slot through 86Box's own insert or eject. */
