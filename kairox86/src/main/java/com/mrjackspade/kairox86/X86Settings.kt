@@ -121,12 +121,34 @@ object X86Settings {
      */
     val skipMemoryCheck = single(MachineOption.skipMemoryCheck(), "Kairo", "skip_memory_check")
 
+    /** The card settings whose card has options of its own (KairoX86#201), with their kinds. */
+    val cards = listOf(video to X86Hardware.VIDEO, sound to X86Hardware.SOUND, network to X86Hardware.NETWORK,
+        hdc to X86Hardware.HDC, scsi to X86Hardware.SCSI, fdc to X86Hardware.FDC, mouse to X86Hardware.MOUSE)
+
+    /** A card option's ID: "card:<key>:<section>" (a key has no colon; a section may have any). */
+    private const val CARD_OPTION = "card:"
+
+    /** [option] of [card] as a setting (KairoX86#201), with 86Box's own choices and default. */
+    fun cardOption(card: X86Hardware.Card, option: X86Hardware.CardOption) =
+        MachineOption("$CARD_OPTION${option.key}:${card.section}", UiText.fixed(option.label), option.choices.map { choice ->
+            val label = if (!option.binary) UiText.fixed(choice.label)
+                else UiText.res(if (choice.value == "1") FrontendR.string.kairo_on else FrontendR.string.kairo_off)
+            ChoiceOption(choice.value, label, null, firmwareMissing.takeIf { !choice.available })
+        }, option.default)
+
     /** In the order they show; each after the ones it depends on. */
     val all = listOf(machine, processor, memory, video, sound, network, hdc, scsi, fdc, mouse, joystick, clock, skipMemoryCheck)
 
     /** The setting [option] is. */
-    fun of(option: MachineOption): Setting = all.firstOrNull { it.option.id == option.id }
-        ?: error("${option.id} is no KairoX86 machine setting")
+    fun of(option: MachineOption): Setting {
+        if (option.id.startsWith(CARD_OPTION)) {
+            // A card's option: kept in its card's section, as 86Box reads it.
+            val rest = option.id.removePrefix(CARD_OPTION)
+            val key = rest.substringBefore(':')
+            return single(option, rest.substringAfter(':'), key)
+        }
+        return all.firstOrNull { it.option.id == option.id } ?: error("${option.id} is no KairoX86 machine setting")
+    }
 
     private fun memoryLabel(kb: Int): UiText =
         if (kb % 1024 == 0) UiText.res(FrontendR.string.kairo_memory_mb, kb / 1024) else UiText.res(FrontendR.string.kairo_memory_kb, kb)

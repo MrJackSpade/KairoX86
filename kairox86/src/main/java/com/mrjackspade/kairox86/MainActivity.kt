@@ -9,6 +9,7 @@ import com.mrjackspade.kairo.frontend.BlankDisk
 import com.mrjackspade.kairo.frontend.CatalogGame
 import com.mrjackspade.kairo.frontend.ControllerGuestSpec
 import com.mrjackspade.kairo.frontend.ExternalGameFile
+import com.mrjackspade.kairo.frontend.RowGroup
 import com.mrjackspade.kairo.frontend.GamePathMigration
 import com.mrjackspade.kairo.frontend.LayeredGameCatalog
 import com.mrjackspade.kairo.frontend.LibraryStrings
@@ -71,6 +72,24 @@ class MainActivity : MachineActivity<X86Entry>() {
             forget(entry.id)
             machines.change(entry, libraryTree(), changes)
             session?.takeIf { it.entryId == entry.id }?.let { running -> changes.forEach { running.edit(it.section, it.key, it.value) } }
+        }
+    }
+
+    /**
+     * The options of each card [entry]'s machine has (KairoX86#201): a group for each card, named by
+     * 86Box, with its own options, kept in its section of the folder's 86box.cfg.
+     */
+    override fun machineExtraGroups(entry: X86Entry, enabled: () -> Boolean): List<RowGroup> {
+        val machine = configStore.read(entry, X86Settings.machine.option) ?: X86Settings.machine.option.default
+        val values = mapOf(X86Settings.machine.option.id to machine)
+        val takes = X86Hardware.takes(machine)
+        return X86Settings.cards.mapNotNull { (setting, kind) ->
+            val chosen = configStore.read(entry, setting.option) ?: setting.option.default(values)
+            // A card the machine does not take has no rows: the player is asked for another (askUnfit).
+            val card = takes.cards.getValue(kind).firstOrNull { it.id == chosen }
+            card?.takeIf { it.options.isNotEmpty() }?.let {
+                RowGroup(it.name.uppercase(), it.options.map { option -> machineChoiceRow(entry, X86Settings.cardOption(it, option), enabled) })
+            }
         }
     }
 

@@ -14,7 +14,12 @@ object X86Hardware {
     class Machine(val id: String, val name: String, val type: String, val available: Boolean)
     class Speed(val speed: Long, val multi: String, val name: String)
     class Family(val id: String, val name: String, val speeds: List<Speed>)
-    class Card(val id: String, val name: String, val available: Boolean)
+    /** A choice of a card's option: its value as 86box.cfg keeps it, its name, and whether its firmware is there. */
+    class CardChoice(val value: String, val label: String, val available: Boolean)
+    /** One of a card's own 86Box options (KairoX86#201): its key, description, default and choices; [binary] is on or off. */
+    class CardOption(val key: String, val label: String, val default: String, val binary: Boolean, val choices: List<CardChoice>)
+    /** A card; [section] is the one of 86box.cfg 86Box reads its [options] from. */
+    class Card(val id: String, val name: String, val available: Boolean, val section: String, val options: List<CardOption>)
     class Takes(val cpus: List<Family>, val ramMin: Int, val ramMax: Int, val ramStep: Int, val ramDefault: Int, val cards: Map<String, List<Card>>)
 
     /** The card kinds a machine takes, as the core names them. */
@@ -53,7 +58,18 @@ object X86Hardware {
         val cards = KINDS.associateWith { kind ->
             val list = answer.getJSONArray(kind)
             (0 until list.length()).map { list.getJSONObject(it) }
-                .map { Card(it.getString("id"), it.getString("name"), it.getBoolean("available")) }
+                .map { card ->
+                    // The game port's joysticks are no devices of their own: they have no section or options.
+                    val options = card.optJSONArray("options")?.let { list ->
+                        (0 until list.length()).map { list.getJSONObject(it) }.map { option ->
+                            val choices = option.getJSONArray("choices")
+                            CardOption(option.getString("key"), option.getString("label"), option.getString("default"),
+                                option.getBoolean("binary"), (0 until choices.length()).map { choices.getJSONObject(it) }
+                                    .map { CardChoice(it.getString("value"), it.getString("label"), it.getBoolean("available")) })
+                        }
+                    }.orEmpty()
+                    Card(card.getString("id"), card.getString("name"), card.getBoolean("available"), card.optString("section"), options)
+                }
         }
         Takes(cpus, ram.getInt("min"), ram.getInt("max"), ram.getInt("step"), ram.getInt("default"), cards)
     }

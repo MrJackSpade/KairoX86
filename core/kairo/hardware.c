@@ -90,6 +90,7 @@ struct kind {
     const device_t *(*device)(int card);
     int (*available)(int card);
     uintptr_t onboard; /* the machine flag that says the board has one ("internal") */
+    int instance;      /* the instance 86Box adds the first card as: its options' section is "<name> #<n>" (device.c) */
 };
 
 /* A mouse is there whatever the ROM set: 86Box's mice need no firmware of their own. */
@@ -113,14 +114,99 @@ mouse_device(int mouse)
 }
 
 static const struct kind kinds[] = {
-    { "video",   video_get_internal_name,         video_card_getdevice,   video_card_available,   MACHINE_VIDEO },
-    { "sound",   sound_card_get_internal_name,    sound_card_getdevice,   sound_card_available,   MACHINE_SOUND },
-    { "network", network_card_get_internal_name,  network_card_getdevice, network_card_available, MACHINE_NIC },
-    { "hdc",     hdc_get_internal_name,           hdc_get_device,         hdc_available,          MACHINE_HDC },
-    { "scsi",    scsi_card_get_internal_name,     scsi_card_getdevice,    scsi_card_available,    0 },
-    { "fdc",     fdc_card_get_internal_name,      fdc_card_getdevice,     fdc_card_available,     MACHINE_FDC },
-    { "mouse",   mouse_internal_name,             mouse_device,           mouse_available,        MACHINE_MOUSE },
+    /* The instances are those 86Box adds the first card of each kind with: video_reset, sound_card_init,
+       network_init, hdc_init and scsi_card_init add slot i as i + 1; fdc_card_init and mouse_reset add
+       theirs as 0. */
+    { "video",   video_get_internal_name,         video_card_getdevice,   video_card_available,   MACHINE_VIDEO, 1 },
+    { "sound",   sound_card_get_internal_name,    sound_card_getdevice,   sound_card_available,   MACHINE_SOUND, 1 },
+    { "network", network_card_get_internal_name,  network_card_getdevice, network_card_available, MACHINE_NIC,   1 },
+    { "hdc",     hdc_get_internal_name,           hdc_get_device,         hdc_available,          MACHINE_HDC,   1 },
+    { "scsi",    scsi_card_get_internal_name,     scsi_card_getdevice,    scsi_card_available,    0,             1 },
+    { "fdc",     fdc_card_get_internal_name,      fdc_card_getdevice,     fdc_card_available,     MACHINE_FDC,   0 },
+    { "mouse",   mouse_internal_name,             mouse_device,           mouse_available,        MACHINE_MOUSE, 0 },
 };
+
+/* Whether every file of a BIOS choice is in the ROM set, as machine_device_available counts them. */
+static bool
+bios_present(const device_config_bios_t *bios)
+{
+    if (bios->files_no == -1)
+        return true;
+    for (int8_t f = 0; f < bios->files_no; f++)
+        if (!rom_present(bios->files[f]))
+            return false;
+    return true;
+}
+
+/* A choice of an option: its value as 86box.cfg keeps it, its name, and whether it can be picked. */
+static void
+put_choice(bool first, const char *value, const char *label, bool available)
+{
+    put(first ? "{\"value\":" : ",{\"value\":");
+    put_string(value);
+    put(",\"label\":");
+    put_string(label);
+    put(",\"available\":%s}", available ? "true" : "false");
+}
+
+/* The options of [device] the settings can offer (KairoX86#201), as 86Box's own device_config lists
+   them: each with its key, its description, its default and its choices, values written as 86box.cfg
+   keeps them (device.c's device_get_config_*: integers in decimal, hex16 as %04X, hex20 as %05X, a
+   BIOS by its internal name). Options without a list of values (text, file names, serial ports, MIDI
+   devices, MAC addresses, plain numbers) are the player's 86box.cfg's alone and are not listed. */
+static void
+put_options(const device_t *device)
+{
+    put("[");
+    bool first_option = true;
+    for (const device_config_t *config = device ? device->config : NULL; config && (config->type != CONFIG_END); config++) {
+        const int type  = config->type & ~CONFIG_DEP;
+        char      value[32];
+        bool      first = true;
+        if ((type != CONFIG_BINARY) && (type != CONFIG_SELECTION) && (type != CONFIG_SPINNER) && (type != CONFIG_MEMORY)
+            && (type != CONFIG_HEX16) && (type != CONFIG_HEX20) && (type != CONFIG_BIOS))
+            continue;
+        put(first_option ? "{\"key\":" : ",{\"key\":");
+        first_option = false;
+        put_string(config->name);
+        put(",\"label\":");
+        put_string(config->description);
+        put(",\"default\":");
+        if (type == CONFIG_BIOS)
+            put_string(config->default_string);
+        else {
+            snprintf(value, sizeof(value), (type == CONFIG_HEX16) ? "%04X" : (type == CONFIG_HEX20) ? "%05X" : "%i",
+                     config->default_int);
+            put_string(value);
+        }
+        put(",\"binary\":%s,\"choices\":[", (type == CONFIG_BINARY) ? "true" : "false");
+        if (type == CONFIG_BINARY) {
+            put_choice(true, "0", "", true);
+            put_choice(false, "1", "", true);
+        } else if (type == CONFIG_SPINNER) {
+            const int step = (config->spinner.step > 0) ? config->spinner.step : 1;
+            for (int v = config->spinner.min; v <= config->spinner.max; v += step) {
+                snprintf(value, sizeof(value), "%i", v);
+                put_choice(first, value, value, true);
+                first = false;
+            }
+        } else if (type == CONFIG_BIOS) {
+            for (const device_config_bios_t *bios = config->bios; bios->name && bios->internal_name && bios->files_no; bios++) {
+                put_choice(first, bios->internal_name, bios->name, bios_present(bios));
+                first = false;
+            }
+        } else {
+            for (const device_config_selection_t *choice = config->selection; choice->description && choice->description[0]; choice++) {
+                snprintf(value, sizeof(value), (type == CONFIG_HEX16) ? "%04X" : (type == CONFIG_HEX20) ? "%05X" : "%i",
+                         choice->value);
+                put_choice(first, value, choice->description, true);
+                first = false;
+            }
+        }
+        put("]}");
+    }
+    put("]");
+}
 
 /* The game port's joysticks: every one 86Box has, for any machine (the game port is a card or the board's). */
 static void
@@ -159,7 +245,17 @@ put_cards(const struct kind *kind, int m)
         put_string(id);
         put(",\"name\":");
         put_string(device ? device->name : id);
-        put(",\"available\":%s}", kind->available(card) ? "true" : "false");
+        put(",\"available\":%s,\"section\":", kind->available(card) ? "true" : "false");
+        /* The section 86Box reads the card's options from (device.c: the name, " #<instance>" when not 0). */
+        char section[256];
+        if (device && kind->instance)
+            snprintf(section, sizeof(section), "%s #%i", device->name, kind->instance);
+        else
+            snprintf(section, sizeof(section), "%s", device ? device->name : id);
+        put_string(section);
+        put(",\"options\":");
+        put_options(device);
+        put("}");
     }
     put("]");
 }
