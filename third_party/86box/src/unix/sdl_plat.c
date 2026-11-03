@@ -336,7 +336,8 @@ path_get_extension(char *s)
 void
 path_append_filename(char *dest, const char *s1, const char *s2)
 {
-    strcpy(dest, s1);
+    if (dest != s1) /* KairoX86#192: a copy onto itself is undefined */
+        strcpy(dest, s1);
     path_slash(dest);
     strcat(dest, s2);
 }

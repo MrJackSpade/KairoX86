@@ -1499,6 +1499,16 @@ KAIROX86_OWN_MEMORY = [
      'void' + _NL + 'plat_munmap_os(void *ptr, UNUSED(size_t size))' + _NL),
 ]
 
+# KairoX86#192: add_path (src/mem/rom.c) appends a relative ROM folder to the working folder in place,
+# with the same buffer as destination and first part: path_append_filename copies it only when they differ.
+KAIROX86_PATH_APPEND = [
+    ('86box/src/unix/sdl_plat.c',
+     'path_append_filename(char *dest, const char *s1, const char *s2)' + _NL + '{' + _NL + '    strcpy(dest, s1);' + _NL,
+     'path_append_filename(char *dest, const char *s1, const char *s2)' + _NL + '{' + _NL
+     + '    if (dest != s1) /* KairoX86#192: a copy onto itself is undefined */' + _NL
+     + '        strcpy(dest, s1);' + _NL),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -1515,6 +1525,7 @@ PATCHES = {
     'kairox86-guest-input': KAIROX86_GUEST_INPUT,
     'kairox86-native-size': KAIROX86_NATIVE_SIZE,
     'kairox86-own-memory': KAIROX86_OWN_MEMORY,
+    'kairox86-path-append': KAIROX86_PATH_APPEND,
 }
 
 ADDED = [
