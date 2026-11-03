@@ -308,6 +308,7 @@ lt_write(uint16_t port, uint8_t val, void *priv)
                 dev->flags |= FLAG_TIMER_INT;
             else
                 dev->flags &= ~FLAG_TIMER_INT;
+            kairo_observe_mouse_enable(!(val & DISABLE_IRQ)); /* KairoX86#190 */
 
             if (val & HOLD_COUNTER)
                 dev->flags |= FLAG_HOLD;
@@ -422,6 +423,7 @@ ms_write(uint16_t port, uint8_t val, void *priv)
                         dev->flags |= FLAG_DATA_INT;
                     else
                         dev->flags &= ~FLAG_DATA_INT;
+                    kairo_observe_mouse_enable((val & (INP_ENABLE_TIMER_IRQ | INP_ENABLE_DATA_IRQ)) != 0); /* KairoX86#190 */
 
                     switch (val & INP_PERIOD_MASK) {
                         case 0:

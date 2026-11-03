@@ -1509,6 +1509,32 @@ KAIROX86_PATH_APPEND = [
      + '        strcpy(dest, s1);' + _NL),
 ]
 
+# KairoX86#190: the PS/2, serial and bus mice tell the frontend when the guest turns their reports on
+# or off, so it can tell a protected-mode driver (Windows) setting the mouse up from a DOS driver.
+KAIROX86_MOUSE_ENABLE = [
+    ('86box/src/include/86box/mouse.h',
+     'extern void            mouse_reset(void);\n',
+     "extern void            mouse_reset(void);\n/* KairoX86#190: the guest turned the mouse's reports on (1) or off (0); the frontend notes whether a\n   protected-mode driver did it (core/kairo/frontend.c). */\nextern void            kairo_observe_mouse_enable(int enabled);\n"),
+    ('86box/src/device/mouse_ps2.c',
+     '                mouse_ps2_log("%s: Enable\\n", dev->name);\n                mouse_scan = 1;\n',
+     '                mouse_ps2_log("%s: Enable\\n", dev->name);\n                mouse_scan = 1;\n                kairo_observe_mouse_enable(1); /* KairoX86#190 */\n'),
+    ('86box/src/device/mouse_ps2.c',
+     '                mouse_ps2_log("%s: Disable\\n", dev->name);\n                mouse_scan = 0;\n',
+     '                mouse_ps2_log("%s: Disable\\n", dev->name);\n                mouse_scan = 0;\n                kairo_observe_mouse_enable(0); /* KairoX86#190 */\n'),
+    ('86box/src/device/mouse_ps2.c',
+     '                mouse_ps2_log("%s: Reset\\n", dev->name);\n                kbc_at_dev_reset(dev, 1);\n',
+     '                mouse_ps2_log("%s: Reset\\n", dev->name);\n                kbc_at_dev_reset(dev, 1);\n                kairo_observe_mouse_enable(0); /* KairoX86#190: a reset mouse reports nothing until enabled */\n'),
+    ('86box/src/device/mouse_serial.c',
+     '    sermouse_reset(dev, 1);\n\n    memcpy(dev->buf, dev->id, dev->id_len);\n',
+     '    sermouse_reset(dev, 1);\n    kairo_observe_mouse_enable(1); /* KairoX86#190: a driver powers the mouse up by RTS */\n\n    memcpy(dev->buf, dev->id, dev->id_len);\n'),
+    ('86box/src/device/mouse_bus.c',
+     '            if (!(val & DISABLE_IRQ))\n                dev->flags |= FLAG_TIMER_INT;\n            else\n                dev->flags &= ~FLAG_TIMER_INT;\n',
+     '            if (!(val & DISABLE_IRQ))\n                dev->flags |= FLAG_TIMER_INT;\n            else\n                dev->flags &= ~FLAG_TIMER_INT;\n            kairo_observe_mouse_enable(!(val & DISABLE_IRQ)); /* KairoX86#190 */\n'),
+    ('86box/src/device/mouse_bus.c',
+     '                    if (val & INP_ENABLE_DATA_IRQ)\n                        dev->flags |= FLAG_DATA_INT;\n                    else\n                        dev->flags &= ~FLAG_DATA_INT;\n',
+     '                    if (val & INP_ENABLE_DATA_IRQ)\n                        dev->flags |= FLAG_DATA_INT;\n                    else\n                        dev->flags &= ~FLAG_DATA_INT;\n                    kairo_observe_mouse_enable((val & (INP_ENABLE_TIMER_IRQ | INP_ENABLE_DATA_IRQ)) != 0); /* KairoX86#190 */\n'),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -1526,6 +1552,7 @@ PATCHES = {
     'kairox86-native-size': KAIROX86_NATIVE_SIZE,
     'kairox86-own-memory': KAIROX86_OWN_MEMORY,
     'kairox86-path-append': KAIROX86_PATH_APPEND,
+    'kairox86-mouse-enable': KAIROX86_MOUSE_ENABLE,
 }
 
 ADDED = [

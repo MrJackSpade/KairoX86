@@ -50,6 +50,7 @@ struct KairoX86GuestInput {
 	uint64_t mouse_reads;
 	uint64_t position_reads; /* of the mouse reads, the position and buttons (INT 33h AX=03h) */
 	bool keyboard_waiting;
+	bool mouse_driven; /* a protected-mode driver turned the mouse on (KairoX86#190) */
 };
 
 /* The removable drives a machine's media go in (KairoX86#48), as slots: floppy drives A and B,

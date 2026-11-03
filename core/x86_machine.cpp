@@ -134,7 +134,7 @@ bool X86Machine::loading() const { return impl_->api->loading(); }
 X86Machine::GuestInput X86Machine::guest_input() const {
     KairoX86GuestInput input{};
     impl_->api->guest_input(&input);
-    return {input.keyboard_waits, input.keyboard_polls, input.mouse_reads, input.position_reads, input.keyboard_waiting};
+    return {input.keyboard_waits, input.keyboard_polls, input.mouse_reads, input.position_reads, input.keyboard_waiting, input.mouse_driven};
 }
 
 bool X86Machine::media(int slot, const std::string &path) { return impl_->api->media(slot, path.c_str()) == 0; }

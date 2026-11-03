@@ -291,12 +291,14 @@ ps2_write(void *priv)
             case 0xf4: /* enable */
                 mouse_ps2_log("%s: Enable\n", dev->name);
                 mouse_scan = 1;
+                kairo_observe_mouse_enable(1); /* KairoX86#190 */
                 kbc_at_dev_queue_add(dev, 0xfa, 0);
                 break;
 
             case 0xf5: /* disable */
                 mouse_ps2_log("%s: Disable\n", dev->name);
                 mouse_scan = 0;
+                kairo_observe_mouse_enable(0); /* KairoX86#190 */
                 kbc_at_dev_queue_add(dev, 0xfa, 0);
                 break;
 
@@ -309,6 +311,7 @@ ps2_write(void *priv)
             case 0xff: /* reset */
                 mouse_ps2_log("%s: Reset\n", dev->name);
                 kbc_at_dev_reset(dev, 1);
+                kairo_observe_mouse_enable(0); /* KairoX86#190: a reset mouse reports nothing until enabled */
                 break;
 
             default:

@@ -966,6 +966,33 @@ driver_coordinate(int value, int size, bool set, int min, int max, bool across)
     return (uint16_t) coordinate;
 }
 
+/* Whether a protected-mode system drives the mouse (KairoX86#190): Windows, OS/2 or a Linux desktop
+   reads the mouse through its own driver and makes no INT 33h call. The mouse device says when the
+   guest turns its reports on or off (kairox86-mouse-enable). The mouse counts as driven while it is
+   on and either
+   - Windows runs: from its start broadcast to DOS (INT 2Fh AX=1605h) to its exit (AX=1606h).
+     Windows 98's driver turns the mouse on through the BIOS, in virtual 8086 mode, as a DOS session
+     under EMM386 also would, so the processor's mode does not tell them apart; or
+   - a system outside DOS turned it on in protected mode outside virtual 8086 mode (Linux, OS/2).
+   A DOS mouse driver turns it on in real or V86 mode, also under a DOS extender, so a DOS game with
+   a resident mouse driver and no INT 33h reads stays a keyboard game. */
+static atomic_bool mouse_on;
+static atomic_bool mouse_on_protected;
+static atomic_bool windows_running;
+
+void
+kairo_observe_mouse_enable(int enabled)
+{
+    atomic_store(&mouse_on, enabled != 0);
+    atomic_store(&mouse_on_protected, enabled && (cr0 & 1) && !(cpu_state.eflags & VM_FLAG));
+}
+
+static bool
+mouse_driven(void)
+{
+    return atomic_load(&mouse_on) && (atomic_load(&windows_running) || atomic_load(&mouse_on_protected));
+}
+
 /* Every INT n the guest runs, from code at linear code_base with DS at data_base (the processors' INT
    decoders, kairox86-guest-input); the registers are the call's, which a place may change. */
 void
@@ -974,6 +1001,11 @@ kairo_observe_int(uint8_t num, uint16_t *ax, uint16_t *bx, uint16_t *cx, uint16_
 {
     const uint8_t ah = *ax >> 8;
 
+    /* Windows's start and exit broadcasts (KairoX86#190). */
+    if ((num == 0x2f) && (*ax == 0x1605))
+        atomic_store(&windows_running, true);
+    else if ((num == 0x2f) && (*ax == 0x1606))
+        atomic_store(&windows_running, false);
     if ((code_base < ROM_START) || (code_base >= ROM_END))
         atomic_store(&keyboard_wait, false);
     /* Get a keystroke: a wait when the buffer is empty, else a key read at once. */
@@ -1180,6 +1212,7 @@ api_guest_input(struct KairoX86GuestInput *input)
     input->mouse_reads    = atomic_load(&mouse_reads);
     input->position_reads = atomic_load(&position_reads);
     input->keyboard_waiting = atomic_load(&keyboard_wait);
+    input->mouse_driven     = mouse_driven();
 }
 
 static bool

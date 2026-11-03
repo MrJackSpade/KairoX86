@@ -149,6 +149,9 @@ extern int             mouse_get_ndev(void);
 extern int             tablet_get_ndev(void);
 extern void            mouse_set_raw(int raw);
 extern void            mouse_reset(void);
+/* KairoX86#190: the guest turned the mouse's reports on (1) or off (0); the frontend notes whether a
+   protected-mode driver did it (core/kairo/frontend.c). */
+extern void            kairo_observe_mouse_enable(int enabled);
 extern void            mouse_close(void);
 extern void            mouse_init(void);
 

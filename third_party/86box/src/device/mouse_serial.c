@@ -841,6 +841,7 @@ sermouse_callback(UNUSED(struct serial_s *serial), void *priv)
     mouse_t *dev = (mouse_t *) priv;
 
     sermouse_reset(dev, 1);
+    kairo_observe_mouse_enable(1); /* KairoX86#190: a driver powers the mouse up by RTS */
 
     memcpy(dev->buf, dev->id, dev->id_len);
     sermouse_transmit(dev, dev->id_len, 0, 0);

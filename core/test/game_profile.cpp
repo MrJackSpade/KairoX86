@@ -36,7 +36,8 @@
 // Prints one line starting "start ": how long the machine took to start; and one starting "host ":
 // the frames per second the host reached, the guest's rate and the frame time distribution. At the
 // end, one line starting "input ": the guest's BIOS keyboard waits and polls, its mouse driver reads
-// and whether it waits for a key (KairoX86#43).
+// and whether it waits for a key (KairoX86#43), and whether a protected-mode driver turned the mouse
+// on (KairoX86#190).
 
 #include <algorithm>
 #include <array>
@@ -305,9 +306,9 @@ int main(int argc, char **argv) {
         std::printf("loading %ld frames, the last at frame %ld\n", loading, last_loading);
         // How the guest read its input (KairoX86#43), for the Auto touch mode.
         const kairox86::X86Machine::GuestInput input = machine->guest_input();
-        std::printf("input waits %llu polls %llu mouse %llu waiting %d\n", (unsigned long long) input.keyboard_waits,
+        std::printf("input waits %llu polls %llu mouse %llu waiting %d driven %d\n", (unsigned long long) input.keyboard_waits,
                     (unsigned long long) input.keyboard_polls, (unsigned long long) input.mouse_reads,
-                    input.keyboard_waiting ? 1 : 0);
+                    input.keyboard_waiting ? 1 : 0, input.mouse_driven ? 1 : 0);
         // What the removable drives hold at the end.
         const std::vector<std::string> held = machine->media_paths();
         for (size_t slot = 0; slot < held.size(); ++slot) std::printf("media %zu: %s\n", slot, held[slot].c_str());

@@ -225,6 +225,11 @@ bool run_machine(int index, const std::string &rom_folder, const std::string &fo
     std::printf("  %lu frames, %.2f guest s in %.2f host s (%.0f%%), %llu audio frames, peak %d\n", frames, guest, wall,
                 100.0 * guest / wall, static_cast<unsigned long long>(audio_frames), peak);
     std::printf("  loading: %.2f guest s\n", loading);
+    // What the Auto touch mode reads (KairoX86#43, #190).
+    const kairox86::X86Machine::GuestInput input = machine->guest_input();
+    std::printf("  guest input: %llu keyboard waits, %llu polls, %llu mouse reads, mouse driven %s\n",
+                static_cast<unsigned long long>(input.keyboard_waits), static_cast<unsigned long long>(input.keyboard_polls),
+                static_cast<unsigned long long>(input.mouse_reads), input.mouse_driven ? "yes" : "no");
     machine->close();
     machine.reset();
     const int threads_after = thread_count();

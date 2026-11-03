@@ -79,6 +79,7 @@ public:
         uint64_t mouse_reads = 0;
         uint64_t position_reads = 0; // of them, the position and buttons (INT 33h AX=03h)
         bool keyboard_waiting = false;
+        bool mouse_driven = false; // a protected-mode driver turned the mouse on (KairoX86#190)
     };
     GuestInput guest_input() const;
     // The removable drives (kairo_x86.h): slot 0 and 1 floppy drives A and B, 2 the first CD-ROM
