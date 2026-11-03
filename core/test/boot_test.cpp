@@ -5,7 +5,7 @@
 //   boot_test <machine folder> <rom folder> <seconds> <out folder> [snapshot seconds, comma separated]
 //
 // The machine folder holds the machine's 86box.cfg and the disks it names (86Box's own layout); the
-// rom folder the firmware in the 86Box ROM set's layout. Runs one machine, then ends.
+// rom folder is the 86Box ROM set itself (its machines/, video/... folders). Runs one machine, then ends.
 
 #include <png.h>
 

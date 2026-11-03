@@ -54,7 +54,8 @@ struct KairoX86Host {
 
 struct KairoX86Api {
 	/* Starts the machine 86Box finds in vm_folder (its 86box.cfg, its disks and nvr/), with the
-	 * firmware under rom_folder (86Box's roms/ layout). False after host->fatal when it cannot.
+	 * firmware in rom_folder: the 86Box ROM set itself (its machines/, video/... folders), which
+	 * 86Box reads for each of its roms/ paths. False after host->fatal when it cannot.
 	 * A library copy starts one machine: the host loads a fresh copy for the next. */
 	bool (*start)(const char *vm_folder, const char *rom_folder, const struct KairoX86Host *host);
 	/* Runs the guest to the end of its next video frame (or KAIRO_X86_MAX_FRAME_MS); false after

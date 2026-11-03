@@ -88,7 +88,7 @@ private:
 } // namespace
 
 // The launch's media[0] is the machine folder (86box.cfg, its disks, nvr/), and its firmware folder
-// holds the player's 86Box ROM set under roms/ (MainActivity.startGame).
+// is the player's 86Box ROM set itself (MainActivity.startGame).
 std::unique_ptr<kairo::MachineCore> kairo::create_core(const kairo::Launch &launch, std::string &error) {
     if (launch.media.size() <= kMachineFolder || launch.media[kMachineFolder].empty()) {
         error = "No machine folder to start";

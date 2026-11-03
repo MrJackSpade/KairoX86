@@ -86,8 +86,8 @@ class MainActivity : MachineActivity<X86Entry>() {
     /** The running machine's session, written back to its folder when it ends. */
     @Volatile private var session: X86Library.Session? = null
 
-    /** The player's 86Box ROM set (roms/ in it), which 86Box's rom path names. */
-    private val firmwareFolder by lazy { File(filesDir, "firmware") }
+    /** The player's 86Box ROM set itself (its machines/, video/... folders), which 86Box's rom path names. */
+    private val firmwareFolder by lazy { File(filesDir, "roms") }
 
     override fun startGame(entry: X86Entry, game: CatalogGame, cancelled: AtomicBoolean, progress: (String) -> Unit) {
         val tree = checkNotNull(tree) { getString(FrontendR.string.kairo_library_choose_in_manage) }

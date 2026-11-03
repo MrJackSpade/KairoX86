@@ -18,7 +18,8 @@ class X86Library;
 struct Config {
     // The machine folder: 86box.cfg, the disks it names, and nvr/, which 86Box keeps up to date.
     std::string machine_folder;
-    // The firmware, in the 86Box ROM set's layout (roms/machines/..., roms/video/...).
+    // The firmware: the 86Box ROM set itself (its machines/, video/... folders), which 86Box
+    // reads for each of its roms/ paths.
     std::string rom_folder;
 };
 

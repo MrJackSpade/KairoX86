@@ -11,6 +11,10 @@ project(kairox86_core C CXX)
 get_filename_component(KAIROX86_ROOT "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
 set(KAIROX86_THIRD_PARTY "${KAIROX86_ROOT}/third_party")
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+# 86Box was written for x86, where char is signed; ARM's is unsigned. And the core runs in real time
+# only optimized, so it is optimized in every build type, Debug included (Gradle's debug builds would
+# otherwise compile it at -O0).
+add_compile_options(-fsigned-char -O3)
 
 include("${KAIROX86_ROOT}/shared/cmake/KairoLibraries.cmake")
 include("${KAIROX86_ROOT}/shared/cmake/KairoChd.cmake")
