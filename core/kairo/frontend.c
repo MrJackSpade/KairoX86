@@ -46,6 +46,7 @@
 #endif
 
 #include "kairo_x86.h"
+#include "hardware.h"
 
 /* ---- Globals the 86Box frontends define ---- */
 
@@ -1327,6 +1328,7 @@ static const struct KairoX86Api api = {
     .mouse_placing   = api_mouse_placing,
     .mouse_moving    = api_mouse_moving,
     .line_inputs     = api_line_inputs,
+    .hardware        = hardware_query,
     .joystick_axis   = api_joystick_axis,
     .joystick_button = api_joystick_button,
     .locks           = api_locks,

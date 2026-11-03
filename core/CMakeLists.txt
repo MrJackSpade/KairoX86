@@ -52,7 +52,8 @@ set(SndFile_DIR "${CMAKE_CURRENT_LIST_DIR}/cmake/packages" CACHE PATH "" FORCE)
 # its own interfaces, host audio or MIDI libraries, or the automation socket.
 set(KAIRO_LIBRARY ON)
 set(KAIRO_LIBCHDR ON)
-set(KAIRO_FRONTEND "${CMAKE_CURRENT_LIST_DIR}/kairo/frontend.c")
+# The frontend, and its view of the hardware 86Box offers for the machine settings (Kairo#143).
+set(KAIRO_FRONTEND "${CMAKE_CURRENT_LIST_DIR}/kairo/frontend.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/hardware.c")
 set(QT OFF CACHE BOOL "" FORCE)
 set(OPENAL OFF CACHE BOOL "" FORCE)
 set(RTMIDI OFF CACHE BOOL "" FORCE)
@@ -87,7 +88,7 @@ endif()
 # The machine (x86_machine.h): loads a fresh copy of kairox86_86box for each machine.
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-add_library(kairox86_core STATIC x86_machine.cpp x86_library.cpp)
+add_library(kairox86_core STATIC x86_machine.cpp x86_library.cpp x86_hardware.cpp)
 target_include_directories(kairox86_core PUBLIC "${CMAKE_CURRENT_LIST_DIR}" "${CMAKE_CURRENT_LIST_DIR}/kairo")
 target_compile_definitions(kairox86_core PRIVATE
     KAIROX86_86BOX_FILE="$<TARGET_FILE_NAME:86Box>")
@@ -104,6 +105,10 @@ if(WIN32)
     # The process's memory in use after each machine (KairoX86#186).
     target_link_libraries(boot_test PRIVATE psapi)
 endif()
+
+# The hardware queries the machine settings make (Kairo#143), printed: host and device.
+add_executable(hardware_query EXCLUDE_FROM_ALL test/hardware_query.cpp)
+target_link_libraries(hardware_query PRIVATE kairox86_core)
 
 # The measurement tool (KairoX86#56), likewise: host and device.
 add_executable(game_profile EXCLUDE_FROM_ALL test/game_profile.cpp)

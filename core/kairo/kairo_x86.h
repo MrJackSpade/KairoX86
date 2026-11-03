@@ -106,6 +106,9 @@ struct KairoX86Api {
 	/* How many times DOS has been asked for keyboard input while the console line it last wrote read
 	 * as a DOS prompt (X:\...>): a command shell asking for its command (KairoX86#46). */
 	uint64_t (*line_inputs)(void);
+	/* The hardware 86Box offers, with no machine running (Kairo#143, core/kairo/hardware.h): the answer
+	 * to query as JSON, valid until the next call; NULL for a query it does not know. */
+	const char *(*hardware)(const char *rom_folder, const char *query);
 	/* One of the joystick model's inputs (KAIRO_X86_JOYSTICK_*): an axis, -KAIRO_X86_AXIS_MAX to
 	 * KAIRO_X86_AXIS_MAX, or a button. */
 	void (*joystick_axis)(int axis, int value);
