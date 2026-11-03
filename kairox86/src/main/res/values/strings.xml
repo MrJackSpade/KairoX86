@@ -32,6 +32,10 @@
     <string name="media_floppy_a">Floppy A</string>
     <string name="media_floppy_b">Floppy B</string>
     <string name="media_cd">CD-ROM</string>
+    <!-- A ZIP, MO or other removable disk a machine needs, as "The %1$s this game needs is not in the library" names it. -->
+    <string name="media_removable_disk">Removable disk</string>
+    <!-- A tape a machine needs, as "The %1$s this game needs is not in the library" names it. -->
+    <string name="media_tape">Tape</string>
     <!-- %1$s is the file's name. -->
     <string name="machine_not_disk">%1$s is no floppy or CD image</string>
     <string name="machine_disk_no_machine">A disk goes in a running machine</string>

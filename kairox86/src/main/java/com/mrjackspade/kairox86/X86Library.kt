@@ -10,9 +10,12 @@ import com.mrjackspade.kairo.frontend.DocumentTreeWalker
 import com.mrjackspade.kairo.frontend.GameKey
 import com.mrjackspade.kairo.frontend.LibraryItem
 import com.mrjackspade.kairo.frontend.LibraryScanPipeline
+import com.mrjackspade.kairo.frontend.MissingDisk
+import com.mrjackspade.kairo.frontend.R as FrontendR
 import com.mrjackspade.kairo.frontend.ScanDepth
 import com.mrjackspade.kairo.frontend.UiText
 import com.mrjackspade.kairo.frontend.VersionedLibraryCache
+import com.mrjackspade.kairo.frontend.missingDisk
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.File
@@ -105,6 +108,9 @@ class X86Library(private val context: Context) {
         try {
             session.fill(folder, dir, "", cancelled)
             check(File(dir, CONFIG).isFile) { context.getString(R.string.machine_config_missing, entry.displayName) }
+            // A disk its 86box.cfg names that is not in its folder (KairoX86#63): 86Box would start with the drive empty.
+            missingMedium(IniText(File(dir, CONFIG).readText())) { path -> File(dir, path).isFile }
+                ?.let { throw MissingDisk(missingDisk(it)) }
         } catch (failure: Exception) {
             session.close()
             throw failure
@@ -302,6 +308,39 @@ class X86Library(private val context: Context) {
             in FLOPPY_IMAGES -> DiskKind.FLOPPY
             in CD_IMAGES -> DiskKind.CD
             else -> null
+        }
+
+        /** A medium 86box.cfg names: the keys that name it in its section, and what the player calls it. */
+        private class Medium(val section: String, val key: Regex, val label: UiText)
+
+        private val MEDIA = listOf(
+            Medium("Floppy and CD-ROM drives", Regex("fdd_\\d+_fn"), UiText.res(FrontendR.string.kairo_floppy_disk)),
+            Medium("Floppy and CD-ROM drives", Regex("cdrom_\\d+_image_path"), UiText.res(FrontendR.string.kairo_companion_cd)),
+            Medium("Hard disks", Regex("hdd_\\d+_fn"), UiText.res(FrontendR.string.kairo_hard_disk)),
+            Medium("Other removable devices", Regex("(zip|mo|rdisk)_\\d+_image_path"), UiText.res(R.string.media_removable_disk)),
+            Medium("Other removable devices", Regex("tape_\\d+_image_path"), UiText.res(R.string.media_tape)),
+            Medium("Storage controllers", Regex("cartridge_\\d+_fn"), UiText.res(FrontendR.string.kairo_cartridge)))
+
+        /**
+         * The first medium [config] names that its machine's folder lacks, by what the player calls it
+         * (KairoX86#63); null when the folder has them all. [inFolder] says whether the folder has a
+         * file at a relative path. The session holds the machine's folder alone, so a medium only
+         * its folder can give: one at a path 86Box reads relative to it (write-protected or not), and
+         * never a host drive (ioctl://), a path above it (../), beside 86Box (<exe_path>/) or absolute.
+         */
+        fun missingMedium(config: IniText, inFolder: (String) -> Boolean): UiText? = MEDIA.firstNotNullOfOrNull { medium ->
+            medium.label.takeIf {
+                config.entries(medium.section).any { (key, value) ->
+                    medium.key.matches(key) && value.isNotEmpty() && !folderHas(value.removePrefix("wp://"), inFolder)
+                }
+            }
+        }
+
+        private fun folderHas(value: String, inFolder: (String) -> Boolean): Boolean {
+            val path = value.replace('\\', '/')
+            val outside = path.startsWith("ioctl://") || path.startsWith("<exe_path>/") || path.startsWith("/") ||
+                Regex("^[A-Za-z]:").containsMatchIn(path) || path.split('/').contains("..")
+            return !outside && inFolder(path)
         }
 
         /** The folder of the 86box.cfg at [path]. */

@@ -16,6 +16,13 @@ class IniText(text: String) {
         return lines[at].substringAfter('=').trim()
     }
 
+    /** Every key of [section] with its value, in the file's order; none when the section is absent. */
+    fun entries(section: String): List<Pair<String, String>> {
+        val header = sectionStart(section) ?: return emptyList()
+        return (header + 1 until sectionEnd(header)).map { lines[it] }.filter { it.contains('=') }
+            .map { it.substringBefore('=').trim() to it.substringAfter('=').trim() }
+    }
+
     /** Sets [key] in [section] to [value], adding the section or key where absent; null removes the key. */
     operator fun set(section: String, key: String, value: String?) {
         val at = find(section, key)
