@@ -92,7 +92,7 @@ class MainActivity : MachineActivity<X86Entry>() {
     override val mediaSlots = listOf(
         MediaSlot<X86Entry>(UiText.res(R.string.media_floppy_a)) { it.disk && X86Library.diskKind(it.path) == DiskKind.FLOPPY },
         MediaSlot(UiText.res(R.string.media_floppy_b)) { it.disk && X86Library.diskKind(it.path) == DiskKind.FLOPPY },
-        MediaSlot(UiText.res(R.string.media_cd)) { it.disk && X86Library.diskKind(it.path) == DiskKind.CD })
+        MediaSlot(UiText.res(FrontendR.string.kairo_cd_rom)) { it.disk && X86Library.diskKind(it.path) == DiskKind.CD })
 
     /** A machine's own disks are the images of its folder, and what its drives hold. */
     override fun ownDisks(current: X86Entry, takes: (X86Entry) -> Boolean): List<X86Entry> =
@@ -162,7 +162,7 @@ class MainActivity : MachineActivity<X86Entry>() {
         // A disk image opened from another app has no machine to go in.
         check(!entry.disk) { getString(R.string.machine_external) }
         val tree = checkNotNull(tree) { getString(FrontendR.string.kairo_library_choose_in_manage) }
-        progress(getString(R.string.machine_preparing, entry.displayName))
+        progress(getString(FrontendR.string.kairo_launch_preparing, entry.displayName))
         installFreeFirmware(progress)
         val prepared = machines.prepare(entry, tree, cancelled)
         session = prepared

@@ -31,9 +31,6 @@
     <string name="machine_external">Another app can open a disk image, but KairoX86 runs machines: put the machine\'s folder in the games folder</string>
     <!-- EN: KairoX86 does not delete a machine\'s folder: remove it in a file manager -->
     <string name="machine_delete">KairoX86 does not delete a machine\'s folder: remove it in a file manager</string>
-    <!-- %1$s is the machine's name. -->
-    <!-- EN: Preparing %1$s… -->
-    <string name="machine_preparing">Preparing %1$s…</string>
     <!-- EN: Another machine is still running -->
     <string name="machine_still_running">Another machine is still running</string>
     <!-- EN: The machine\'s working folder could not be prepared -->
@@ -62,8 +59,6 @@
     <string name="media_floppy_a">Floppy A</string>
     <!-- EN: Floppy B -->
     <string name="media_floppy_b">Floppy B</string>
-    <!-- EN: CD-ROM -->
-    <string name="media_cd">CD-ROM</string>
     <!-- A ZIP, MO or other removable disk a machine needs, as "The %1$s this game needs is not in the library" names it. -->
     <!-- EN: Removable disk -->
     <string name="media_removable_disk">Removable disk</string>
@@ -76,12 +71,8 @@
     <!-- EN: A disk goes in a running machine -->
     <string name="machine_disk_no_machine">A disk goes in a running machine</string>
     <!-- The machine settings (86box.cfg), each with 86Box's own choices (Kairo#143). -->
-    <!-- EN: Machine -->
-    <string name="setting_machine">Machine</string>
     <!-- EN: Processor -->
     <string name="setting_processor">Processor</string>
-    <!-- EN: Memory -->
-    <string name="setting_memory">Memory</string>
     <!-- EN: Video card -->
     <string name="setting_video">Video card</string>
     <!-- EN: Sound card -->
@@ -94,10 +85,6 @@
     <string name="setting_scsi">SCSI controller</string>
     <!-- EN: Floppy controller -->
     <string name="setting_fdc">Floppy controller</string>
-    <!-- EN: Mouse -->
-    <string name="setting_mouse">Mouse</string>
-    <!-- EN: Joystick -->
-    <string name="setting_joystick">Joystick</string>
     <!-- A card setting's choice: the one built into the machine's board. -->
     <!-- EN: Onboard -->
     <string name="setting_card_onboard">Onboard</string>

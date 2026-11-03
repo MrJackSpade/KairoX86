@@ -34,7 +34,7 @@ object X86Settings {
     private val firmwareMissing = UiText.res(R.string.setting_firmware_missing)
 
     /** The PC: every machine 86Box has, by type; one whose firmware the ROM set lacks shows but cannot be picked. */
-    val machine = single(MachineOption(MACHINE_ID, UiText.res(R.string.setting_machine), {
+    val machine = single(MachineOption(MACHINE_ID, UiText.res(FrontendR.string.kairo_option_machine), {
         X86Hardware.machines().map { machine ->
             ChoiceOption(machine.id, UiText.fixed(machine.name), null, firmwareMissing.takeIf { !machine.available }, machine.type)
         }
@@ -67,7 +67,7 @@ object X86Settings {
         })
 
     /** The memory the machine takes, from its least to its most by its step, in KB as 86Box keeps it. */
-    val memory = single(MachineOption("memory", UiText.res(R.string.setting_memory), { emptyList() }, "",
+    val memory = single(MachineOption("memory", UiText.res(FrontendR.string.kairo_option_memory), { emptyList() }, "",
         dependsOn = listOf(MACHINE_ID),
         choicesWith = { values ->
             val takes = takes(values)
@@ -106,8 +106,8 @@ object X86Settings {
     val hdc = card("hdc", R.string.setting_hdc, X86Hardware.HDC, "Storage controllers", "hdc", onboardFirst = true)
     val scsi = card("scsi", R.string.setting_scsi, X86Hardware.SCSI, "Storage controllers", "scsicard_1", onboardFirst = false)
     val fdc = card("fdc", R.string.setting_fdc, X86Hardware.FDC, "Storage controllers", "fdc", onboardFirst = true)
-    val mouse = card("mouse", R.string.setting_mouse, X86Hardware.MOUSE, "Input devices", "mouse_type", onboardFirst = false)
-    val joystick = card("joystick", R.string.setting_joystick, X86Hardware.JOYSTICK, "Input devices", "joystick_type", onboardFirst = false)
+    val mouse = card("mouse", FrontendR.string.kairo_mouse, X86Hardware.MOUSE, "Input devices", "mouse_type", onboardFirst = false)
+    val joystick = card("joystick", FrontendR.string.kairo_joystick, X86Hardware.JOYSTICK, "Input devices", "joystick_type", onboardFirst = false)
 
     /** The clock the guest reads: the host's local time (86Box's default), UTC, or its own from its CMOS. */
     val clock = single(MachineOption("clock", UiText.res(R.string.setting_clock), listOf(
