@@ -1,0 +1,12 @@
+{
+ "schemaVersion": 1,
+ "files": {
+  "bios/machines/486ap4/0205.002": "C:\\Users\\Service Account\\Kairo\\KairoX86\\roms\\uitest\\bios\\machines\\486ap4\\0205.002",
+  "bios/video/s3/86c775_2.bin": "C:\\Users\\Service Account\\Kairo\\KairoX86\\roms\\uitest\\bios\\video\\s3\\86c775_2.bin",
+  "games/xt/86box.cfg": "C:\\Users\\Service Account\\Kairo\\KairoX86\\roms\\uitest\\xt\\86box.cfg",
+  "games/xt/fd13-720k.img": "C:\\Users\\Service Account\\Kairo\\KairoX86\\roms\\uitest\\xt\\fd13-720k.img",
+  "games/dos486/86box.cfg": "C:\\Users\\Service Account\\Kairo\\KairoX86\\roms\\uitest\\dos486\\86box.cfg",
+  "games/dos486/freedos.img": "C:\\Users\\Service Account\\Kairo\\KairoX86\\roms\\uitest\\dos486\\freedos.img",
+  "games/dos486/nvr/486ap4.nvr": "C:\\Users\\Service Account\\Kairo\\KairoX86\\roms\\uitest\\dos486\\nvr\\486ap4.nvr"
+ }
+}
