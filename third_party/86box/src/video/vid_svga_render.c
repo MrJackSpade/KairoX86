@@ -775,6 +775,7 @@ static atomic_uint  render_tail; /* next job drawn, drawing thread */
 static thread_t    *render_thread;
 static event_t     *render_wake;
 static event_t     *render_idle;
+static atomic_int   render_quit; /* KairoX86: svga_render_close ends the drawing thread */
 
 static void
 render_8bpp_dwords(const render_job_t *job)
@@ -800,6 +801,8 @@ render_thread_func(UNUSED(void *priv))
     for (;;) {
         thread_wait_event(render_wake, -1);
         thread_reset_event(render_wake);
+        if (atomic_load_explicit(&render_quit, memory_order_acquire))
+            return; /* KairoX86: svga_render_close, after the queue was drained */
         for (;;) {
             const unsigned tail = atomic_load_explicit(&render_tail, memory_order_relaxed);
 
@@ -824,6 +827,24 @@ svga_render_drain(void)
         thread_set_event(render_wake);
         thread_wait_event(render_idle, -1);
     }
+}
+
+/* KairoX86: ends the drawing thread, its queue drawn, so nothing of it outlives the machine. */
+void
+svga_render_close(void)
+{
+    if (render_thread == NULL)
+        return;
+    svga_render_drain();
+    atomic_store_explicit(&render_quit, 1, memory_order_release);
+    thread_set_event(render_wake);
+    thread_wait(render_thread);
+    thread_destroy_event(render_wake);
+    thread_destroy_event(render_idle);
+    render_thread = NULL;
+    render_wake   = NULL;
+    render_idle   = NULL;
+    atomic_store_explicit(&render_quit, 0, memory_order_relaxed);
 }
 
 static void

@@ -65,11 +65,21 @@ set(DYNAREC ON CACHE BOOL "" FORCE)
 set(RELEASE ON CACHE BOOL "" FORCE)
 set(LIBRASHADER OFF CACHE BOOL "" FORCE)
 set(K9X_NULL_AUDIO ON CACHE BOOL "" FORCE)
+# 86Box's portable C++ threads on every platform (its Windows threads come with its Qt front end).
+set(CPPTHREADS ON CACHE BOOL "" FORCE)
+# 86Box includes zlib.h without asking CMake for zlib (a system's is assumed): its sources take the
+# shared frontend's pinned zlib, on Android and on the host alike.
+get_target_property(KAIROX86_ZLIB_INCLUDE kairo_zlib INTERFACE_INCLUDE_DIRECTORIES)
+include_directories(${KAIROX86_ZLIB_INCLUDE})
 add_subdirectory("${KAIROX86_THIRD_PARTY}/86box" 86box)
 
 set_target_properties(86Box PROPERTIES OUTPUT_NAME kairox86_86box C_VISIBILITY_PRESET hidden CXX_VISIBILITY_PRESET hidden)
 target_include_directories(plat PRIVATE "${CMAKE_CURRENT_LIST_DIR}/kairo")
-target_link_libraries(86Box chdr-static)
+target_link_libraries(86Box chdr-static kairo_zlib)
+if(WIN32)
+    # The host loads a copy of the DLL from the program's own folder (x86_library.cpp).
+    set_target_properties(86Box PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+endif()
 
 # The machine (x86_machine.h): loads a fresh copy of kairox86_86box for each machine.
 set(CMAKE_CXX_STANDARD 20)
@@ -83,9 +93,7 @@ if(ANDROID)
     target_link_libraries(kairox86_core PUBLIC dl log)
 endif()
 
-# Host tools, also built for the device to run over adb: the boot test.
-option(KAIROX86_TOOLS "Build the boot test" OFF)
-if(KAIROX86_TOOLS)
-    add_executable(boot_test test/boot_test.cpp)
-    target_link_libraries(boot_test PRIVATE kairox86_core kairo_png)
-endif()
+# The boot test (shared/tools/test-core.ps1 on the host; built for the device too, to run over adb).
+# The app's build names its own targets, so it never builds this one.
+add_executable(boot_test EXCLUDE_FROM_ALL test/boot_test.cpp)
+target_link_libraries(boot_test PRIVATE kairox86_core kairo_png)

@@ -2,7 +2,9 @@
 // at the given guest seconds and at the end, and reporting the frames, the picture sizes, the sound
 // and how fast the host ran it.
 //
-//   boot_test <machine folder> <rom folder> <seconds> <out folder> [snapshot seconds, comma separated]
+//   boot_test <rom folder> <out folder> <machine folder> <seconds> [snapshot seconds, comma separated]
+//
+// in the shared host test's order (shared/tools/test-core.ps1: firmware, work folder, media, seconds).
 //
 // The machine folder holds the machine's 86box.cfg and the disks it names (86Box's own layout); the
 // rom folder is the 86Box ROM set itself (its machines/, video/... folders). Runs one machine, then ends.
@@ -19,7 +21,38 @@
 
 #include "x86_machine.h"
 
+#if defined(_WIN32)
+#include <windows.h>
+#include <tlhelp32.h>
+#else
+#include <dirent.h>
+#endif
+
 namespace {
+
+// The process's threads, to show a closed machine left none of its own behind.
+int thread_count() {
+#if defined(_WIN32)
+    const DWORD process = GetCurrentProcessId();
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    if (snapshot == INVALID_HANDLE_VALUE) return -1;
+    THREADENTRY32 entry{};
+    entry.dwSize = sizeof(entry);
+    int count = 0;
+    for (BOOL more = Thread32First(snapshot, &entry); more; more = Thread32Next(snapshot, &entry))
+        if (entry.th32OwnerProcessID == process) ++count;
+    CloseHandle(snapshot);
+    return count;
+#else
+    DIR *tasks = opendir("/proc/self/task");
+    if (!tasks) return -1;
+    int count = 0;
+    while (dirent *entry = readdir(tasks))
+        if (entry->d_name[0] != '.') ++count;
+    closedir(tasks);
+    return count;
+#endif
+}
 
 bool write_png(const std::string &path, const uint8_t *bgra, uint32_t width, uint32_t height) {
     FILE *file = std::fopen(path.c_str(), "wb");
@@ -54,11 +87,11 @@ bool write_png(const std::string &path, const uint8_t *bgra, uint32_t width, uin
 
 int main(int argc, char **argv) {
     if (argc < 5) {
-        std::fprintf(stderr, "usage: boot_test <machine folder> <rom folder> <seconds> <out folder> [snapshot seconds]\n");
+        std::fprintf(stderr, "usage: boot_test <rom folder> <out folder> <machine folder> <seconds> [snapshot seconds]\n");
         return 2;
     }
-    const std::string out = argv[4];
-    const double seconds = std::atof(argv[3]);
+    const std::string out = argv[2];
+    const double seconds = std::atof(argv[4]);
     std::set<int> snapshots;
     if (argc > 5) {
         std::stringstream list(argv[5]);
@@ -66,9 +99,10 @@ int main(int argc, char **argv) {
     }
 
     kairox86::Config config;
-    config.machine_folder = argv[1];
-    config.rom_folder = argv[2];
+    config.machine_folder = argv[3];
+    config.rom_folder = argv[1];
     std::string error;
+    const int threads_before = thread_count();
     const auto started = std::chrono::steady_clock::now();
     auto machine = kairox86::X86Machine::create(config, error);
     if (!machine) {
@@ -122,5 +156,13 @@ int main(int argc, char **argv) {
     std::printf("%lu frames, %.2f guest s in %.2f host s (%.0f%%), %llu audio frames, peak %d\n", frames, guest, wall,
                 100.0 * guest / wall, static_cast<unsigned long long>(audio_frames), peak);
     machine->close();
+    const int threads_after = thread_count();
+    std::printf("threads: %d before the machine, %d after it closed\n", threads_before, threads_after);
+    std::fflush(stdout);
+    if (threads_after != threads_before) {
+        std::fprintf(stderr, "the closed machine left %d thread(s) running\n", threads_after - threads_before);
+        return 1;
+    }
+    machine.reset();
     return 0;
 }

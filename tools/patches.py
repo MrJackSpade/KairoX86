@@ -1108,6 +1108,52 @@ KAIROX86_LIBRARY = [
      + '        }' + _NL
      + '        if (pool == MAP_FAILED)' + _NL
      + '            fatal("plat_mmap: no room for the recompiler within 4 GiB of the program\\n");' + _NL),
+    # Kairo9X's 8bpp drawing thread (PERF-FINDINGS #42) ran until the process ended. A host that runs
+    # machine after machine in one process, unloading each one's copy of the core, must find no thread
+    # of it left: svga_render_close (from video_close) drains the queue and joins the thread.
+    ('86box/src/video/vid_svga_render.c',
+     'static event_t     *render_idle;' + _NL,
+     'static event_t     *render_idle;' + _NL
+     + 'static atomic_int   render_quit; /* KairoX86: svga_render_close ends the drawing thread */' + _NL),
+    ('86box/src/video/vid_svga_render.c',
+     '        thread_wait_event(render_wake, -1);' + _NL + '        thread_reset_event(render_wake);' + _NL,
+     '        thread_wait_event(render_wake, -1);' + _NL + '        thread_reset_event(render_wake);' + _NL
+     + '        if (atomic_load_explicit(&render_quit, memory_order_acquire))' + _NL
+     + '            return; /* KairoX86: svga_render_close, after the queue was drained */' + _NL),
+    ('86box/src/video/vid_svga_render.c',
+     'static void' + _NL + 'render_queue(const render_job_t *job)' + _NL,
+     '/* KairoX86: ends the drawing thread, its queue drawn, so nothing of it outlives the machine. */' + _NL
+     + 'void' + _NL + 'svga_render_close(void)' + _NL + '{' + _NL
+     + '    if (render_thread == NULL)' + _NL + '        return;' + _NL
+     + '    svga_render_drain();' + _NL
+     + '    atomic_store_explicit(&render_quit, 1, memory_order_release);' + _NL
+     + '    thread_set_event(render_wake);' + _NL
+     + '    thread_wait(render_thread);' + _NL
+     + '    thread_destroy_event(render_wake);' + _NL
+     + '    thread_destroy_event(render_idle);' + _NL
+     + '    render_thread = NULL;' + _NL + '    render_wake   = NULL;' + _NL + '    render_idle   = NULL;' + _NL
+     + '    atomic_store_explicit(&render_quit, 0, memory_order_relaxed);' + _NL
+     + '}' + _NL + _NL
+     + 'static void' + _NL + 'render_queue(const render_job_t *job)' + _NL),
+    ('86box/src/include/86box/vid_svga_render.h',
+     'extern void svga_render_drain(void);' + _NL,
+     'extern void svga_render_drain(void);' + _NL
+     + 'extern void svga_render_close(void); /* KairoX86: ends the drawing thread */' + _NL),
+    ('86box/src/video/video.c',
+     'video_close(void)' + _NL + '{' + _NL + '    video_monitor_close(0);' + _NL,
+     'video_close(void)' + _NL + '{' + _NL
+     + '    svga_render_close(); /* KairoX86: the 8bpp drawing thread ends with the machine */' + _NL
+     + '    video_monitor_close(0);' + _NL),
+    ('86box/src/video/video.c',
+     '#include <86box/vid_svga.h>' + _NL,
+     '#include <86box/vid_svga.h>' + _NL + '#include <86box/vid_svga_render.h> /* KairoX86 */' + _NL),
+    # The floppy and hard disk drive sound threads start with the machine (pc_init_modules) but
+    # nothing ended them: pc_close ends them too, so a closed machine leaves no thread behind.
+    ('86box/src/86box.c',
+     '    sound_cd_thread_end();' + _NL,
+     '    sound_cd_thread_end();' + _NL
+     + '    /* KairoX86: the drive sound threads end with the machine too. */' + _NL
+     + '    fdd_audio_close();' + _NL + '    sound_hdd_thread_end();' + _NL + '    hdd_audio_close();' + _NL),
     # timespec_get is in Android's C library from API 29 only, and the app runs from Android 8 (26):
     # clock_gettime gives the same clock (TIME_UTC is CLOCK_REALTIME) on every version.
     ('86box/src/video/vid_powervr_pcx.c',

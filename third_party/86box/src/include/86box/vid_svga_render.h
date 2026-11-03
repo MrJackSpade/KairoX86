@@ -38,6 +38,7 @@ extern void svga_recalc_remap_func(svga_t *svga);
 extern void svga_render_null(svga_t *svga);
 /* Wait until every queued line is drawn (vid_svga_render.c) */
 extern void svga_render_drain(void);
+extern void svga_render_close(void); /* KairoX86: ends the drawing thread */
 extern void svga_render_blank(svga_t *svga);
 extern void svga_render_overscan_left(svga_t *svga);
 extern void svga_render_overscan_right(svga_t *svga);

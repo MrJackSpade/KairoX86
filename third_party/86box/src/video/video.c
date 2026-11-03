@@ -46,6 +46,7 @@
 #include <86box/thread.h>
 #include <86box/video.h>
 #include <86box/vid_svga.h>
+#include <86box/vid_svga_render.h> /* KairoX86 */
 #include <86box/automation.h>
 
 #include <minitrace/minitrace.h>
@@ -948,6 +949,7 @@ video_init(void)
 void
 video_close(void)
 {
+    svga_render_close(); /* KairoX86: the 8bpp drawing thread ends with the machine */
     video_monitor_close(0);
 
     free(video_16to32);

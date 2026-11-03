@@ -2180,6 +2180,10 @@ pc_close(UNUSED(thread_t *ptr))
     network_close();
 
     sound_cd_thread_end();
+    /* KairoX86: the drive sound threads end with the machine too. */
+    fdd_audio_close();
+    sound_hdd_thread_end();
+    hdd_audio_close();
 
     cdrom_close();
 

@@ -4,7 +4,7 @@
 
 - **Source:** https://github.com/86Box/86Box, commit `fc675106a7f7eae57bf89b212f634cb4a6758015` (2026-10-29, "Merge pull request #8596 from MaxwellS04/Table").
 - **Copied to:** `third_party/86box/`, as `git archive` of that commit with LF line endings (`-c core.autocrlf=false -c core.eol=lf`). The archive's SHA-256 is `8c3797ba7445f68f41df742f87407cba846bf83f598dbd144567ab6bd9efe7c9`. Every copied file's Git blob matched the commit's tree (1,782 files) before the local changes.
-- **Left out:** `src/qt/` (the Qt front end), `src/mac/` (macOS), `tests/`, `.ci/`, `.github/`, `debian/`, `wl_protocols/`. The headless Android build uses none of them.
+- **Left out:** `src/qt/` (the Qt front end) except the three Windows platform files the headless build takes from it (`win_netsocket.c`, `win_dynld.c`, `win_cdrom_ioctl.c`, added back from the same commit, for the host build), `src/mac/` (macOS), `tests/`, `.ci/`, `.github/`, `debian/`, `wl_protocols/`. The headless Android build uses none of them.
 - **Imported:** 2026-11-02.
 
 ### Local changes
