@@ -89,7 +89,8 @@ endif()
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_library(kairox86_core STATIC x86_machine.cpp x86_library.cpp x86_hardware.cpp)
-target_include_directories(kairox86_core PUBLIC "${CMAKE_CURRENT_LIST_DIR}" "${CMAKE_CURRENT_LIST_DIR}/kairo")
+target_include_directories(kairox86_core PUBLIC "${CMAKE_CURRENT_LIST_DIR}" "${CMAKE_CURRENT_LIST_DIR}/kairo"
+    "${CMAKE_CURRENT_LIST_DIR}/../shared/frontend/src/main/cpp")
 target_compile_definitions(kairox86_core PRIVATE
     KAIROX86_86BOX_FILE="$<TARGET_FILE_NAME:86Box>")
 add_dependencies(kairox86_core 86Box)
