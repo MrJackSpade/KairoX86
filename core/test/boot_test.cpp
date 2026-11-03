@@ -83,31 +83,30 @@ bool write_png(const std::string &path, const uint8_t *bgra, uint32_t width, uin
     return std::fclose(file) == 0;
 }
 
-} // namespace
+// A key pressed on the script: at guest frame [frame], the key with scan code [code] goes down, and up
+// a few frames later.
+struct Press {
+    unsigned long frame;
+    int code;
+};
 
-int main(int argc, char **argv) {
-    if (argc < 5) {
-        std::fprintf(stderr, "usage: boot_test <rom folder> <out folder> <machine folder> <seconds> [snapshot seconds]\n");
-        return 2;
-    }
-    const std::string out = argv[2];
-    const double seconds = std::atof(argv[4]);
-    std::set<int> snapshots;
-    if (argc > 5) {
-        std::stringstream list(argv[5]);
-        for (std::string item; std::getline(list, item, ',');) snapshots.insert(std::atoi(item.c_str()));
-    }
+constexpr unsigned long kHeldFrames = 4;
 
+// One machine run: boots [folder], runs it [seconds] of guest time with [presses], writes its
+// pictures into [out] named after run [index], closes it and checks it left no thread behind.
+bool run_machine(int index, const std::string &rom_folder, const std::string &folder, const std::string &out,
+                 double seconds, const std::set<int> &snapshots, const std::vector<Press> &presses) {
+    std::printf("run %d: %s\n", index, folder.c_str());
     kairox86::Config config;
-    config.machine_folder = argv[3];
-    config.rom_folder = argv[1];
+    config.machine_folder = folder;
+    config.rom_folder = rom_folder;
     std::string error;
     const int threads_before = thread_count();
     const auto started = std::chrono::steady_clock::now();
     auto machine = kairox86::X86Machine::create(config, error);
     if (!machine) {
-        std::fprintf(stderr, "start failed: %s\n", error.c_str());
-        return 1;
+        std::fprintf(stderr, "run %d: start failed: %s\n", index, error.c_str());
+        return false;
     }
 
     double guest = 0;
@@ -118,10 +117,16 @@ int main(int argc, char **argv) {
     std::vector<int16_t> audio(48000 * 2);
     uint32_t width = 0, height = 0;
     const uint8_t *pixels = nullptr;
+    const std::string prefix = out + "/run" + std::to_string(index) + "-";
     while (guest < seconds) {
+        for (const Press &press : presses) {
+            if (press.frame == frames) machine->key(press.code, true);
+            if (press.frame + kHeldFrames == frames) machine->key(press.code, false);
+        }
         if (!machine->run_frame(error)) {
-            std::fprintf(stderr, "stopped at %.3f s: %s\n", guest, error.c_str());
-            return 1;
+            std::fprintf(stderr, "run %d: stopped at %.3f s: %s\n", index, guest, error.c_str());
+            if (pixels) write_png(prefix + "crash.png", pixels, width, height);
+            return false;
         }
         guest += machine->frame_seconds();
         ++frames;
@@ -132,37 +137,76 @@ int main(int argc, char **argv) {
         pixels = machine->frame(width, height);
         while (next_second <= int(guest)) {
             if (snapshots.count(next_second) && pixels) {
-                const std::string path = out + "/frame-" + std::to_string(next_second) + "s.png";
+                const std::string path = prefix + std::to_string(next_second) + "s.png";
                 if (!write_png(path, pixels, width, height)) {
                     std::fprintf(stderr, "could not write %s\n", path.c_str());
-                    return 1;
+                    return false;
                 }
-                std::printf("%3d s: %ux%u -> %s\n", next_second, width, height, path.c_str());
+                std::printf("  %3d s: %ux%u -> %s\n", next_second, width, height, path.c_str());
             }
             ++next_second;
         }
     }
     const double wall = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
     if (pixels) {
-        const std::string path = out + "/frame-last.png";
+        const std::string path = prefix + "last.png";
         if (!write_png(path, pixels, width, height)) {
             std::fprintf(stderr, "could not write %s\n", path.c_str());
-            return 1;
+            return false;
         }
-        std::printf("last: %ux%u -> %s\n", width, height, path.c_str());
+        std::printf("  last: %ux%u -> %s\n", width, height, path.c_str());
     } else {
-        std::printf("no picture\n");
+        std::printf("  no picture\n");
     }
-    std::printf("%lu frames, %.2f guest s in %.2f host s (%.0f%%), %llu audio frames, peak %d\n", frames, guest, wall,
+    std::printf("  %lu frames, %.2f guest s in %.2f host s (%.0f%%), %llu audio frames, peak %d\n", frames, guest, wall,
                 100.0 * guest / wall, static_cast<unsigned long long>(audio_frames), peak);
     machine->close();
     const int threads_after = thread_count();
-    std::printf("threads: %d before the machine, %d after it closed\n", threads_before, threads_after);
+    std::printf("  threads: %d before the machine, %d after it closed\n", threads_before, threads_after);
     std::fflush(stdout);
     if (threads_after != threads_before) {
-        std::fprintf(stderr, "the closed machine left %d thread(s) running\n", threads_after - threads_before);
-        return 1;
+        std::fprintf(stderr, "run %d: the closed machine left %d thread(s) running\n", index, threads_after - threads_before);
+        return false;
     }
-    machine.reset();
+    return true;
+}
+
+std::vector<std::string> split(const std::string &text, char separator) {
+    std::vector<std::string> parts;
+    std::stringstream list(text);
+    for (std::string item; std::getline(list, item, separator);)
+        if (!item.empty()) parts.push_back(item);
+    return parts;
+}
+
+} // namespace
+
+// boot_test <rom folder> <out folder> <machine folders, separated by |> <seconds> [snapshot seconds]
+// [presses, frame:scancode separated by commas, the scan code in decimal or 0x hex]. The machines run in
+// turn in one process, as the app runs one game after another, each from the start.
+int main(int argc, char **argv) {
+    if (argc < 5) {
+        std::fprintf(stderr, "usage: boot_test <rom folder> <out folder> <machine folder>[|<machine folder>...] <seconds> "
+                             "[snapshot seconds] [frame:scancode,...]\n");
+        return 2;
+    }
+    const std::string out = argv[2];
+    const double seconds = std::atof(argv[4]);
+    std::set<int> snapshots;
+    if (argc > 5)
+        for (const std::string &item : split(argv[5], ',')) snapshots.insert(std::atoi(item.c_str()));
+    std::vector<Press> presses;
+    if (argc > 6)
+        for (const std::string &item : split(argv[6], ',')) {
+            const size_t colon = item.find(':');
+            if (colon == std::string::npos) {
+                std::fprintf(stderr, "a press is frame:scancode, not %s\n", item.c_str());
+                return 2;
+            }
+            presses.push_back({std::stoul(item.substr(0, colon)), int(std::stoul(item.substr(colon + 1), nullptr, 0))});
+        }
+    const std::vector<std::string> folders = split(argv[3], '|');
+    for (size_t i = 0; i < folders.size(); ++i)
+        if (!run_machine(int(i), argv[1], folders[i], out, seconds, snapshots, presses)) return 1;
     return 0;
 }
