@@ -78,6 +78,7 @@ public:
         return machine_->media(slot, path) ? 0 : kFailed;
     }
     std::vector<std::string> media_paths() override { return machine_->media_paths(); }
+    std::vector<bool> media_drives() override { return machine_->media_drives(); }
 
     void release_inputs() override {
         for (int code = 1; code < kKeyCodes; ++code)

@@ -147,6 +147,12 @@ std::vector<std::string> X86Machine::media_paths() const {
     }
     return paths;
 }
+std::vector<bool> X86Machine::media_drives() const {
+    std::vector<bool> drives;
+    for (int slot = 0; slot < KAIRO_X86_MEDIA_SLOTS; ++slot) drives.push_back(impl_->api->media_drive(slot));
+    return drives;
+}
+
 void X86Machine::reset() { impl_->api->reset(); }
 
 void X86Machine::close() {

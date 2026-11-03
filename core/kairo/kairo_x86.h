@@ -136,6 +136,8 @@ struct KairoX86Api {
 	/* What slot holds, from 86Box's own drive: the image's path into path (size bytes), "" when
 	 * empty; false when the machine has no such drive. */
 	bool (*media_path)(int slot, char *path, int size);
+	/* Whether the machine has slot's drive (its 86box.cfg's floppy drive type, its CD-ROM drive). */
+	bool (*media_drive)(int slot);
 
 	/* Resets the machine: a hard reset, as switching it off and on does. */
 	void (*reset)(void);

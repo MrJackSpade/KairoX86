@@ -87,6 +87,8 @@ public:
     bool media(int slot, const std::string &path);
     // What each slot holds, "" when empty or when the machine has no such drive.
     std::vector<std::string> media_paths() const;
+    // Which slots the machine has a drive for.
+    std::vector<bool> media_drives() const;
 
     // A hard reset, as switching the PC off and on does.
     void reset();

@@ -172,8 +172,10 @@ class MainActivity : MachineActivity<X86Entry>() {
             settings)) { getString(R.string.machine_still_running) }
         awaitRunning()
         followKeyboard()
-        // What the machine's drives hold, from its 86box.cfg, as the Disks page shows it.
-        mediaStarted(bridge.mediaPaths().orEmpty().map { path -> path.takeIf { it.isNotEmpty() }?.let(prepared::diskAt) })
+        // What the machine's drives hold, from its 86box.cfg, as the Disks page shows it, with only
+        // the drives it has (KairoX86#197).
+        val drives = checkNotNull(bridge.mediaDrives()) { "The machine stopped before its drives were read" }
+        mediaStarted(bridge.mediaPaths().orEmpty().map { path -> path.takeIf { it.isNotEmpty() }?.let(prepared::diskAt) }, drives)
     }
 
     /**

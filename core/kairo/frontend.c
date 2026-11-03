@@ -1158,6 +1158,12 @@ api_media(int slot, const char *path)
 }
 
 static bool
+api_media_drive(int slot)
+{
+    return (slot >= 0) && (slot < KAIRO_X86_MEDIA_SLOTS) && media_drive(slot);
+}
+
+static bool
 api_media_path(int slot, char *path, int size)
 {
     if ((slot < 0) || (slot >= KAIRO_X86_MEDIA_SLOTS) || (size <= 0) || !media_drive(slot))
@@ -1394,6 +1400,7 @@ static const struct KairoX86Api api = {
     .guest_input     = api_guest_input,
     .media           = api_media,
     .media_path      = api_media_path,
+    .media_drive     = api_media_drive,
     .reset           = api_reset,
     .stop            = api_stop,
 };
