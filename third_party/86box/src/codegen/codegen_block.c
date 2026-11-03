@@ -60,6 +60,17 @@ uint32_t instr_counts[256 * 256];
 #endif
 
 static uint32_t block_free_list;
+/*KairoX86#200: building the free list touched every block and its link slots, though most are
+  never used. Blocks 1..block_fresh_top have not been handed out since the list was last built and
+  hold what adding them left: zeroes, and the link generation block_fresh_gen + their number when
+  block_fresh_gen_set. They are handed out from the top down once the blocks freed since are used
+  up, as the list would have given them. Below block_touched_low no block was ever written.*/
+static uint32_t block_fresh_top;
+#ifdef CODEGEN_BACKEND_HAS_BLOCK_LINK
+static uint32_t block_fresh_gen;
+static int      block_fresh_gen_set;
+#endif
+static uint32_t block_touched_low = BLOCK_SIZE;
 static void     delete_block(codeblock_t *block);
 static void     delete_dirty_block(codeblock_t *block);
 
@@ -269,6 +280,17 @@ codegen_link_reset(void)
     memset(link_in_head, 0, sizeof(link_in_head));
 }
 
+/*codegen_link_reset for the blocks ever used (block 0 and block_touched_low up, KairoX86#200): the
+  others' slots were never written.*/
+static void
+codegen_link_reset_used(void)
+{
+    memset(codegen_link_slots[0], 0, sizeof(codegen_link_slots[0]));
+    if (block_touched_low < BLOCK_SIZE)
+        memset(codegen_link_slots[block_touched_low], 0, (BLOCK_SIZE - block_touched_low) * sizeof(codegen_link_slots[0]));
+    memset(link_in_head, 0, sizeof(link_in_head));
+}
+
 static void
 link_in_remove(codegen_link_slot_t *slot)
 {
@@ -318,6 +340,9 @@ codegen_link_block_changed(codeblock_t *block)
         codegen_link_reset();
         for (int c = 0; c < BLOCK_SIZE; c++)
             codeblock[c].link_gen = ++link_gen_last;
+        /*KairoX86#200: the blocks not handed out keep these numbers, and every block was written.*/
+        block_fresh_gen_set = 0;
+        block_touched_low   = 1;
         link_gen_last++;
     }
     block->link_gen = link_gen_last;
@@ -462,6 +487,28 @@ block_free_list_add(codeblock_t *block)
 #endif
 }
 
+/*The free list of blocks 1 up, after block 0 was added (which leaves the list empty: its 0 is the
+  list's end), as adding each in turn would make it (KairoX86#200): the blocks are handed out as
+  taken, and get the link generation adding them would have given them then.*/
+static void
+block_free_list_build(void)
+{
+#ifdef CODEGEN_BACKEND_HAS_BLOCK_LINK
+    if (codegen_block_link && (link_gen_last > UINT32_MAX - BLOCK_SIZE)) {
+        /*The generations would wrap while adding them: add every block, the wrap with it.*/
+        block_fresh_top = 0;
+        for (uint32_t c = 1; c < BLOCK_SIZE; c++)
+            block_free_list_add(&codeblock[c]);
+        return;
+    }
+    block_fresh_gen_set = codegen_block_link;
+    block_fresh_gen     = link_gen_last;
+    if (codegen_block_link)
+        link_gen_last += BLOCK_SIZE - 1;
+#endif
+    block_fresh_top = BLOCK_SIZE - 1;
+}
+
 static void
 block_dirty_list_add(codeblock_t *block)
 {
@@ -562,6 +609,18 @@ block_free_list_get(void)
 {
     codeblock_t *block = NULL;
 
+    if (!block_free_list && block_fresh_top) {
+        const uint32_t c = block_fresh_top--;
+
+        if (c < block_touched_low)
+            block_touched_low = c;
+        block = &codeblock[c];
+#ifdef CODEGEN_BACKEND_HAS_BLOCK_LINK
+        if (block_fresh_gen_set)
+            block->link_gen = block_fresh_gen + c;
+#endif
+        return block;
+    }
     while (!block_free_list) {
         /*Free list is empty, check the dirty list*/
         if (block_dirty_list_tail) {
@@ -607,12 +666,12 @@ codegen_init(void)
     codegen_backend_init();
     block_versions_init();
     block_free_list = 0;
-    for (uint32_t c = 0; c < BLOCK_SIZE; c++)
-        block_free_list_add(&codeblock[c]);
+    block_free_list_add(&codeblock[0]);
+    block_free_list_build();
     block_dirty_list_head = block_dirty_list_tail = 0;
     dirty_list_size                               = 0;
 #ifdef CODEGEN_BACKEND_HAS_BLOCK_LINK
-    codegen_link_reset();
+    codegen_link_reset_used();
 #endif
 #ifdef DEBUG_EXTRA
     memset(instr_counts, 0, sizeof(instr_counts));
@@ -624,7 +683,10 @@ codegen_reset(void)
 {
     int c;
 
-    for (c = 1; c < BLOCK_SIZE; c++) {
+    /*Only blocks ever handed out were written (KairoX86#200): block 0 and block_touched_low up.*/
+    const uint32_t low = block_touched_low;
+
+    for (c = (low > 1) ? low : 1; c < BLOCK_SIZE; c++) {
         codeblock_t *block = &codeblock[c];
 
         if (block->valid) {
@@ -634,17 +696,20 @@ codegen_reset(void)
         }
     }
 
-    memset(codeblock, 0, BLOCK_SIZE * sizeof(codeblock_t));
+    memset(&codeblock[0], 0, sizeof(codeblock_t));
+    if (low < BLOCK_SIZE)
+        memset(&codeblock[low], 0, (BLOCK_SIZE - low) * sizeof(codeblock_t));
     memset(codeblock_hash, 0, HASH_SIZE * sizeof(uint32_t));
     mem_reset_page_blocks();
 
     block_free_list = 0;
-    for (c = 0; c < BLOCK_SIZE; c++) {
-        codeblock[c].valid = 0;
-        block_free_list_add(&codeblock[c]);
-    }
+    block_free_list_add(&codeblock[0]);
+    /*What adding the blocks ever used did for their versions, in the same order; the others have none.*/
+    for (c = (low > 1) ? low : 1; c < BLOCK_SIZE; c++)
+        block_versions_free_all(c);
+    block_free_list_build();
 #ifdef CODEGEN_BACKEND_HAS_BLOCK_LINK
-    codegen_link_reset();
+    codegen_link_reset_used();
     codegen_block_link = cpu_dyn_block_link;
 #endif
 }

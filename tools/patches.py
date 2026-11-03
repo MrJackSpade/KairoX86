@@ -1535,6 +1535,33 @@ KAIROX86_MOUSE_ENABLE = [
      '                    if (val & INP_ENABLE_DATA_IRQ)\n                        dev->flags |= FLAG_DATA_INT;\n                    else\n                        dev->flags &= ~FLAG_DATA_INT;\n                    kairo_observe_mouse_enable((val & (INP_ENABLE_TIMER_IRQ | INP_ENABLE_DATA_IRQ)) != 0); /* KairoX86#190 */\n'),
 ]
 
+# KairoX86#200: the recompiler's free list is built lazily: blocks are handed out in the order the
+# whole list gave them, each with the link generation adding it gave it, so starting a machine and
+# resetting it touch only the blocks that were used.
+KAIROX86_LAZY_BLOCKS = [
+    ('86box/src/codegen/codegen_block.c',
+     'static uint32_t block_free_list;\n',
+     'static uint32_t block_free_list;\n/*KairoX86#200: building the free list touched every block and its link slots, though most are\n  never used. Blocks 1..block_fresh_top have not been handed out since the list was last built and\n  hold what adding them left: zeroes, and the link generation block_fresh_gen + their number when\n  block_fresh_gen_set. They are handed out from the top down once the blocks freed since are used\n  up, as the list would have given them. Below block_touched_low no block was ever written.*/\nstatic uint32_t block_fresh_top;\n#ifdef CODEGEN_BACKEND_HAS_BLOCK_LINK\nstatic uint32_t block_fresh_gen;\nstatic int      block_fresh_gen_set;\n#endif\nstatic uint32_t block_touched_low = BLOCK_SIZE;\n'),
+    ('86box/src/codegen/codegen_block.c',
+     'void\ncodegen_link_reset(void)\n{\n    memset(codegen_link_slots, 0, sizeof(codegen_link_slots));\n    memset(link_in_head, 0, sizeof(link_in_head));\n}\n',
+     "void\ncodegen_link_reset(void)\n{\n    memset(codegen_link_slots, 0, sizeof(codegen_link_slots));\n    memset(link_in_head, 0, sizeof(link_in_head));\n}\n\n/*codegen_link_reset for the blocks ever used (block 0 and block_touched_low up, KairoX86#200): the\n  others' slots were never written.*/\nstatic void\ncodegen_link_reset_used(void)\n{\n    memset(codegen_link_slots[0], 0, sizeof(codegen_link_slots[0]));\n    if (block_touched_low < BLOCK_SIZE)\n        memset(codegen_link_slots[block_touched_low], 0, (BLOCK_SIZE - block_touched_low) * sizeof(codegen_link_slots[0]));\n    memset(link_in_head, 0, sizeof(link_in_head));\n}\n"),
+    ('86box/src/codegen/codegen_block.c',
+     '        codegen_link_reset();\n        for (int c = 0; c < BLOCK_SIZE; c++)\n            codeblock[c].link_gen = ++link_gen_last;\n',
+     '        codegen_link_reset();\n        for (int c = 0; c < BLOCK_SIZE; c++)\n            codeblock[c].link_gen = ++link_gen_last;\n        /*KairoX86#200: the blocks not handed out keep these numbers, and every block was written.*/\n        block_fresh_gen_set = 0;\n        block_touched_low   = 1;\n'),
+    ('86box/src/codegen/codegen_block.c',
+     'static void\nblock_dirty_list_add(codeblock_t *block)\n',
+     "/*The free list of blocks 1 up, after block 0 was added (which leaves the list empty: its 0 is the\n  list's end), as adding each in turn would make it (KairoX86#200): the blocks are handed out as\n  taken, and get the link generation adding them would have given them then.*/\nstatic void\nblock_free_list_build(void)\n{\n#ifdef CODEGEN_BACKEND_HAS_BLOCK_LINK\n    if (codegen_block_link && (link_gen_last > UINT32_MAX - BLOCK_SIZE)) {\n        /*The generations would wrap while adding them: add every block, the wrap with it.*/\n        block_fresh_top = 0;\n        for (uint32_t c = 1; c < BLOCK_SIZE; c++)\n            block_free_list_add(&codeblock[c]);\n        return;\n    }\n    block_fresh_gen_set = codegen_block_link;\n    block_fresh_gen     = link_gen_last;\n    if (codegen_block_link)\n        link_gen_last += BLOCK_SIZE - 1;\n#endif\n    block_fresh_top = BLOCK_SIZE - 1;\n}\n\nstatic void\nblock_dirty_list_add(codeblock_t *block)\n"),
+    ('86box/src/codegen/codegen_block.c',
+     '    codeblock_t *block = NULL;\n\n    while (!block_free_list) {\n',
+     '    codeblock_t *block = NULL;\n\n    if (!block_free_list && block_fresh_top) {\n        const uint32_t c = block_fresh_top--;\n\n        if (c < block_touched_low)\n            block_touched_low = c;\n        block = &codeblock[c];\n#ifdef CODEGEN_BACKEND_HAS_BLOCK_LINK\n        if (block_fresh_gen_set)\n            block->link_gen = block_fresh_gen + c;\n#endif\n        return block;\n    }\n    while (!block_free_list) {\n'),
+    ('86box/src/codegen/codegen_block.c',
+     '    block_free_list = 0;\n    for (uint32_t c = 0; c < BLOCK_SIZE; c++)\n        block_free_list_add(&codeblock[c]);\n    block_dirty_list_head = block_dirty_list_tail = 0;\n    dirty_list_size                               = 0;\n#ifdef CODEGEN_BACKEND_HAS_BLOCK_LINK\n    codegen_link_reset();\n#endif\n',
+     '    block_free_list = 0;\n    block_free_list_add(&codeblock[0]);\n    block_free_list_build();\n    block_dirty_list_head = block_dirty_list_tail = 0;\n    dirty_list_size                               = 0;\n#ifdef CODEGEN_BACKEND_HAS_BLOCK_LINK\n    codegen_link_reset_used();\n#endif\n'),
+    ('86box/src/codegen/codegen_block.c',
+     '    for (c = 1; c < BLOCK_SIZE; c++) {\n        codeblock_t *block = &codeblock[c];\n\n        if (block->valid) {\n            block->phys   = 0;\n            block->phys_2 = 0;\n            delete_block(block);\n        }\n    }\n\n    memset(codeblock, 0, BLOCK_SIZE * sizeof(codeblock_t));\n    memset(codeblock_hash, 0, HASH_SIZE * sizeof(uint32_t));\n    mem_reset_page_blocks();\n\n    block_free_list = 0;\n    for (c = 0; c < BLOCK_SIZE; c++) {\n        codeblock[c].valid = 0;\n        block_free_list_add(&codeblock[c]);\n    }\n#ifdef CODEGEN_BACKEND_HAS_BLOCK_LINK\n    codegen_link_reset();\n',
+     '    /*Only blocks ever handed out were written (KairoX86#200): block 0 and block_touched_low up.*/\n    const uint32_t low = block_touched_low;\n\n    for (c = (low > 1) ? low : 1; c < BLOCK_SIZE; c++) {\n        codeblock_t *block = &codeblock[c];\n\n        if (block->valid) {\n            block->phys   = 0;\n            block->phys_2 = 0;\n            delete_block(block);\n        }\n    }\n\n    memset(&codeblock[0], 0, sizeof(codeblock_t));\n    if (low < BLOCK_SIZE)\n        memset(&codeblock[low], 0, (BLOCK_SIZE - low) * sizeof(codeblock_t));\n    memset(codeblock_hash, 0, HASH_SIZE * sizeof(uint32_t));\n    mem_reset_page_blocks();\n\n    block_free_list = 0;\n    block_free_list_add(&codeblock[0]);\n    /*What adding the blocks ever used did for their versions, in the same order; the others have none.*/\n    for (c = (low > 1) ? low : 1; c < BLOCK_SIZE; c++)\n        block_versions_free_all(c);\n    block_free_list_build();\n#ifdef CODEGEN_BACKEND_HAS_BLOCK_LINK\n    codegen_link_reset_used();\n'),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -1553,6 +1580,7 @@ PATCHES = {
     'kairox86-own-memory': KAIROX86_OWN_MEMORY,
     'kairox86-path-append': KAIROX86_PATH_APPEND,
     'kairox86-mouse-enable': KAIROX86_MOUSE_ENABLE,
+    'kairox86-lazy-blocks': KAIROX86_LAZY_BLOCKS,
 }
 
 ADDED = [
