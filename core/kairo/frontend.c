@@ -36,6 +36,8 @@
 #include <86box/sound.h>
 #include <86box/gameport.h>
 #include <86box/random.h>
+#include <86box/fdd.h>
+#include <86box/cdrom.h>
 #include "cpu.h"
 
 #ifdef _WIN32
@@ -439,6 +441,71 @@ do_stop(void)
 #endif
 }
 
+/* ---- Media (KairoX86#48) ---- */
+
+/* 86Box's own insert and eject (unix/sdl_cdrom.c), which also update its configuration. */
+extern void floppy_mount(uint8_t id, char *fn, uint8_t wp);
+extern void floppy_eject(uint8_t id);
+extern void cdrom_mount(uint8_t id, char *fn);
+
+/* A slot holding an image from outside the machine's folder for this run, and what the slot held
+   before it, which goes back in before 86Box saves its configuration (media_restore). */
+static bool media_borrowed[KAIRO_X86_MEDIA_SLOTS];
+static char media_own[KAIRO_X86_MEDIA_SLOTS][MAX_IMAGE_PATH_LEN];
+
+static bool
+media_drive(int slot)
+{
+    if ((slot == 0) || (slot == 1))
+        return drives[slot].type != 0;
+    return (slot == 2) && (cdrom[0].bus_type != CDROM_BUS_DISABLED);
+}
+
+static const char *
+media_held(int slot)
+{
+    return (slot < 2) ? drives[slot].image_path : cdrom[0].image_path;
+}
+
+/* Whether path is in the machine's folder (86Box's usr_path): a disk of the machine itself. */
+static bool
+media_in_machine(const char *path)
+{
+    const size_t length = strlen(usr_path);
+    return (strncmp(path, usr_path, length) == 0) && ((path[length] == '/') || (path[length] == '\\') ||
+                                                   (length > 0 && ((usr_path[length - 1] == '/') || (usr_path[length - 1] == '\\'))));
+}
+
+/* Puts path in slot through 86Box's own insert or eject. */
+static void
+media_put(int slot, const char *path)
+{
+    char name[MAX_IMAGE_PATH_LEN];
+
+    snprintf(name, sizeof(name), "%s", path);
+    if (slot < 2) {
+        if (name[0])
+            floppy_mount((uint8_t) slot, name, 0);
+        else
+            floppy_eject((uint8_t) slot);
+    } else if (name[0])
+        cdrom_mount(0, name);
+    else
+        cdrom_eject(0);
+}
+
+/* Before 86Box saves its configuration: each slot holding an image of this run only gets back what
+   the machine had in it. */
+static void
+media_restore(void)
+{
+    for (int slot = 0; slot < KAIRO_X86_MEDIA_SLOTS; slot++)
+        if (media_borrowed[slot]) {
+            media_borrowed[slot] = false;
+            media_put(slot, media_own[slot]);
+        }
+}
+
 /* ---- Input ---- */
 
 void
@@ -511,6 +578,40 @@ api_joystick_button(int button, bool down)
     if ((button < 0) || (button >= KAIRO_X86_JOYSTICK_BUTTONS))
         return;
     input_buttons[button] = down ? 128 : 0;
+}
+
+static int
+api_media(int slot, const char *path)
+{
+    if (atomic_load(&dead) || (slot < 0) || (slot >= KAIRO_X86_MEDIA_SLOTS) || !media_drive(slot))
+        return -1;
+    if (path == NULL)
+        path = "";
+    if (setjmp(stopped)) {
+        running = false;
+        return -1;
+    }
+    running              = true;
+    const bool borrowed  = (path[0] != 0) && !media_in_machine(path);
+    if (borrowed && !media_borrowed[slot])
+        snprintf(media_own[slot], sizeof(media_own[slot]), "%s", media_held(slot));
+    if (!borrowed)
+        media_borrowed[slot] = false;
+    else
+        media_borrowed[slot] = true;
+    media_put(slot, path);
+    running = false;
+    /* An image that did not open leaves the drive empty. */
+    return (path[0] == 0) == (media_held(slot)[0] == 0) ? 0 : -1;
+}
+
+static bool
+api_media_path(int slot, char *path, int size)
+{
+    if ((slot < 0) || (slot >= KAIRO_X86_MEDIA_SLOTS) || (size <= 0) || !media_drive(slot))
+        return false;
+    snprintf(path, (size_t) size, "%s", media_held(slot));
+    return true;
 }
 
 static bool
@@ -659,8 +760,9 @@ api_stop(void)
         return;
     }
     running = true;
-    /* pc_close saves the configuration: with the machine's own clock setting. */
+    /* pc_close saves the configuration: with the machine's own clock setting and its own media. */
     time_sync = configured_time_sync;
+    media_restore();
     pc_close(NULL);
     running = false;
 }
@@ -679,6 +781,8 @@ static const struct KairoX86Api api = {
     .joystick_button = api_joystick_button,
     .locks           = api_locks,
     .loading         = api_loading,
+    .media           = api_media,
+    .media_path      = api_media_path,
     .reset           = api_reset,
     .stop            = api_stop,
 };

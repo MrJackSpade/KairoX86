@@ -25,4 +25,14 @@
     <!-- %1$s is the machine's name. -->
     <string name="machine_preparing">Preparing %1$s…</string>
     <string name="machine_write_back_failed">The machine\'s settings and CMOS could not be saved to its folder</string>
+
+    <!-- What a disk image is, on its chip on the Disks page. -->
+    <string name="media_disk">Disk</string>
+    <!-- The removable drives of the Disks page. -->
+    <string name="media_floppy_a">Floppy A</string>
+    <string name="media_floppy_b">Floppy B</string>
+    <string name="media_cd">CD-ROM</string>
+    <!-- %1$s is the file's name. -->
+    <string name="machine_not_disk">%1$s is no floppy or CD image</string>
+    <string name="machine_disk_no_machine">A disk goes in a running machine</string>
 </resources>

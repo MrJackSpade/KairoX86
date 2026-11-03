@@ -75,6 +75,17 @@ void X86Machine::joystick_axis(int axis, int value) { impl_->api->joystick_axis(
 void X86Machine::joystick_button(int button, bool down) { impl_->api->joystick_button(button, down); }
 int X86Machine::locks() const { return impl_->api->locks(); }
 bool X86Machine::loading() const { return impl_->api->loading(); }
+
+bool X86Machine::media(int slot, const std::string &path) { return impl_->api->media(slot, path.c_str()) == 0; }
+
+std::vector<std::string> X86Machine::media_paths() const {
+    std::vector<std::string> paths;
+    for (int slot = 0; slot < KAIRO_X86_MEDIA_SLOTS; ++slot) {
+        char path[1024] = "";
+        paths.emplace_back(impl_->api->media_path(slot, path, int(sizeof(path))) ? path : "");
+    }
+    return paths;
+}
 void X86Machine::reset() { impl_->api->reset(); }
 
 void X86Machine::close() {

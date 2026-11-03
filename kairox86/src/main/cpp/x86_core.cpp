@@ -4,6 +4,7 @@
 #include <array>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "kairo/machine_core.h"
 #include "x86_machine.h"
@@ -38,6 +39,11 @@ public:
     int locks() override { return machine_->locks(); }
     // A frame a floppy drive worked in: the frame host runs it flat out (KairoX86#41).
     bool loading() override { return machine_->loading(); }
+    // The removable drives (MainActivity.mediaSlots): floppy drives A and B, the first CD-ROM drive.
+    int media(int slot, const std::string &path) override {
+        return machine_->media(slot, path) ? 0 : kFailed;
+    }
+    std::vector<std::string> media_paths() override { return machine_->media_paths(); }
 
     void release_inputs() override {
         for (int code = 1; code < kKeyCodes; ++code)

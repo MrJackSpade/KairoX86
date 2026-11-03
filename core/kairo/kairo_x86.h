@@ -41,6 +41,10 @@ extern "C" {
 #define KAIRO_X86_JOYSTICK_BUTTONS 4
 #define KAIRO_X86_AXIS_MAX 32767
 
+/* The removable drives a machine's media go in (KairoX86#48), as slots: floppy drives A and B,
+ * then the first CD-ROM drive. */
+#define KAIRO_X86_MEDIA_SLOTS 3
+
 /* The lock keys, as the guest last set the keyboard's lamps. */
 #define KAIRO_X86_CAPS_LOCK 1
 #define KAIRO_X86_NUM_LOCK 2
@@ -90,6 +94,15 @@ struct KairoX86Api {
 	 * the host runs such frames flat out. Hard disks and CDs do not count: a game reads them as
 	 * it plays. */
 	bool (*loading)(void);
+	/* Puts the image at path in slot (KAIRO_X86_MEDIA_SLOTS), or empties it for an empty path: 0
+	 * when the drive holds what was asked, -1 when the machine has no such drive or the image did
+	 * not open. An image from outside the machine's folder is for this run only: the drive gets
+	 * back what the machine had in it before 86Box saves its configuration (stop), so the folder's
+	 * 86box.cfg never names a file the folder lacks. */
+	int (*media)(int slot, const char *path);
+	/* What slot holds, from 86Box's own drive: the image's path into path (size bytes), "" when
+	 * empty; false when the machine has no such drive. */
+	bool (*media_path)(int slot, char *path, int size);
 
 	/* Resets the machine: a hard reset, as switching it off and on does. */
 	void (*reset)(void);

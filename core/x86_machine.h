@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace kairox86 {
 
@@ -56,6 +57,12 @@ public:
     int locks() const;
     // Whether the last frame was loading from a floppy disk (kairo_x86.h): the host runs it flat out.
     bool loading() const;
+    // The removable drives (kairo_x86.h): slot 0 and 1 floppy drives A and B, 2 the first CD-ROM
+    // drive. Puts path in slot ("" empties it): false when the machine has no such drive or the image
+    // did not open. An image from outside the machine's folder is for this run only.
+    bool media(int slot, const std::string &path);
+    // What each slot holds, "" when empty or when the machine has no such drive.
+    std::vector<std::string> media_paths() const;
 
     // A hard reset, as switching the PC off and on does.
     void reset();

@@ -22,6 +22,10 @@
 //   --seed <n>      the repeatable run's seed (default 1, so two runs repeat; 0 runs as the app does)
 //   --runs <n>      run the machine n times in this process, each from a fresh copy, and fail unless
 //                   every run's hashes match the first's
+//   --media <frame>:<slot>:<path>  before that frame, put the image at path in a removable drive
+//                   (0 and 1 floppy drives A and B, 2 the CD-ROM drive; an empty path empties it);
+//                   may be given more than once. A name without a folder is a file of the machine's
+//                   folder (its copy in <work dir>/machine). The drives are printed at the end.
 //
 // Prints one line starting "start ": how long the machine took to start; and one starting "host ":
 // the frames per second the host reached, the guest's rate and the frame time distribution.
@@ -51,6 +55,12 @@ int fail(const std::string &message) {
     std::fprintf(stderr, "FAIL: %s\n", message.c_str());
     return 1;
 }
+
+struct MediaEvent {
+    long frame;
+    int slot;
+    std::string path;
+};
 
 struct Event {
     long frame;
@@ -131,6 +141,7 @@ int main(int argc, char **argv) {
     long warmup = 0, shots = 0, runs = 1;
     uint32_t seed = 1;
     std::string hashes_path;
+    std::vector<MediaEvent> media;
     for (int i = 6; i < argc; ++i) {
         const std::string option = argv[i];
         if (i + 1 >= argc) return fail(option + " needs a value");
@@ -140,6 +151,12 @@ int main(int argc, char **argv) {
         else if (option == "--hashes") hashes_path = value;
         else if (option == "--seed") seed = uint32_t(std::strtoul(value.c_str(), nullptr, 0));
         else if (option == "--runs") runs = std::atol(value.c_str());
+        else if (option == "--media") {
+            const size_t first = value.find(':'), second = first == std::string::npos ? first : value.find(':', first + 1);
+            if (second == std::string::npos) return fail("--media is <frame>:<slot>:<path>, not " + value);
+            media.push_back({std::atol(value.substr(0, first).c_str()), std::atoi(value.substr(first + 1, second - first - 1).c_str()),
+                             value.substr(second + 1)});
+        }
         else return fail("unknown option " + option);
     }
     if (!fs::is_regular_file(source / "86box.cfg")) return fail("no 86box.cfg in " + utf8(source));
@@ -172,6 +189,13 @@ int main(int argc, char **argv) {
         times.reserve(size_t(frames));
         long loading = 0, last_loading = -1;
         for (long frame = 0; frame < warmup + frames; ++frame) {
+            for (const MediaEvent &change : media) {
+                if (change.frame != frame) continue;
+                const bool plain = !change.path.empty() && change.path.find_first_of("/\\") == std::string::npos;
+                const std::string path = plain ? utf8(folder / change.path) : change.path;
+                if (!machine->media(change.slot, path))
+                    return fail("could not put \"" + path + "\" in slot " + std::to_string(change.slot));
+            }
             for (const Event &event : events) {
                 if (event.frame != frame) continue;
                 if (event.kind == 'k') machine->key(event.code, event.down);
@@ -217,6 +241,9 @@ int main(int argc, char **argv) {
                     sorted[std::min(sorted.size() - 1, sorted.size() * 95 / 100)], sorted.back(), times.size());
         // The frames the app would run flat out (X86Machine::loading).
         std::printf("loading %ld frames, the last at frame %ld\n", loading, last_loading);
+        // What the removable drives hold at the end.
+        const std::vector<std::string> held = machine->media_paths();
+        for (size_t slot = 0; slot < held.size(); ++slot) std::printf("media %zu: %s\n", slot, held[slot].c_str());
         // The lock keys' lamps at the end: bit 0 Caps Lock, 1 Num Lock, 2 Scroll Lock.
         std::printf("locks %d\n", machine->locks());
         machine->close();

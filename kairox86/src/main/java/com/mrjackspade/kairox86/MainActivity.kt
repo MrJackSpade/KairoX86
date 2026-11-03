@@ -12,6 +12,7 @@ import com.mrjackspade.kairo.frontend.LibraryStrings
 import com.mrjackspade.kairo.frontend.MachineActivity
 import com.mrjackspade.kairo.frontend.MachineFirstRun
 import com.mrjackspade.kairo.frontend.MachineLibrary
+import com.mrjackspade.kairox86.X86Library.DiskKind
 import com.mrjackspade.kairo.frontend.NativeMachine
 import com.mrjackspade.kairo.frontend.ScanDepth
 import com.mrjackspade.kairo.frontend.ShippedAssets
@@ -50,6 +51,17 @@ class MainActivity : MachineActivity<X86Entry>() {
     // A new machine is made in its own flow (KairoX86#162): a hardware preset and its blank disks.
     override val blankDisks = emptyList<BlankDisk>()
 
+    // The removable drives (KairoX86#48), in the core's slot order (kairo_x86.h): floppy drives A
+    // and B, then the first CD-ROM drive.
+    override val mediaSlots = listOf(
+        MediaSlot<X86Entry>(UiText.res(R.string.media_floppy_a)) { it.disk && X86Library.diskKind(it.path) == DiskKind.FLOPPY },
+        MediaSlot(UiText.res(R.string.media_floppy_b)) { it.disk && X86Library.diskKind(it.path) == DiskKind.FLOPPY },
+        MediaSlot(UiText.res(R.string.media_cd)) { it.disk && X86Library.diskKind(it.path) == DiskKind.CD })
+
+    /** A machine's own disks are the images of its folder, and what its drives hold. */
+    override fun ownDisks(current: X86Entry, takes: (X86Entry) -> Boolean): List<X86Entry> =
+        ((session?.disks() ?: emptyList()) + mountedMedia().filterNotNull()).distinctBy { it.id }.filter(takes)
+
     private val machines by lazy { X86Library(this) }
     override fun createCatalog() = LayeredGameCatalog(this, X86Catalog)
     override fun createLibrary(catalog: LayeredGameCatalog): MachineLibrary<X86Entry> = Library()
@@ -61,15 +73,21 @@ class MainActivity : MachineActivity<X86Entry>() {
         override fun scan(tree: Uri, depth: ScanDepth, cancelled: AtomicBoolean, progress: (String) -> Unit) =
             machines.scan(tree, depth, cancelled, progress)
         override fun store(tree: Uri, entries: List<X86Entry>) = machines.store(tree, entries)
+        // A disk image picked for a drive on the Disks page (KairoX86#48).
         override fun inspectExternal(file: ExternalGameFile, cancelled: AtomicBoolean): List<X86Entry> =
-            error(getString(R.string.machine_external))
+            listOf(machines.pickedDisk(file.uri, file.name, file.size, file.modified))
+        override fun prepareMedia(entry: X86Entry, cancelled: AtomicBoolean, progress: (String) -> Unit): File {
+            val running = checkNotNull(session) { getString(R.string.machine_disk_no_machine) }
+            // A disk of the machine's folder is its session file; one picked on the device gets a link.
+            return if (entry.id.startsWith("disk:")) File(entry.uri) else running.link(entry)
+        }
         override fun deleteSource(entry: X86Entry, entries: List<X86Entry>) = error(getString(R.string.machine_delete))
         override fun hasWorkingImage(entry: X86Entry) = false
         override fun withMember(entry: X86Entry, member: String) = entry.copy(member = member)
         override fun resetWorkingImage(entry: X86Entry) = error("A machine runs in place, with no working copy")
         override fun prepare(entry: X86Entry, cancelled: AtomicBoolean, progress: (String) -> Unit): File =
             error("A machine runs in place (startGame)")
-        override fun entryForWorkingImage(path: String, entries: List<X86Entry>): X86Entry? = null
+        override fun entryForWorkingImage(path: String, entries: List<X86Entry>): X86Entry? = session?.diskAt(path)
         override fun statePaths(entries: List<X86Entry>): Map<String, String> = emptyMap()
         override fun withError(entry: X86Entry, message: String) = entry.copy(error = message)
         override fun hashNamedWorkingCopies(): GamePathMigration.Store<X86Entry> = NoHashNamedCopies()
@@ -91,6 +109,8 @@ class MainActivity : MachineActivity<X86Entry>() {
     private val firmwareFolder by lazy { File(filesDir, "roms") }
 
     override fun startGame(entry: X86Entry, game: CatalogGame, cancelled: AtomicBoolean, progress: (String) -> Unit) {
+        // A disk image opened from another app has no machine to go in.
+        check(!entry.disk) { getString(R.string.machine_external) }
         val tree = checkNotNull(tree) { getString(FrontendR.string.kairo_library_choose_in_manage) }
         progress(getString(R.string.machine_preparing, entry.displayName))
         installFreeFirmware(progress)
@@ -100,6 +120,8 @@ class MainActivity : MachineActivity<X86Entry>() {
         check(bridge.start(firmwareFolder.absolutePath, prepared.dir.absolutePath, listOf(prepared.dir.absolutePath),
             emptyMap())) { "Another machine is still running" }
         awaitRunning()
+        // What the machine's drives hold, from its 86box.cfg, as the Disks page shows it.
+        mediaStarted(bridge.mediaPaths().orEmpty().map { path -> path.takeIf { it.isNotEmpty() }?.let(prepared::diskAt) })
     }
 
     /**

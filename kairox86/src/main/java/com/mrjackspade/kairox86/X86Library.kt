@@ -23,6 +23,10 @@ import java.util.concurrent.atomic.AtomicBoolean
  * A machine of the library: a folder of the games folder holding an 86Box machine's 86box.cfg (its
  * hardware), the disk images it names and its nvr/ (CMOS). The entry is the folder, named after it
  * and keyed by its path, so its saves and settings follow it; its content ID is its 86box.cfg's.
+ *
+ * With [disk], a disk image a drive takes while a machine runs (the Disks page, KairoX86#48): one of
+ * the running machine's folder ([uri] its file in the session folder) or one picked on the device
+ * ([uri] its document). The library lists machines only.
  */
 data class X86Entry(
     override val id: String,
@@ -35,12 +39,13 @@ data class X86Entry(
     override val contentId: String?,
     override val error: String? = null,
     override val catalogId: String? = contentId,
-    override val member: String? = null
+    override val member: String? = null,
+    val disk: Boolean = false
 ) : LibraryItem {
     override val zipEntry: String? = null
     override val displayName: String get() = path.substringAfterLast('/').ifEmpty { "86Box" }
     override val playable: Boolean get() = contentId != null && error == null
-    override val mediaLabel: UiText get() = UiText.res(R.string.media_machine)
+    override val mediaLabel: UiText get() = UiText.res(if (disk) R.string.media_disk else R.string.media_machine)
 }
 
 /**
@@ -94,7 +99,9 @@ class X86Library(private val context: Context) {
         val dir = File(context.filesDir, "session/${GameKey(entry.id).hashName}")
         check(!dir.exists() || dir.deleteRecursively()) { "Could not clear the session folder" }
         check(dir.mkdirs()) { "Could not create the session folder" }
-        val session = Session(tree, folder, dir)
+        val media = File(context.filesDir, "session-media/${dir.name}")
+        check(!media.exists() || media.deleteRecursively()) { "Could not clear the session's media folder" }
+        val session = Session(tree, folder, dir, media)
         try {
             session.fill(folder, dir, "", cancelled)
             check(File(dir, CONFIG).isFile) { context.getString(R.string.machine_config_missing, entry.displayName) }
@@ -131,8 +138,39 @@ class X86Library(private val context: Context) {
      * A machine's session: its folder in the games folder ([folder]), the session folder 86Box runs
      * ([dir]), and the files of the folder held open for it.
      */
-    inner class Session(private val tree: Uri, private val folder: String, val dir: File) : AutoCloseable {
+    inner class Session(private val tree: Uri, private val folder: String, val dir: File, private val media: File) :
+        AutoCloseable {
         private val open = ArrayList<ParcelFileDescriptor>()
+
+        /**
+         * The disk images of the machine's folder (the Disks page's own disks), each by its file in
+         * this session folder, which is the folder's own file opened in place.
+         */
+        fun disks(): List<X86Entry> = dir.walkTopDown().filter { it.isFile && diskKind(it.name) != null }
+            .map { file ->
+                val path = file.relativeTo(dir).invariantSeparatorsPath
+                X86Entry("disk:$path", file.absolutePath, path, 0, 0, DISK, disk = true)
+            }.sortedBy { it.path.lowercase() }.toList()
+
+        /** The machine's disk the session folder's [path] is, as a drive reports it; null for any other. */
+        fun diskAt(path: String): X86Entry? = disks().firstOrNull { File(it.uri).absolutePath == File(path).absolutePath }
+
+        /**
+         * A disk picked on the device, opened in place and reached through a link outside this
+         * session folder: 86Box holds it for this run only and keeps the machine's own disk in its
+         * configuration (KairoX86#48).
+         */
+        fun link(entry: X86Entry): File {
+            val kind = checkNotNull(diskKind(entry.path)) { "${entry.path} is no disk image" }
+            check(media.isDirectory || media.mkdirs()) { "Could not create the session's media folder" }
+            val file = File(media, "${open.size}-${entry.path.substringAfterLast('/')}")
+            // A floppy may be written, as on the PC; a CD only read.
+            val descriptor = checkNotNull(context.contentResolver.openFileDescriptor(Uri.parse(entry.uri),
+                if (kind == DiskKind.FLOPPY) "rw" else "r")) { "Unable to open ${entry.path}" }
+            open += descriptor
+            Os.symlink("/proc/self/fd/${descriptor.fd}", file.path)
+            return file
+        }
 
         /** Copies the small files 86Box rewrites and links every other file, in [source]'s folder at [relative]. */
         fun fill(source: String, target: File, relative: String, cancelled: AtomicBoolean) {
@@ -185,7 +223,14 @@ class X86Library(private val context: Context) {
         override fun close() {
             open.forEach(ParcelFileDescriptor::close)
             open.clear()
+            media.deleteRecursively()
         }
+    }
+
+    /** A disk image picked on the device (MachineLibrary.inspectExternal), for a drive. */
+    fun pickedDisk(uri: Uri, name: String, size: Long, modified: Long): X86Entry {
+        checkNotNull(diskKind(name)) { context.getString(R.string.machine_not_disk, name) }
+        return X86Entry("disk-picked:$uri", uri.toString(), name, size, modified, DISK, disk = true)
     }
 
     private fun writeEntry(output: DataOutputStream, entry: X86Entry) {
@@ -201,9 +246,25 @@ class X86Library(private val context: Context) {
     private fun readEntry(input: DataInputStream) = X86Entry(input.readUTF(), input.readUTF(), input.readUTF(),
         input.readLong(), input.readLong(), input.readUTF().ifEmpty { null }, input.readUTF().ifEmpty { null })
 
+    /** A drive's kind of disk image. */
+    enum class DiskKind { FLOPPY, CD }
+
     companion object {
         const val CONFIG = "86box.cfg"
         const val NVR = "nvr"
+        /** A disk entry's content ID: disks are no games of the catalog. */
+        private const val DISK = "disk"
+
+        /** The floppy and CD images 86Box reads, by extension. */
+        private val FLOPPY_IMAGES = setOf("img", "ima", "dsk", "flp", "vfd", "xdf", "86f", "td0", "imd", "mfm", "fdi", "fdf")
+        private val CD_IMAGES = setOf("iso", "cue", "chd", "mds", "ccd")
+
+        /** What a drive takes a file named [name] as, or null for no disk image. */
+        fun diskKind(name: String): DiskKind? = when (name.substringAfterLast('.', "").lowercase()) {
+            in FLOPPY_IMAGES -> DiskKind.FLOPPY
+            in CD_IMAGES -> DiskKind.CD
+            else -> null
+        }
 
         /** The folder of the 86box.cfg at [path]. */
         fun folderOf(path: String) = path.substringBeforeLast('/', "")
