@@ -35,4 +35,5 @@
     <!-- %1$s is the file's name. -->
     <string name="machine_not_disk">%1$s is no floppy or CD image</string>
     <string name="machine_disk_no_machine">A disk goes in a running machine</string>
+    <string name="direct_touch_explanation">Direct tap puts the pointer at your finger in DOS games. Elsewhere it moves the pointer there from the screen\'s top-left corner, which some programs do not follow.</string>
 </resources>

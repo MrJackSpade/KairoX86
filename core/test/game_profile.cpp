@@ -27,6 +27,9 @@
 //                   (0 and 1 floppy drives A and B, 2 the CD-ROM drive; an empty path empties it);
 //                   may be given more than once. A name without a folder is a file of the machine's
 //                   folder (its copy in <work dir>/machine). The drives are printed at the end.
+//   --place <frame>:<x>:<y>  before that frame, ask the guest's DOS mouse driver to put the pointer on
+//                   picture point (x, y) at the program's next position read (KairoX86#44); may be
+//                   given more than once. Prints "placed <frame>" once the program has read it.
 //
 // Prints one line starting "start ": how long the machine took to start; and one starting "host ":
 // the frames per second the host reached, the guest's rate and the frame time distribution. At the
@@ -34,6 +37,7 @@
 // and whether it waits for a key (KairoX86#43).
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -146,6 +150,7 @@ int main(int argc, char **argv) {
     uint32_t seed = 1;
     std::string hashes_path;
     std::vector<MediaEvent> media;
+    std::vector<std::array<long, 3>> places;
     for (int i = 6; i < argc; ++i) {
         const std::string option = argv[i];
         if (i + 1 >= argc) return fail(option + " needs a value");
@@ -160,6 +165,12 @@ int main(int argc, char **argv) {
             if (second == std::string::npos) return fail("--media is <frame>:<slot>:<path>, not " + value);
             media.push_back({std::atol(value.substr(0, first).c_str()), std::atoi(value.substr(first + 1, second - first - 1).c_str()),
                              value.substr(second + 1)});
+        }
+        else if (option == "--place") {
+            std::array<long, 3> place{};
+            if (std::sscanf(value.c_str(), "%ld:%ld:%ld", &place[0], &place[1], &place[2]) != 3)
+                return fail("--place is <frame>:<x>:<y>, not " + value);
+            places.push_back(place);
         }
         else return fail("unknown option " + option);
     }
@@ -192,6 +203,7 @@ int main(int argc, char **argv) {
         std::vector<double> times;
         times.reserve(size_t(frames));
         long loading = 0, last_loading = -1;
+        bool placing = false;
         for (long frame = 0; frame < warmup + frames; ++frame) {
             for (const MediaEvent &change : media) {
                 if (change.frame != frame) continue;
@@ -199,6 +211,15 @@ int main(int argc, char **argv) {
                 const std::string path = plain ? utf8(folder / change.path) : change.path;
                 if (!machine->media(change.slot, path))
                     return fail("could not put \"" + path + "\" in slot " + std::to_string(change.slot));
+            }
+            if (placing && !machine->mouse_placing()) {
+                std::printf("placed %ld\n", frame);
+                placing = false;
+            }
+            for (const std::array<long, 3> &place : places) {
+                if (place[0] != frame) continue;
+                machine->mouse_place(int(place[1]), int(place[2]));
+                placing = true;
             }
             for (const Event &event : events) {
                 if (event.frame != frame) continue;

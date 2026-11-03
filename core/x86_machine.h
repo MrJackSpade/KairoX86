@@ -49,6 +49,12 @@ public:
     // The mouse: motion in the picture's pixels, and button 1 (left), 2 (right) or 3 (middle).
     void mouse_move(int dx, int dy);
     void mouse_button(int button, bool down);
+    // Direct touch through the guest's DOS mouse driver (kairo_x86.h): its next position read puts
+    // the pointer on picture point (x, y); placing() until it has.
+    void mouse_place(int x, int y);
+    bool mouse_placing() const;
+    // Whether the guest's mouse has not yet reported all the motion it was given.
+    bool mouse_moving() const;
     // One of the joystick model's inputs (kairo_x86.h): axis 0 to 3 (-32767 to 32767), button 0 to 3,
     // counted joystick by joystick in the order 86Box lists the model's inputs.
     void joystick_axis(int axis, int value);
@@ -62,6 +68,7 @@ public:
         uint64_t keyboard_waits = 0;
         uint64_t keyboard_polls = 0;
         uint64_t mouse_reads = 0;
+        uint64_t position_reads = 0; // of them, the position and buttons (INT 33h AX=03h)
         bool keyboard_waiting = false;
     };
     GuestInput guest_input() const;

@@ -520,7 +520,7 @@ media_restore(void)
         }
 }
 
-/* ---- Guest input (KairoX86#43) ---- */
+/* ---- Guest input (KairoX86#43) and the pointer's place (KairoX86#44) ---- */
 
 /* How the guest reads its input, for the Auto touch mode, counted as KairoDos counts DOSBox's: the
    BIOS keyboard calls (INT 16h) that wait for a key or check for one, and the mouse driver's
@@ -530,20 +530,81 @@ media_restore(void)
 static atomic_uint_fast64_t keyboard_waits;
 static atomic_uint_fast64_t keyboard_polls;
 static atomic_uint_fast64_t mouse_reads;
+static atomic_uint_fast64_t position_reads; /* of them, the position and buttons (AX=03h) */
 static atomic_bool          keyboard_wait; /* the last wait has not returned to its program yet */
 
+#define BDA_VIDEO_MODE    0x449
+#define BDA_COLUMNS       0x44a
 #define BDA_KEYBOARD_HEAD 0x41a
 #define BDA_KEYBOARD_TAIL 0x41c
+#define BDA_LAST_ROW      0x484
 /* The adapter and system ROMs, C0000h to FFFFFh. */
 #define ROM_START 0xc0000
 #define ROM_END   0x100000
 
-/* Every INT n the guest runs, with its AX, from code at linear code_base (the processors' INT
-   decoders, kairox86-guest-input). */
-void
-kairo_observe_int(uint8_t num, uint16_t ax, uint32_t code_base)
+/* Direct touch through the guest's mouse driver: a DOS mouse driver keeps the pointer itself, in its
+   own coordinates, so the pointer goes where the player tapped by the driver's own "set the
+   pointer's position" (INT 33h AX=04h). The program's next "get the position and buttons" call
+   (AX=03h) becomes that call, to the tapped point; the program gets back what AX=03h would then
+   give: the point, and the buttons the host holds. The driver's coordinates span what the program
+   set (AX=07h and 08h) or, until it does, the driver's default for the video mode. */
+static atomic_bool placing;                   /* a place waits for the program's next AX=03h */
+static atomic_int  place_x, place_y;          /* the tapped point, in the picture's pixels */
+static atomic_int  place_width, place_height; /* the picture's size then */
+static atomic_int  host_buttons;              /* the buttons the host holds (bit 0 left, 1 right, 2 middle) */
+static bool        range_x_set, range_y_set;
+static int         range_x_min, range_x_max, range_y_min, range_y_max;
+
+/* The driver's default span on one axis for the video mode (Microsoft's mouse driver's): text by its
+   8-pixel cells, the 320-pixel-wide modes doubled to 640, every other standard mode its own pixels,
+   and any other mode the picture's. */
+static int
+driver_span(bool across)
 {
-    const uint8_t ah = ax >> 8;
+    const uint8_t mode = mem_readb_phys(BDA_VIDEO_MODE) & 0x7f;
+
+    if ((mode <= 0x03) || (mode == 0x07)) {
+        if (across)
+            return mem_readw_phys(BDA_COLUMNS) * 8;
+        const uint8_t last_row = mem_readb_phys(BDA_LAST_ROW);
+        return ((last_row != 0) ? (last_row + 1) : 25) * 8;
+    }
+    switch (mode) {
+        case 0x04: case 0x05: case 0x06: case 0x0d: case 0x0e: case 0x13:
+            return across ? 640 : 200;
+        case 0x0f: case 0x10:
+            return across ? 640 : 350;
+        case 0x11: case 0x12:
+            return across ? 640 : 480;
+        default:
+            return across ? atomic_load(&place_width) : atomic_load(&place_height);
+    }
+}
+
+/* A picture coordinate as the driver's: proportionally across the driver's span. */
+static uint16_t
+driver_coordinate(int value, int size, bool set, int min, int max, bool across)
+{
+    if (!set) {
+        min = 0;
+        max = driver_span(across) - 1;
+    }
+    if (size <= 0)
+        return (uint16_t) min;
+    int coordinate = min + (int) (((int64_t) value * (max - min + 1)) / size);
+    if (coordinate > max)
+        coordinate = max;
+    if (coordinate < min)
+        coordinate = min;
+    return (uint16_t) coordinate;
+}
+
+/* Every INT n the guest runs, from code at linear code_base (the processors' INT decoders,
+   kairox86-guest-input); the registers are the call's, which a place may change. */
+void
+kairo_observe_int(uint8_t num, uint16_t *ax, uint16_t *bx, uint16_t *cx, uint16_t *dx, uint32_t code_base)
+{
+    const uint8_t ah = *ax >> 8;
 
     if ((code_base < ROM_START) || (code_base >= ROM_END))
         atomic_store(&keyboard_wait, false);
@@ -554,9 +615,43 @@ kairo_observe_int(uint8_t num, uint16_t ax, uint32_t code_base)
             atomic_store(&keyboard_wait, true);
         } else if ((ah == 0x01) || (ah == 0x11))
             atomic_fetch_add_explicit(&keyboard_polls, 1, memory_order_relaxed); /* check for a keystroke */
-    } else if ((num == 0x33) && ((ax == 0x03) || (ax == 0x05) || (ax == 0x06) || (ax == 0x0b)))
-        /* The position and buttons, a button's presses or releases, the motion counters. */
-        atomic_fetch_add_explicit(&mouse_reads, 1, memory_order_relaxed);
+    } else if ((num == 0x10) && (ah == 0x00))
+        /* A video mode set: the driver goes back to the mode's span. */
+        range_x_set = range_y_set = false;
+    else if (num == 0x33) {
+        switch (*ax) {
+            case 0x00: case 0x21: /* a reset: the default span */
+                range_x_set = range_y_set = false;
+                break;
+            case 0x07: /* the horizontal span */
+                range_x_min = (*cx < *dx) ? *cx : *dx;
+                range_x_max = (*cx < *dx) ? *dx : *cx;
+                range_x_set = true;
+                break;
+            case 0x08: /* the vertical span */
+                range_y_min = (*cx < *dx) ? *cx : *dx;
+                range_y_max = (*cx < *dx) ? *dx : *cx;
+                range_y_set = true;
+                break;
+            case 0x03: /* the position and buttons */
+                atomic_fetch_add_explicit(&mouse_reads, 1, memory_order_relaxed);
+                atomic_fetch_add_explicit(&position_reads, 1, memory_order_relaxed);
+                if (atomic_exchange(&placing, false)) {
+                    *ax = 0x04;
+                    *bx = (uint16_t) atomic_load(&host_buttons);
+                    *cx = driver_coordinate(atomic_load(&place_x), atomic_load(&place_width), range_x_set,
+                                            range_x_min, range_x_max, true);
+                    *dx = driver_coordinate(atomic_load(&place_y), atomic_load(&place_height), range_y_set,
+                                            range_y_min, range_y_max, false);
+                }
+                break;
+            case 0x05: case 0x06: case 0x0b: /* a button's presses or releases, the motion counters */
+                atomic_fetch_add_explicit(&mouse_reads, 1, memory_order_relaxed);
+                break;
+            default:
+                break;
+        }
+    }
 }
 
 /* ---- Input ---- */
@@ -614,7 +709,31 @@ api_mouse_move(int dx, int dy)
 static void
 api_mouse_buttons(int buttons)
 {
+    atomic_store(&host_buttons, buttons);
     mouse_set_buttons_ex(buttons);
+}
+
+static void
+api_mouse_place(int x, int y)
+{
+    /* Called between frames: the picture is not changing. */
+    atomic_store(&place_x, x);
+    atomic_store(&place_y, y);
+    atomic_store(&place_width, picture_width);
+    atomic_store(&place_height, picture_height);
+    atomic_store(&placing, true);
+}
+
+static bool
+api_mouse_placing(void)
+{
+    return atomic_load(&placing);
+}
+
+static bool
+api_mouse_moving(void)
+{
+    return mouse_moved() != 0;
 }
 
 static void
@@ -673,6 +792,7 @@ api_guest_input(struct KairoX86GuestInput *input)
     input->keyboard_waits = atomic_load(&keyboard_waits);
     input->keyboard_polls = atomic_load(&keyboard_polls);
     input->mouse_reads    = atomic_load(&mouse_reads);
+    input->position_reads = atomic_load(&position_reads);
     input->keyboard_waiting = atomic_load(&keyboard_wait);
 }
 
@@ -842,6 +962,9 @@ static const struct KairoX86Api api = {
     .key             = api_key,
     .mouse_move      = api_mouse_move,
     .mouse_buttons   = api_mouse_buttons,
+    .mouse_place     = api_mouse_place,
+    .mouse_placing   = api_mouse_placing,
+    .mouse_moving    = api_mouse_moving,
     .joystick_axis   = api_joystick_axis,
     .joystick_button = api_joystick_button,
     .locks           = api_locks,

@@ -48,6 +48,7 @@ struct KairoX86GuestInput {
 	uint64_t keyboard_waits;
 	uint64_t keyboard_polls;
 	uint64_t mouse_reads;
+	uint64_t position_reads; /* of the mouse reads, the position and buttons (INT 33h AX=03h) */
 	bool keyboard_waiting;
 };
 
@@ -94,6 +95,14 @@ struct KairoX86Api {
 	/* The mouse: motion in the picture's pixels (86Box's raw input), and its buttons (bit 0 left, 1 right, 2 middle). */
 	void (*mouse_move)(int dx, int dy);
 	void (*mouse_buttons)(int buttons);
+	/* Direct touch through the guest's DOS mouse driver (KairoX86#44): the program's next "get the
+	 * position and buttons" call (INT 33h AX=03h) sets the driver's pointer to picture point (x, y)
+	 * instead, as the driver's own "set the position" (AX=04h). mouse_placing: whether that call is
+	 * still to come. */
+	void (*mouse_place)(int x, int y);
+	bool (*mouse_placing)(void);
+	/* Whether the mouse still has motion the guest's mouse has not reported. */
+	bool (*mouse_moving)(void);
 	/* One of the joystick model's inputs (KAIRO_X86_JOYSTICK_*): an axis, -KAIRO_X86_AXIS_MAX to
 	 * KAIRO_X86_AXIS_MAX, or a button. */
 	void (*joystick_axis)(int axis, int value);

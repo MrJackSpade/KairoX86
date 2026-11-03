@@ -61,6 +61,10 @@ It runs a fresh copy of the folder each time (86Box writes the CMOS and `86box.c
 
 `python core/test/input/make_auto.py <folder>` writes three machines standing in for games, one for each way a game reads its input: `auto-wait` gets keys through the BIOS (`core/test/input/keys.S`), `auto-poll` checks for a key over and over, and `auto-mouse` asks the mouse driver for the mouse on every pass (`mouse.S` with `INT33`). `game_profile`'s `input` line must show waits and "waiting 1", polls and "waiting 0", and mouse reads with nothing waiting (KairoX86#43).
 
+### The direct touch test
+
+`python core/test/input/make_place.py <folder>` writes three machines booting a floppy (`core/test/input/place.S`) that is a DOS mouse game with its own simplest mouse driver, and shows the position the driver gives: 80x25 text with the driver's default span, the same with the game setting the span, and mode 13h. `game_profile --place 960:<x>:<y>` asks for the pointer on a picture point, and the shot after must show that point in the driver's coordinates (the expected values are in the script's help) (KairoX86#44).
+
 ### Stop tests
 
 `python core/test/stops/make_floppies.py <folder>` writes one machine folder for each way a PC stops (KairoX86#34), each booting a floppy whose boot sector (`core/test/stops/boot.S`) stops it that way, and prints the machine list that expects each stop:

@@ -19,6 +19,8 @@ object X86Catalog : LayeredGameCatalog.Schema {
     /** The PC's Esc, and its Enter and keypad Enter. */
     override val escapeKeys = setOf(PcKey.ESCAPE.scanCode)
     override val enterKeys = setOf(PcKey.ENTER.scanCode, PcKey.PAD_ENTER.scanCode)
+    /** The pointer goes where the screen is touched: through the DOS mouse driver, else by motion (x86_core.cpp). */
+    override val directTouch = true
     override val mediaExtensions = Regex("\\.(?:cfg|img|ima|imd|td0|86f|mfm|vfd|flp|dsk|xdf|hdm|fdi|hdi|hdx|vhd" +
         "|iso|cue|bin|mds|mdf|ccd|chd)$", RegexOption.IGNORE_CASE)
 

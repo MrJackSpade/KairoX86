@@ -64,6 +64,12 @@ uint32_t X86Machine::read_audio(int16_t *stereo, uint32_t max_frames) {
 void X86Machine::key(int scancode, bool down) { impl_->api->key(scancode, down); }
 void X86Machine::mouse_move(int dx, int dy) { impl_->api->mouse_move(dx, dy); }
 
+void X86Machine::mouse_place(int x, int y) { impl_->api->mouse_place(x, y); }
+
+bool X86Machine::mouse_placing() const { return impl_->api->mouse_placing(); }
+
+bool X86Machine::mouse_moving() const { return impl_->api->mouse_moving(); }
+
 void X86Machine::mouse_button(int button, bool down) {
     if (button < 1 || button > 3) return;
     const int bit = 1 << (button - 1);
@@ -79,7 +85,7 @@ bool X86Machine::loading() const { return impl_->api->loading(); }
 X86Machine::GuestInput X86Machine::guest_input() const {
     KairoX86GuestInput input{};
     impl_->api->guest_input(&input);
-    return {input.keyboard_waits, input.keyboard_polls, input.mouse_reads, input.keyboard_waiting};
+    return {input.keyboard_waits, input.keyboard_polls, input.mouse_reads, input.position_reads, input.keyboard_waiting};
 }
 
 bool X86Machine::media(int slot, const std::string &path) { return impl_->api->media(slot, path.c_str()) == 0; }

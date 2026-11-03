@@ -35,6 +35,8 @@ class MainActivity : MachineActivity<X86Entry>() {
         UiText.res(FrontendR.string.kairo_saves_group), "MrJackSpade/KairoX86")
     // A VGA screen; mouse motion is counted in the picture's pixels (core/kairo/kairo_x86.h).
     override val machine = Machine(640, 480, 4.0 / 3.0, "state.86s")
+    // Direct tap through the DOS mouse driver, else by motion from the corner (x86_core.cpp, KairoX86#44).
+    override val directTouchExplanation = UiText.res(R.string.direct_touch_explanation)
     // 86Box keeps no save states the frontend can take yet: the machine's own disks and CMOS keep its saves.
     override val saveStates = false
     override val bridge by lazy { NativeMachine("kairox86", X86Keys.locks) }

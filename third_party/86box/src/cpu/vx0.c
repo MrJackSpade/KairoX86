@@ -3647,7 +3647,7 @@ execute_instruction(void)
         case 0xcd: /* INT imm8 */
             /* read_operand8() */
             temp = biu_pfq_fetchb();
-            kairo_observe_int(temp, AX, cpu_state.seg_cs.base); /* KairoX86#43 */
+            kairo_observe_int(temp, &AX, &BX, &CX, &DX, cpu_state.seg_cs.base); /* KairoX86#43 */
             do_cycle_i();
             sw_int(temp);
             jump = 1;

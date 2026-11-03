@@ -38,7 +38,7 @@ opINT(uint32_t fetchdat)
     int cycles_old = cycles;
     UN_USED(cycles_old);
     uint8_t temp = getbytef();
-    kairo_observe_int(temp, AX, cpu_state.seg_cs.base); /* KairoX86#43 */
+    kairo_observe_int(temp, &AX, &BX, &CX, &DX, cpu_state.seg_cs.base); /* KairoX86#43 */
 
     if ((cr0 & 1) && (cpu_state.eflags & VM_FLAG) && (IOPL != 3)) {
         if (cr4 & CR4_VME) {
