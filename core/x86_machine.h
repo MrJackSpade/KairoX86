@@ -46,6 +46,13 @@ public:
 
     // A key by its scan code: set 1, with 0x100 added for the keys sent after an E0 prefix.
     void key(int scancode, bool down);
+    // Startup commands (KairoX86#46): whether the guest waits for a command line, a DOS line input
+    // asked for since the host last pressed a key; the key (set 1) that types c on a US keyboard, and
+    // whether Shift goes with it (false for a character it has none for); and a special key's code.
+    bool waits_for_line() const;
+    static bool typed_key(char c, int &code, bool &shift);
+    enum class Special { Return, Shift, Ctrl, F1, F2, F3, F4, F5 };
+    static int special_key(Special key);
     // The mouse: motion in the picture's pixels, and button 1 (left), 2 (right) or 3 (middle).
     void mouse_move(int dx, int dy);
     void mouse_button(int button, bool down);

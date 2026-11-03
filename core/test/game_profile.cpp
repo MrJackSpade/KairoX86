@@ -30,6 +30,8 @@
 //   --place <frame>:<x>:<y>  before that frame, ask the guest's DOS mouse driver to put the pointer on
 //                   picture point (x, y) at the program's next position read (KairoX86#44); may be
 //                   given more than once. Prints "placed <frame>" once the program has read it.
+//   --commands <lines>  startup commands, "|" between lines, typed at the guest's DOS prompt by the
+//                   shared startup typer (KairoX86#46). Prints "typed <frame>" once they all are.
 //
 // Prints one line starting "start ": how long the machine took to start; and one starting "host ":
 // the frames per second the host reached, the guest's rate and the frame time distribution. At the
@@ -46,6 +48,7 @@
 #include <string>
 #include <vector>
 
+#include "kairo/startup_typer.h"
 #include "x86_machine.h"
 
 namespace fs = std::filesystem;
@@ -62,6 +65,24 @@ int fail(const std::string &message) {
     std::fprintf(stderr, "FAIL: %s\n", message.c_str());
     return 1;
 }
+
+// The machine as the startup typer drives it (startup_typer.h), as x86_core.cpp gives it in the app.
+struct Typed {
+    kairox86::X86Machine &machine;
+    kairo::Prompt prompt() { return machine.waits_for_line() ? kairo::Prompt::Line : kairo::Prompt::None; }
+    bool typed_key(char c, int &code, bool &shift) { return kairox86::X86Machine::typed_key(c, code, shift); }
+    int special_key(kairo::SpecialKey key) {
+        using Special = kairox86::X86Machine::Special;
+        switch (key) {
+        case kairo::SpecialKey::Return: return kairox86::X86Machine::special_key(Special::Return);
+        case kairo::SpecialKey::Shift: return kairox86::X86Machine::special_key(Special::Shift);
+        case kairo::SpecialKey::Ctrl: return kairox86::X86Machine::special_key(Special::Ctrl);
+        default: return -1;
+        }
+    }
+    bool expand_command(std::string &) { return true; }
+    void key(int code, bool down) { machine.key(code, down); }
+};
 
 struct MediaEvent {
     long frame;
@@ -151,6 +172,7 @@ int main(int argc, char **argv) {
     std::string hashes_path;
     std::vector<MediaEvent> media;
     std::vector<std::array<long, 3>> places;
+    std::string commands;
     for (int i = 6; i < argc; ++i) {
         const std::string option = argv[i];
         if (i + 1 >= argc) return fail(option + " needs a value");
@@ -165,6 +187,10 @@ int main(int argc, char **argv) {
             if (second == std::string::npos) return fail("--media is <frame>:<slot>:<path>, not " + value);
             media.push_back({std::atol(value.substr(0, first).c_str()), std::atoi(value.substr(first + 1, second - first - 1).c_str()),
                              value.substr(second + 1)});
+        }
+        else if (option == "--commands") {
+            commands = value;
+            std::replace(commands.begin(), commands.end(), '|', '\n');
         }
         else if (option == "--place") {
             std::array<long, 3> place{};
@@ -204,6 +230,10 @@ int main(int argc, char **argv) {
         times.reserve(size_t(frames));
         long loading = 0, last_loading = -1;
         bool placing = false;
+        kairo::StartupTyper typer;
+        typer.start(commands);
+        Typed typed{*machine};
+        bool typing = !commands.empty();
         for (long frame = 0; frame < warmup + frames; ++frame) {
             for (const MediaEvent &change : media) {
                 if (change.frame != frame) continue;
@@ -211,6 +241,11 @@ int main(int argc, char **argv) {
                 const std::string path = plain ? utf8(folder / change.path) : change.path;
                 if (!machine->media(change.slot, path))
                     return fail("could not put \"" + path + "\" in slot " + std::to_string(change.slot));
+            }
+            if (!typer.frame(typed, error)) return fail("startup commands: " + error);
+            if (typing && !typer.active()) {
+                std::printf("typed %ld\n", frame);
+                typing = false;
             }
             if (placing && !machine->mouse_placing()) {
                 std::printf("placed %ld\n", frame);

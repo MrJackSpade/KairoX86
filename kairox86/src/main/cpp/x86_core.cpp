@@ -127,6 +127,23 @@ public:
     }
     bool mouse_warp_done() override { return placing_ ? !machine_->mouse_placing() : relative_.done(); }
     void mouse_button(int button, bool down) override { machine_->mouse_button(button, down); }
+    // Startup commands (KairoX86#46): typed when DOS asks for a line from the keyboard, as its command
+    // shell does at the prompt, on a US keyboard.
+    kairo::Prompt prompt() override { return machine_->waits_for_line() ? kairo::Prompt::Line : kairo::Prompt::None; }
+    bool typed_key(char c, int &code, bool &shift) override { return X86Machine::typed_key(c, code, shift); }
+    int special_key(kairo::SpecialKey key) override {
+        switch (key) {
+        case kairo::SpecialKey::Return: return X86Machine::special_key(X86Machine::Special::Return);
+        case kairo::SpecialKey::Shift: return X86Machine::special_key(X86Machine::Special::Shift);
+        case kairo::SpecialKey::Ctrl: return X86Machine::special_key(X86Machine::Special::Ctrl);
+        case kairo::SpecialKey::F1: return X86Machine::special_key(X86Machine::Special::F1);
+        case kairo::SpecialKey::F2: return X86Machine::special_key(X86Machine::Special::F2);
+        case kairo::SpecialKey::F3: return X86Machine::special_key(X86Machine::Special::F3);
+        case kairo::SpecialKey::F4: return X86Machine::special_key(X86Machine::Special::F4);
+        case kairo::SpecialKey::F5: return X86Machine::special_key(X86Machine::Special::F5);
+        }
+        return -1;
+    }
     void reset() override { machine_->reset(); }
 
     // The machine's CMOS goes back to its folder's nvr/ as it ends (MainActivity writes it back).

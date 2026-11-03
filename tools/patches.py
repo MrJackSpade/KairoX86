@@ -1409,30 +1409,30 @@ KAIROX86_GUEST_INPUT = [
     ('86box/src/cpu/cpu.h',
      'extern void x86_int_sw(int num);' + _NL,
      'extern void x86_int_sw(int num);' + _NL
-     + '/* KairoX86#43, #44: the guest runs INT num from code at linear code_base; the frontend may change' + _NL
+     + '/* KairoX86#43, #44, #46: the guest runs INT num from code at linear code_base, with DS at data_base; the frontend may change' + _NL
      + '   the call through its registers (core/kairo/frontend.c). */' + _NL
-     + 'extern void kairo_observe_int(uint8_t num, uint16_t *ax, uint16_t *bx, uint16_t *cx, uint16_t *dx, uint32_t code_base);' + _NL),
+     + 'extern void kairo_observe_int(uint8_t num, uint16_t *ax, uint16_t *bx, uint16_t *cx, uint16_t *dx, uint32_t code_base, uint32_t data_base);' + _NL),
     ('86box/src/cpu/x86_ops_int.h',
      '    uint8_t temp = getbytef();' + _NL,
      '    uint8_t temp = getbytef();' + _NL
-     + '    kairo_observe_int(temp, &AX, &BX, &CX, &DX, cpu_state.seg_cs.base); /* KairoX86#43 */' + _NL),
+     + '    kairo_observe_int(temp, &AX, &BX, &CX, &DX, cpu_state.seg_cs.base, cpu_state.seg_ds.base); /* KairoX86#43 */' + _NL),
     ('86box/src/cpu/808x.c',
      '                interrupt(pfq_fetchb());' + _NL,
      '                temp = pfq_fetchb();' + _NL
-     + '                kairo_observe_int(temp, &AX, &BX, &CX, &DX, cpu_state.seg_cs.base); /* KairoX86#43 */' + _NL
+     + '                kairo_observe_int(temp, &AX, &BX, &CX, &DX, cpu_state.seg_cs.base, cpu_state.seg_ds.base); /* KairoX86#43 */' + _NL
      + '                interrupt(temp);' + _NL),
     ('86box/src/cpu/808x_marty_86box.c',
      '            const uint8_t vector = queue_read(icpu, false);' + _NL
      + '            software_interrupt(icpu, vector);' + _NL,
      '            const uint8_t vector = queue_read(icpu, false);' + _NL
-     + '            kairo_observe_int(vector, &AX, &BX, &CX, &DX, (uint32_t) icpu->segs[SEG_CS] << 4); /* KairoX86#43 */' + _NL
+     + '            kairo_observe_int(vector, &AX, &BX, &CX, &DX, (uint32_t) icpu->segs[SEG_CS] << 4, (uint32_t) icpu->segs[SEG_DS] << 4); /* KairoX86#43 */' + _NL
      + '            software_interrupt(icpu, vector);' + _NL),
     ('86box/src/cpu/vx0.c',
      '            temp = biu_pfq_fetchb();' + _NL
      + '            do_cycle_i();' + _NL
      + '            sw_int(temp);' + _NL,
      '            temp = biu_pfq_fetchb();' + _NL
-     + '            kairo_observe_int(temp, &AX, &BX, &CX, &DX, cpu_state.seg_cs.base); /* KairoX86#43 */' + _NL
+     + '            kairo_observe_int(temp, &AX, &BX, &CX, &DX, cpu_state.seg_cs.base, cpu_state.seg_ds.base); /* KairoX86#43 */' + _NL
      + '            do_cycle_i();' + _NL
      + '            sw_int(temp);' + _NL),
 ]

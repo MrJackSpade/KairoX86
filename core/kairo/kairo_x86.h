@@ -103,6 +103,9 @@ struct KairoX86Api {
 	bool (*mouse_placing)(void);
 	/* Whether the mouse still has motion the guest's mouse has not reported. */
 	bool (*mouse_moving)(void);
+	/* How many times DOS has been asked for keyboard input while the console line it last wrote read
+	 * as a DOS prompt (X:\...>): a command shell asking for its command (KairoX86#46). */
+	uint64_t (*line_inputs)(void);
 	/* One of the joystick model's inputs (KAIRO_X86_JOYSTICK_*): an axis, -KAIRO_X86_AXIS_MAX to
 	 * KAIRO_X86_AXIS_MAX, or a button. */
 	void (*joystick_axis)(int axis, int value);

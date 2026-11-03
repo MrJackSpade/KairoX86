@@ -13,6 +13,8 @@ struct X86Machine::Impl {
     // What 86Box reported through the host: the reason a fatal error stopped it.
     std::string fatal;
     int buttons = 0;
+    // DOS's line inputs when the host last pressed a key (waits_for_line).
+    uint64_t line_inputs_at_key = 0;
     bool closed = false;
 
     static void on_fatal(void *context, const char *message) {
@@ -61,7 +63,53 @@ uint32_t X86Machine::read_audio(int16_t *stereo, uint32_t max_frames) {
     return impl_->api->read_audio(stereo, max_frames);
 }
 
-void X86Machine::key(int scancode, bool down) { impl_->api->key(scancode, down); }
+void X86Machine::key(int scancode, bool down) {
+    if (down) impl_->line_inputs_at_key = impl_->api->line_inputs();
+    impl_->api->key(scancode, down);
+}
+
+bool X86Machine::waits_for_line() const { return impl_->api->line_inputs() > impl_->line_inputs_at_key; }
+
+bool X86Machine::typed_key(char c, int &code, bool &shift) {
+    // A US keyboard's printable characters: each key's character, then with Shift (set 1 scan codes).
+    struct Key {
+        char plain, shifted;
+        int code;
+    };
+    static constexpr Key kKeys[] = {
+        {'1', '!', 0x02}, {'2', '@', 0x03}, {'3', '#', 0x04}, {'4', '$', 0x05}, {'5', '%', 0x06},
+        {'6', '^', 0x07}, {'7', '&', 0x08}, {'8', '*', 0x09}, {'9', '(', 0x0a}, {'0', ')', 0x0b},
+        {'-', '_', 0x0c}, {'=', '+', 0x0d}, {'q', 'Q', 0x10}, {'w', 'W', 0x11}, {'e', 'E', 0x12},
+        {'r', 'R', 0x13}, {'t', 'T', 0x14}, {'y', 'Y', 0x15}, {'u', 'U', 0x16}, {'i', 'I', 0x17},
+        {'o', 'O', 0x18}, {'p', 'P', 0x19}, {'[', '{', 0x1a}, {']', '}', 0x1b}, {'a', 'A', 0x1e},
+        {'s', 'S', 0x1f}, {'d', 'D', 0x20}, {'f', 'F', 0x21}, {'g', 'G', 0x22}, {'h', 'H', 0x23},
+        {'j', 'J', 0x24}, {'k', 'K', 0x25}, {'l', 'L', 0x26}, {';', ':', 0x27}, {'\'', '"', 0x28},
+        {'`', '~', 0x29}, {'\\', '|', 0x2b}, {'z', 'Z', 0x2c}, {'x', 'X', 0x2d}, {'c', 'C', 0x2e},
+        {'v', 'V', 0x2f}, {'b', 'B', 0x30}, {'n', 'N', 0x31}, {'m', 'M', 0x32}, {',', '<', 0x33},
+        {'.', '>', 0x34}, {'/', '?', 0x35}, {' ', ' ', 0x39},
+    };
+    for (const Key &key : kKeys) {
+        if (c != key.plain && c != key.shifted) continue;
+        code = key.code;
+        shift = c != key.plain;
+        return true;
+    }
+    return false;
+}
+
+int X86Machine::special_key(Special key) {
+    switch (key) {
+    case Special::Return: return 0x1c;
+    case Special::Shift: return 0x2a;
+    case Special::Ctrl: return 0x1d;
+    case Special::F1: return 0x3b;
+    case Special::F2: return 0x3c;
+    case Special::F3: return 0x3d;
+    case Special::F4: return 0x3e;
+    case Special::F5: return 0x3f;
+    }
+    return -1;
+}
 void X86Machine::mouse_move(int dx, int dy) { impl_->api->mouse_move(dx, dy); }
 
 void X86Machine::mouse_place(int x, int y) { impl_->api->mouse_place(x, y); }

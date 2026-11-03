@@ -65,6 +65,10 @@ It runs a fresh copy of the folder each time (86Box writes the CMOS and `86box.c
 
 `python core/test/input/make_place.py <folder>` writes three machines booting a floppy (`core/test/input/place.S`) that is a DOS mouse game with its own simplest mouse driver, and shows the position the driver gives: 80x25 text with the driver's default span, the same with the game setting the span, and mode 13h. `game_profile --place 960:<x>:<y>` asks for the pointer on a picture point, and the shot after must show that point in the driver's coordinates (the expected values are in the script's help) (KairoX86#44).
 
+### The startup commands test
+
+`python core/test/dos/make_dos.py <FreeDOS 1.3 floppy x86BOOT.img> <folder>` writes a machine booting a copy of the FreeDOS floppy rewritten to go straight to FreeCOM's `A:\>` prompt. `game_profile ... --commands "ECHO KAIRO X86|ECHO SECOND LINE"` types the lines at the prompt with the shared startup typer, each once the last has run, and prints `typed <frame>` (KairoX86#46). The prompt is DOS asked for keyboard input while the console line it last wrote reads `X:\...>`, so a program waiting for a key elsewhere gets nothing typed.
+
 ### Stop tests
 
 `python core/test/stops/make_floppies.py <folder>` writes one machine folder for each way a PC stops (KairoX86#34), each booting a floppy whose boot sector (`core/test/stops/boot.S`) stops it that way, and prints the machine list that expects each stop:

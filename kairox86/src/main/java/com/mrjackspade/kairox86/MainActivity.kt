@@ -12,6 +12,7 @@ import com.mrjackspade.kairo.frontend.LibraryStrings
 import com.mrjackspade.kairo.frontend.MachineActivity
 import com.mrjackspade.kairo.frontend.MachineFirstRun
 import com.mrjackspade.kairo.frontend.MachineLibrary
+import com.mrjackspade.kairo.frontend.StartupCommands
 import com.mrjackspade.kairox86.X86Library.DiskKind
 import com.mrjackspade.kairo.frontend.NativeMachine
 import com.mrjackspade.kairo.frontend.ScanDepth
@@ -118,9 +119,11 @@ class MainActivity : MachineActivity<X86Entry>() {
         installFreeFirmware(progress)
         val prepared = machines.prepare(entry, tree, cancelled)
         session = prepared
-        // The core's media (x86_core.cpp): the machine folder 86Box runs.
+        // The core's media (x86_core.cpp): the machine folder 86Box runs; its startup commands typed at
+        // the DOS prompt (KairoX86#46).
+        val settings = mapOf(StartupCommands.setting(X86Catalog.startupCommands.value(game, emptyMap())))
         check(bridge.start(firmwareFolder.absolutePath, prepared.dir.absolutePath, listOf(prepared.dir.absolutePath),
-            emptyMap())) { "Another machine is still running" }
+            settings)) { "Another machine is still running" }
         awaitRunning()
         // What the machine's drives hold, from its 86box.cfg, as the Disks page shows it.
         mediaStarted(bridge.mediaPaths().orEmpty().map { path -> path.takeIf { it.isNotEmpty() }?.let(prepared::diskAt) })

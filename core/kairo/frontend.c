@@ -532,6 +532,96 @@ static atomic_uint_fast64_t keyboard_polls;
 static atomic_uint_fast64_t mouse_reads;
 static atomic_uint_fast64_t position_reads; /* of them, the position and buttons (AX=03h) */
 static atomic_bool          keyboard_wait; /* the last wait has not returned to its program yet */
+/* DOS's command prompt (KairoX86#46): the console line the guest wrote through DOS since its last
+   line break, and how many times DOS was asked for keyboard input while that line read as a DOS
+   prompt (a drive, ":\" and a path, ending in ">", as PROMPT $P$G shows). A command shell asks for
+   its command there: MS-DOS's COMMAND.COM by buffered input (INT 21h AH=0Ah), FreeDOS's FreeCOM a key
+   at a time (AH=07h), each echoed key leaving the prompt behind. */
+static atomic_uint_fast64_t line_inputs;
+#define CONSOLE_LINE 160
+static char console_line[CONSOLE_LINE];
+static int  console_length;
+/* The most a DOS write is read of, and conventional memory, where DOS programs keep what they write. */
+#define CONSOLE_WRITE   512
+#define CONVENTIONAL_END 0xa0000
+
+static void
+console_put(char c)
+{
+    if ((c == '\r') || (c == '\n')) {
+        console_length = 0;
+        return;
+    }
+    if (c == '\b') {
+        if (console_length > 0)
+            console_length--;
+        return;
+    }
+    if (console_length == CONSOLE_LINE) {
+        memmove(console_line, console_line + 1, CONSOLE_LINE - 1);
+        console_length--;
+    }
+    console_line[console_length++] = c;
+}
+
+/* Whether the console line reads as a DOS prompt: X:\...> */
+static bool
+console_prompt(void)
+{
+    if ((console_length < 4) || (console_line[console_length - 1] != '>'))
+        return false;
+    for (int at = 0; at + 2 < console_length - 1; at++) {
+        const char drive = console_line[at];
+        if ((((drive >= 'A') && (drive <= 'Z')) || ((drive >= 'a') && (drive <= 'z'))) && (console_line[at + 1] == ':')
+            && (console_line[at + 2] == '\\'))
+            return true;
+    }
+    return false;
+}
+
+/* Writes count bytes at linear address (DOS's DS:DX) to the console line, up to stop when it is not -1. */
+static void
+console_write(uint32_t address, int count, int stop)
+{
+    for (int i = 0; (i < count) && (i < CONSOLE_WRITE) && ((address + i) < CONVENTIONAL_END); i++) {
+        const char c = (char) mem_readb_phys(address + i);
+        if (c == stop)
+            return;
+        console_put(c);
+    }
+}
+
+/* An INT 21h call: what it writes to the console, and a keyboard read at a prompt. */
+static void
+console_call(uint8_t ah, uint16_t bx, uint16_t cx, uint16_t dx, uint32_t data_base)
+{
+    switch (ah) {
+        case 0x02: /* a character */
+            console_put((char) dx);
+            break;
+        case 0x06: /* direct console output, unless DL=FFh (input) */
+            if ((dx & 0xff) != 0xff)
+                console_put((char) dx);
+            break;
+        case 0x09: /* a string ending in $ */
+            console_write(data_base + dx, CONSOLE_WRITE, '$');
+            break;
+        case 0x40: /* a write to standard output or standard error */
+            if ((bx == 1) || (bx == 2))
+                console_write(data_base + dx, cx, -1);
+            break;
+        case 0x01: case 0x07: case 0x08: case 0x0a: case 0x0c: /* keyboard input */
+            if (console_prompt())
+                atomic_fetch_add_explicit(&line_inputs, 1, memory_order_relaxed);
+            break;
+        case 0x3f: /* a read of standard input */
+            if ((bx == 0) && console_prompt())
+                atomic_fetch_add_explicit(&line_inputs, 1, memory_order_relaxed);
+            break;
+        default:
+            break;
+    }
+}
 
 #define BDA_VIDEO_MODE    0x449
 #define BDA_COLUMNS       0x44a
@@ -599,10 +689,11 @@ driver_coordinate(int value, int size, bool set, int min, int max, bool across)
     return (uint16_t) coordinate;
 }
 
-/* Every INT n the guest runs, from code at linear code_base (the processors' INT decoders,
-   kairox86-guest-input); the registers are the call's, which a place may change. */
+/* Every INT n the guest runs, from code at linear code_base with DS at data_base (the processors' INT
+   decoders, kairox86-guest-input); the registers are the call's, which a place may change. */
 void
-kairo_observe_int(uint8_t num, uint16_t *ax, uint16_t *bx, uint16_t *cx, uint16_t *dx, uint32_t code_base)
+kairo_observe_int(uint8_t num, uint16_t *ax, uint16_t *bx, uint16_t *cx, uint16_t *dx, uint32_t code_base,
+                  uint32_t data_base)
 {
     const uint8_t ah = *ax >> 8;
 
@@ -615,7 +706,9 @@ kairo_observe_int(uint8_t num, uint16_t *ax, uint16_t *bx, uint16_t *cx, uint16_
             atomic_store(&keyboard_wait, true);
         } else if ((ah == 0x01) || (ah == 0x11))
             atomic_fetch_add_explicit(&keyboard_polls, 1, memory_order_relaxed); /* check for a keystroke */
-    } else if ((num == 0x10) && (ah == 0x00))
+    } else if (num == 0x21)
+        console_call(ah, *bx, *cx, *dx, data_base);
+    else if ((num == 0x10) && (ah == 0x00))
         /* A video mode set: the driver goes back to the mode's span. */
         range_x_set = range_y_set = false;
     else if (num == 0x33) {
@@ -722,6 +815,12 @@ api_mouse_place(int x, int y)
     atomic_store(&place_width, picture_width);
     atomic_store(&place_height, picture_height);
     atomic_store(&placing, true);
+}
+
+static uint64_t
+api_line_inputs(void)
+{
+    return atomic_load(&line_inputs);
 }
 
 static bool
@@ -965,6 +1064,7 @@ static const struct KairoX86Api api = {
     .mouse_place     = api_mouse_place,
     .mouse_placing   = api_mouse_placing,
     .mouse_moving    = api_mouse_moving,
+    .line_inputs     = api_line_inputs,
     .joystick_axis   = api_joystick_axis,
     .joystick_button = api_joystick_button,
     .locks           = api_locks,
