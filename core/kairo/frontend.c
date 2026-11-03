@@ -251,6 +251,11 @@ blit(int x, int y, int w, int h, int monitor_index)
             w = target->w - x;
         if ((y + h) > target->h)
             h = target->h - y;
+        /* The machine's own pixels (KairoX86#37): one of each pixel and line the card drew twice. */
+        const int across = (monitors[monitor_index].mon_kairo_x_div > 1) ? monitors[monitor_index].mon_kairo_x_div : 1;
+        const int down   = (monitors[monitor_index].mon_kairo_y_div > 1) ? monitors[monitor_index].mon_kairo_y_div : 1;
+        w /= across;
+        h /= down;
         pthread_mutex_lock(&picture_lock);
         bool room = true;
         if ((w * h) > picture_alloc) {
@@ -265,8 +270,35 @@ blit(int x, int y, int w, int h, int monitor_index)
             }
         }
         if (room) {
-            for (int row = 0; row < h; row++)
-                memcpy(&picture[row * w], &target->line[y + row][x], (size_t) w * sizeof(uint32_t));
+#ifdef KAIROX86_CHECK_NATIVE_SIZE
+            /* A test build (KairoX86#37): every line's pixels come in runs of [across] alike, whatever the
+               runs' phase, so keeping one of each loses nothing; a frame where they do not is reported. */
+            if (across > 1) {
+                static unsigned frames_checked;
+                frames_checked++;
+                for (int row = 0; row < (h * down); row++) {
+                    const uint32_t *line = &target->line[y + row][x];
+                    bool            alike[2] = { true, true };
+                    for (int phase = 0; phase < 2; phase++)
+                        for (int column = phase; (column + 1) < (w * across); column += across)
+                            if (line[column] != line[column + 1])
+                                alike[phase] = false;
+                    if (!alike[0] && !alike[1]) {
+                        fprintf(stderr, "KAIROX86_CHECK_NATIVE_SIZE: frame %u, line %d of %dx%d: pixels not in pairs\n",
+                                frames_checked, row, w * across, h * down);
+                        break;
+                    }
+                }
+            }
+#endif
+            for (int row = 0; room && (row < h); row++) {
+                const uint32_t *line = &target->line[y + (row * down)][x];
+                if (across == 1)
+                    memcpy(&picture[row * w], line, (size_t) w * sizeof(uint32_t));
+                else
+                    for (int column = 0; column < w; column++)
+                        picture[(row * w) + column] = line[column * across];
+            }
             picture_width  = w;
             picture_height = h;
         }

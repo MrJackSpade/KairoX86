@@ -2397,6 +2397,18 @@ svga_doblit(int wx, int wy, svga_t *svga)
         }
     }
 
+    /* KairoX86#37: the renderers that draw each pixel twice across, unless a cursor, overlay or
+       accelerator draws over them at full width this frame, or the frame began with another renderer
+       (a mode set during it: the same renderer must have ended the last frame too). */
+    svga->monitor->mon_kairo_x_div = (!svga->override && (svga->monitor->mon_kairo_render == (uintptr_t) svga->render) && !svga->hwcursor_on && !svga->dac_hwcursor_on && !svga->overlay_on
+                                      && ((svga->render == svga_render_text_40) || (svga->render == svga_render_2bpp_lowres)
+                                          || (svga->render == svga_render_4bpp_lowres) || (svga->render == svga_render_8bpp_lowres)
+                                          || (svga->render == svga_render_15bpp_lowres) || (svga->render == svga_render_15bpp_mix_lowres)
+                                          || (svga->render == svga_render_16bpp_lowres) || (svga->render == svga_render_24bpp_lowres)
+                                          || (svga->render == svga_render_32bpp_lowres)
+                                          || (svga->render == svga_render_2bpp_s3_lowres) || (svga->render == svga_render_8bpp_tseng_lowres))) ? 2 : 1;
+    svga->monitor->mon_kairo_y_div = 1;
+    svga->monitor->mon_kairo_render = (uintptr_t) svga->render;
     video_blit_memtoscreen_monitor(x_start, y_start, svga->monitor->mon_xsize + x_add, svga->monitor->mon_ysize + y_add, svga->monitor_index);
 
     if (svga->vertical_linedbl)

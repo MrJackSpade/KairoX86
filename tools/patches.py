@@ -1437,6 +1437,48 @@ KAIROX86_GUEST_INPUT = [
      + '            sw_int(temp);' + _NL),
 ]
 
+# KairoX86#37: the core hands the host the machine's own pixels: a card that draws each pixel twice
+# across (VGA's 320-wide and 40-column modes, CGA's) or each line twice (CGA's line doubling for a
+# 400-line window) says so on its monitor, and the frontend keeps one of each.
+KAIROX86_NATIVE_SIZE = [
+    ('86box/src/include/86box/video.h',
+     '    int                      mon_bpp;' + _NL,
+     '    int                      mon_bpp;' + _NL
+     + '    /* KairoX86#37: the last frame repeats each pixel this many times across, and each line this' + _NL
+     + '       many times down (0 or 1: once); the frontend keeps one of each. */' + _NL
+     + '    int                      mon_kairo_x_div;' + _NL
+     + '    int                      mon_kairo_y_div;' + _NL
+     + '    uintptr_t                mon_kairo_render; /* the renderer at the end of the last frame (vid_svga.c) */' + _NL),
+    ('86box/src/video/vid_svga.c',
+     '    video_blit_memtoscreen_monitor(x_start, y_start, svga->monitor->mon_xsize + x_add, svga->monitor->mon_ysize + y_add, svga->monitor_index);' + _NL
+     + _NL
+     + '    if (svga->vertical_linedbl)' + _NL,
+     '    /* KairoX86#37: the renderers that draw each pixel twice across, unless a cursor, overlay or' + _NL
+     + '       accelerator draws over them at full width this frame, or the frame began with another renderer' + _NL
+     + '       (a mode set during it: the same renderer must have ended the last frame too). */' + _NL
+     + '    svga->monitor->mon_kairo_x_div = (!svga->override && (svga->monitor->mon_kairo_render == (uintptr_t) svga->render) && !svga->hwcursor_on && !svga->dac_hwcursor_on && !svga->overlay_on' + _NL
+     + '                                      && ((svga->render == svga_render_text_40) || (svga->render == svga_render_2bpp_lowres)' + _NL
+     + '                                          || (svga->render == svga_render_4bpp_lowres) || (svga->render == svga_render_8bpp_lowres)' + _NL
+     + '                                          || (svga->render == svga_render_15bpp_lowres) || (svga->render == svga_render_15bpp_mix_lowres)' + _NL
+     + '                                          || (svga->render == svga_render_16bpp_lowres) || (svga->render == svga_render_24bpp_lowres)' + _NL
+     + '                                          || (svga->render == svga_render_32bpp_lowres)' + _NL
+     + '                                          || (svga->render == svga_render_2bpp_s3_lowres) || (svga->render == svga_render_8bpp_tseng_lowres))) ? 2 : 1;' + _NL
+     + '    svga->monitor->mon_kairo_y_div = 1;' + _NL
+     + '    svga->monitor->mon_kairo_render = (uintptr_t) svga->render;' + _NL
+     + '    video_blit_memtoscreen_monitor(x_start, y_start, svga->monitor->mon_xsize + x_add, svga->monitor->mon_ysize + y_add, svga->monitor_index);' + _NL
+     + _NL
+     + '    if (svga->vertical_linedbl)' + _NL),
+    ('86box/src/video/vid_cga.c',
+     '                        cga_do_blit(xsize, cga->firstline, cga->lastline, cga->double_type);' + _NL,
+     '                        /* KairoX86#37: 40-column text and the 320-wide graphics draw each pixel twice across' + _NL
+     + '                           (composite colour is worked out per dot, so it stays whole), and line doubling draws' + _NL
+     + '                           each line twice, the second interpolated or not: the even lines are the card\'s. */' + _NL
+     + '                        monitors[monitor_index_global].mon_kairo_x_div = (!cga->composite && (!(cga->cgamode & CGA_MODE_FLAG_GRAPHICS)' + _NL
+     + '                            ? !(cga->cgamode & CGA_MODE_FLAG_HIGHRES) : !(cga->cgamode & CGA_MODE_FLAG_HIGHRES_GRAPHICS))) ? 2 : 1;' + _NL
+     + '                        monitors[monitor_index_global].mon_kairo_y_div = (cga->double_type > DOUBLE_NONE) ? 2 : 1;' + _NL
+     + '                        cga_do_blit(xsize, cga->firstline, cga->lastline, cga->double_type);' + _NL),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -1451,6 +1493,7 @@ PATCHES = {
     'kairox86-sync-render': KAIROX86_SYNC_RENDER,
     'kairox86-raster': KAIROX86_RASTER,
     'kairox86-guest-input': KAIROX86_GUEST_INPUT,
+    'kairox86-native-size': KAIROX86_NATIVE_SIZE,
 }
 
 ADDED = [

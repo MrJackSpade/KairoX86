@@ -927,6 +927,12 @@ cga_poll(void *priv)
                                 video_force_resize_set(0);
                         }
 
+                        /* KairoX86#37: 40-column text and the 320-wide graphics draw each pixel twice across
+                           (composite colour is worked out per dot, so it stays whole), and line doubling draws
+                           each line twice, the second interpolated or not: the even lines are the card's. */
+                        monitors[monitor_index_global].mon_kairo_x_div = (!cga->composite && (!(cga->cgamode & CGA_MODE_FLAG_GRAPHICS)
+                            ? !(cga->cgamode & CGA_MODE_FLAG_HIGHRES) : !(cga->cgamode & CGA_MODE_FLAG_HIGHRES_GRAPHICS))) ? 2 : 1;
+                        monitors[monitor_index_global].mon_kairo_y_div = (cga->double_type > DOUBLE_NONE) ? 2 : 1;
                         cga_do_blit(xsize, cga->firstline, cga->lastline, cga->double_type);
 
                         // The palette conversion has been performed, sample the lightpen position now.

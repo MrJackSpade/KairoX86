@@ -144,6 +144,11 @@ typedef struct monitor_t {
     double                   mon_res_x;
     double                   mon_res_y;
     int                      mon_bpp;
+    /* KairoX86#37: the last frame repeats each pixel this many times across, and each line this
+       many times down (0 or 1: once); the frontend keeps one of each. */
+    int                      mon_kairo_x_div;
+    int                      mon_kairo_y_div;
+    uintptr_t                mon_kairo_render; /* the renderer at the end of the last frame (vid_svga.c) */
     bitmap_t                *target_buffer;
     int                      mon_video_timing_read_b;
     int                      mon_video_timing_read_w;
