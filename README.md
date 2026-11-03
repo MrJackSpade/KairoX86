@@ -42,7 +42,7 @@ KairoX86 has no game catalog. Each library entry is a PC you set up: its hardwar
 
 ## Firmware
 
-KairoX86 comes with [GLaBIOS](https://glabios.org/), a free BIOS for the IBM PC, so an XT-class PC works without any firmware from you. Every other machine needs its own BIOS: import the 86Box ROM set you have, and KairoX86 recognizes each file by its contents.
+KairoX86 comes with [GLaBIOS](https://glabios.org/), a free BIOS for the IBM PC, so an XT-class PC works without any firmware from you. Every other machine needs its own BIOS: import the folder holding 86Box's BIOS and device firmware (86Box calls it its ROM set), and KairoX86 recognizes each file by its contents, whatever it is named.
 
 ## Documentation
 
