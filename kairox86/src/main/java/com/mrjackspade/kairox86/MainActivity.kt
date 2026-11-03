@@ -84,8 +84,8 @@ class MainActivity : MachineActivity<X86Entry>() {
     override val bindingsCodec = X86Keys.bindings
     override val artworkDownloadsEnabled: Boolean get() = resources.getBoolean(R.bool.catalog_art_download_enabled)
 
-    // A new machine is made in its own flow (KairoX86#162): a hardware preset and its blank disks.
-    override val blankDisks = emptyList<BlankDisk>()
+    /** A new machine starts from a hardware preset (KairoX86#184); its blank disks are KairoX86#162. */
+    override val blankDisks: List<BlankDisk> by lazy { X86Presets.blankDisks(this) }
 
     // The removable drives (KairoX86#48), in the core's slot order (kairo_x86.h): floppy drives A
     // and B, then the first CD-ROM drive.

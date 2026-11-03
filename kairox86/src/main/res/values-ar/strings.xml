@@ -98,6 +98,13 @@
     <string name="firmware_rom_description">A file of the 86Box ROM set</string>
     <!-- EN: Import the folder holding your 86Box ROM set. Its files are found by content, whatever their names. -->
     <string name="firmware_rom_set_note">Import the folder holding your 86Box ROM set. Its files are found by content, whatever their names.</string>
+    <!-- The hardware presets a new machine starts from, on Manage library › New game. -->
+    <!-- EN: IBM PC XT -->
+    <string name="preset_xt">IBM PC XT</string>
+    <!-- EN: 486 DOS PC -->
+    <string name="preset_486">486 DOS PC</string>
+    <!-- EN: Pentium Windows 9x PC -->
+    <string name="preset_win9x">Pentium Windows 9x PC</string>
     <!-- A machine setting (86box.cfg time_sync): the clock the guest reads. -->
     <!-- EN: Clock -->
     <string name="setting_clock">Clock</string>
