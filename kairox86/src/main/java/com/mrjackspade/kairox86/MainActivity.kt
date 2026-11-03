@@ -3,6 +3,8 @@ package com.mrjackspade.kairox86
 import com.mrjackspade.kairo.frontend.R as FrontendR
 import android.net.Uri
 import android.os.Bundle
+import android.os.SystemClock
+import android.util.Log
 import com.mrjackspade.kairo.frontend.BlankDisk
 import com.mrjackspade.kairo.frontend.CatalogGame
 import com.mrjackspade.kairo.frontend.ControllerGuestSpec
@@ -163,14 +165,20 @@ class MainActivity : MachineActivity<X86Entry>() {
         check(!entry.disk) { getString(R.string.machine_external) }
         val tree = checkNotNull(tree) { getString(FrontendR.string.kairo_library_choose_in_manage) }
         progress(getString(FrontendR.string.kairo_launch_preparing, entry.displayName))
+        // Each step's time, for the start's measure (KairoX86#42) and player reports.
+        val began = SystemClock.elapsedRealtime()
         installFreeFirmware(progress)
+        val firmwareReady = SystemClock.elapsedRealtime()
         val prepared = machines.prepare(entry, tree, cancelled)
         session = prepared
+        val folderReady = SystemClock.elapsedRealtime()
         // The core's media (x86_core.cpp): the machine folder 86Box runs, and the commands typed at its prompt.
         val settings = mapOf(StartupCommands.setting(commands))
         check(bridge.start(firmwareFolder.absolutePath, prepared.dir.absolutePath, listOf(prepared.dir.absolutePath),
             settings)) { getString(R.string.machine_still_running) }
         awaitRunning()
+        Log.i("KairoMachine", "Started ${entry.displayName}: firmware ${firmwareReady - began} ms, " +
+            "machine folder ${folderReady - firmwareReady} ms, emulator ${SystemClock.elapsedRealtime() - folderReady} ms")
         followKeyboard()
         // What the machine's drives hold, from its 86box.cfg, as the Disks page shows it, with only
         // the drives it has (KairoX86#197).
