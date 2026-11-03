@@ -70,6 +70,17 @@ python core\test\stops\make_floppies.py .build\stops > .build\stops-list.txt
 shared\tools\run-limited.ps1 .build\host\boot_test.exe bios .build\stops-out (Get-Content .build\stops-list.txt -Raw).Trim() 20
 ```
 
+### The hard disk test
+
+`python core/test/disks/make_hdd.py <folder>` writes a machine (ABIT BX6, whose BIOS finds IDE disks itself) with no floppy disk and a 10 MB IDE hard disk image whose master boot record is the halt test's boot sector plus one active partition. It boots from the hard disk only, so stopping with "The PC halted" proves it did (KairoX86#49):
+
+```powershell
+python core\test\disks\make_hdd.py .build\disks
+shared\tools\run-limited.ps1 .build\host\boot_test.exe bios .build\disks-out ".build\disks\hdd>The PC halted" 30 "" 150:0x3b,300:0x3b,450:0x3b,600:0x3b
+```
+
+Hard disks belong to the machine's folder: 86Box never swaps a fixed disk while the PC runs, so they have no slot on the Disks page.
+
 ## Catalog
 
 KairoX86 has no game catalog. `catalog/system-v2.json` is the system definition (the controls every entry starts from); `python shared/tools/app_catalog.py .` builds the catalog's parts and update from it and an empty research file (`tools/catalog_config.py`), and `--check` fails when they are out of date.
