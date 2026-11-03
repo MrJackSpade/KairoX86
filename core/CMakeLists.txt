@@ -97,3 +97,7 @@ endif()
 # The app's build names its own targets, so it never builds this one.
 add_executable(boot_test EXCLUDE_FROM_ALL test/boot_test.cpp)
 target_link_libraries(boot_test PRIVATE kairox86_core kairo_png)
+
+# The measurement tool (KairoX86#56), likewise: host and device.
+add_executable(game_profile EXCLUDE_FROM_ALL test/game_profile.cpp)
+target_link_libraries(game_profile PRIVATE kairox86_core)

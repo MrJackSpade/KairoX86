@@ -31,6 +31,7 @@
 #include <86box/sound.h>
 #include <86box/snd_sn76489.h>
 #include <86box/plat_unused.h>
+#include <86box/random.h> /* KairoX86 */
 
 #ifdef ENABLE_SN76489_LOG
 uint8_t sn76489_do_log = ENABLE_SN76489_LOG;
@@ -263,11 +264,9 @@ sn76489_init(sn76489_t *sn76489, uint16_t base, uint16_t size, int type, int fre
     sn76489->vol[0]                                                               = 0;
     sn76489->vol[1] = sn76489->vol[2] = sn76489->vol[3] = 8;
     sn76489->stat[0] = sn76489->stat[1] = sn76489->stat[2] = sn76489->stat[3] = 127;
-    srand(time(NULL));
     sn76489->count[0] = 0;
-    sn76489->count[1] = (rand() & 0x3FF) << 6;
-    sn76489->count[2] = (rand() & 0x3FF) << 6;
-    sn76489->count[3] = (rand() & 0x3FF) << 6;
+    for (int c = 1; c < 4; c++) /* KairoX86: 86Box's random numbers, seeded in a repeatable run */
+        sn76489->count[c] = (((random_generate() << 8) | random_generate()) & 0x3FF) << 6;
     sn76489->noise    = 3;
     sn76489->shift    = sn76489->feedback_mask;
     sn76489->type     = type;

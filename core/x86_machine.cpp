@@ -30,7 +30,7 @@ std::unique_ptr<X86Machine> X86Machine::create(const Config &config, std::string
     if (!impl->library) return nullptr;
     impl->api = &impl->library->api();
     KairoX86Host host{impl.get(), &Impl::on_fatal, &Impl::on_notice};
-    if (!impl->api->start(config.machine_folder.c_str(), config.rom_folder.c_str(), &host)) {
+    if (!impl->api->start(config.machine_folder.c_str(), config.rom_folder.c_str(), &host, config.seed)) {
         error = impl->fatal.empty() ? "86Box could not start the machine" : impl->fatal;
         return nullptr;
     }

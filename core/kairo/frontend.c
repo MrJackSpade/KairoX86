@@ -35,6 +35,7 @@
 #include <86box/ui.h>
 #include <86box/sound.h>
 #include <86box/gameport.h>
+#include <86box/random.h>
 #include "cpu.h"
 
 #ifdef _WIN32
@@ -72,6 +73,8 @@ static bool                closed;    /* pc_close ended 86Box's threads */
 static int                 frame_ms;  /* the guest time the last frame lasted */
 static int                 nvr_ms;    /* guest time since the CMOS was last saved */
 static int                 halted_ms; /* guest time the processor has sat on a HLT with interrupts off */
+static bool                repeatable; /* a seeded run (start): its clock is the guest's own */
+static int                 configured_time_sync; /* the machine's own time_sync, saved back as it was */
 
 /* How long the processor must sit on a HLT with interrupts off before the machine counts as
    stopped: only an NMI or SMI can wake it, and a second rules out a short wait for either. */
@@ -484,7 +487,7 @@ api_locks(void)
 /* ---- Lifecycle ---- */
 
 static bool
-api_start(const char *vm_folder, const char *rom_folder, const struct KairoX86Host *given)
+api_start(const char *vm_folder, const char *rom_folder, const struct KairoX86Host *given, uint32_t seed)
 {
     char *argv[] = { "kairox86", "-P", (char *) vm_folder, "-R", (char *) rom_folder, "-N", NULL };
 
@@ -505,7 +508,16 @@ api_start(const char *vm_folder, const char *rom_folder, const struct KairoX86Ho
         running = false;
         return false;
     }
+    /* A repeatable run: the guest's clock counts from its CMOS in guest time, never the host's
+       (the machine's own setting goes back before 86Box saves its configuration, api_stop). */
+    repeatable           = seed != 0;
+    configured_time_sync = time_sync;
+    if (repeatable)
+        time_sync = 0;
     pc_init_modules();
+    /* pc_init_modules seeded 86Box's random numbers from the host (random_init). */
+    if (repeatable)
+        random_seed(seed);
     for (uint8_t i = 1; i < GFXCARD_MAX; i++)
         gfxcard[i] = 0;
     video_setblit(blit);
@@ -601,6 +613,8 @@ api_stop(void)
         return;
     }
     running = true;
+    /* pc_close saves the configuration: with the machine's own clock setting. */
+    time_sync = configured_time_sync;
     pc_close(NULL);
     running = false;
 }

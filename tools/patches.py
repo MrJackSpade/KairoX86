@@ -1260,6 +1260,26 @@ KAIROX86_STOP = [
      + '}' + _NL),
 ]
 
+# KairoX86#36: a seeded run repeats. The SN76489 (the PCjr's and Tandy's sound) seeded the C library's
+# random numbers from the host's clock as it started, which also undid the run's seed for every other
+# rand() (random_seed seeds both); its noise counters' start values now come from 86Box's own random
+# numbers, as random as before in a normal run.
+KAIROX86_REPEATABLE = [
+    ('86box/src/sound/snd_sn76489.c',
+     '#include <86box/plat_unused.h>' + _NL,
+     '#include <86box/plat_unused.h>' + _NL
+     + '#include <86box/random.h> /* KairoX86 */' + _NL),
+    ('86box/src/sound/snd_sn76489.c',
+     '    srand(time(NULL));' + _NL
+     + '    sn76489->count[0] = 0;' + _NL
+     + '    sn76489->count[1] = (rand() & 0x3FF) << 6;' + _NL
+     + '    sn76489->count[2] = (rand() & 0x3FF) << 6;' + _NL
+     + '    sn76489->count[3] = (rand() & 0x3FF) << 6;' + _NL,
+     '    sn76489->count[0] = 0;' + _NL
+     + '    for (int c = 1; c < 4; c++) /* KairoX86: 86Box\'s random numbers, seeded in a repeatable run */' + _NL
+     + '        sn76489->count[c] = (((random_generate() << 8) | random_generate()) & 0x3FF) << 6;' + _NL),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -1270,6 +1290,7 @@ PATCHES = {
     'kairox86-license': KAIROX86_LICENSE,
     'kairox86-library': KAIROX86_LIBRARY,
     'kairox86-stop': KAIROX86_STOP,
+    'kairox86-repeatable': KAIROX86_REPEATABLE,
 }
 
 ADDED = [

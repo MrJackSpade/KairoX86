@@ -21,6 +21,9 @@ struct Config {
     // The firmware: the 86Box ROM set itself (its machines/, video/... folders), which 86Box
     // reads for each of its roms/ paths.
     std::string rom_folder;
+    // Other than 0, a repeatable run (KairoX86#36): 86Box's random numbers from this seed and the
+    // guest's clock in guest time. The app runs with 0, as a PC does.
+    uint32_t seed = 0;
 };
 
 class X86Machine {

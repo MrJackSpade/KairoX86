@@ -35,6 +35,16 @@ boot_test <ROM set> <work folder> <machine folder>[><stop text>][|...] <seconds>
 
 A machine given with `>stop text` must stop before `<seconds>` with a reason containing that text; any other must not stop.
 
+### Measuring and repeatability
+
+`core/test/game_profile` (target `game_profile`, for the host and, with the NDK, the device) runs a machine folder a fixed number of frames as fast as the host can, with scripted input, and reports host time per guest frame:
+
+```
+game_profile <ROM set> <work dir> <machine folder> <frames> <script> [--warmup n] [--shots n] [--hashes file] [--seed n] [--runs n]
+```
+
+It runs a fresh copy of the folder each time (86Box writes the CMOS and `86box.cfg` back as it runs). With a seed (1 unless `--seed 0`), the run is repeatable: 86Box's random numbers come from the seed and the guest's clock runs in guest time (`X86Machine::Config::seed`), so `--hashes` (each frame's picture and sound hash) of two runs or two builds can be compared line by line. `--runs n` runs the machine n times in one process, as the app runs one machine after another, and fails unless every run matches the first, which also catches the emulation reading memory it never wrote.
+
 ### Stop tests
 
 `python core/test/stops/make_floppies.py <folder>` writes one machine folder for each way a PC stops (KairoX86#34), each booting a floppy whose boot sector (`core/test/stops/boot.S`) stops it that way, and prints the machine list that expects each stop:
