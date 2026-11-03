@@ -46,7 +46,7 @@ public:
 
     // A key by its scan code: set 1, with 0x100 added for the keys sent after an E0 prefix.
     void key(int scancode, bool down);
-    // The mouse: motion in host pixels, and button 1 (left), 2 (right) or 3 (middle).
+    // The mouse: motion in the picture's pixels, and button 1 (left), 2 (right) or 3 (middle).
     void mouse_move(int dx, int dy);
     void mouse_button(int button, bool down);
     // One of the joystick model's inputs (kairo_x86.h): axis 0 to 3 (-32767 to 32767), button 0 to 3,

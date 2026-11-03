@@ -53,6 +53,10 @@ It runs a fresh copy of the folder each time (86Box writes the CMOS and `86box.c
 
 `python core/test/input/make_joyport.py <folder>` writes three machines (the 486 with a 2-axis 2-button pair of joysticks, a 2-axis 4-button joystick and a 4-axis 4-button one) booting a floppy (`core/test/input/joyport.S`) that reads the game port at 201h as DOS games do and shows its buttons and its four axes' timings, and prints the `game_profile` script that pushes each of the joystick model's inputs in turn (`--shots 30`; frame 900 nothing, then one input every 60 frames). Each input must change exactly one reading (KairoX86#52).
 
+### The mouse test
+
+`python core/test/input/make_mouse.py <folder>` writes two machines (the 486 with a three-button PS/2 mouse, and with a Microsoft serial mouse on COM1) booting a floppy (`core/test/input/mouse.S`) that reads the mouse straight from its port and shows its buttons and the sum of its motion, and prints the `game_profile` script that moves the mouse (`x`/`y` codes) and presses each button in turn (`--shots 30`; frame 900 untouched, then one input every 60 frames). Each step must show exactly the motion sent, in picture pixels, or exactly one button (KairoX86#50).
+
 ### Stop tests
 
 `python core/test/stops/make_floppies.py <folder>` writes one machine folder for each way a PC stops (KairoX86#34), each booting a floppy whose boot sector (`core/test/stops/boot.S`) stops it that way, and prints the machine list that expects each stop:

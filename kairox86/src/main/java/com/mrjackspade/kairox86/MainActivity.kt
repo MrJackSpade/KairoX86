@@ -33,7 +33,7 @@ class MainActivity : MachineActivity<X86Entry>() {
             UiText.res(R.string.folder_description, "IBM PC compatible", "KairoX86"),
             UiText.res(FrontendR.string.kairo_folder_button)),
         UiText.res(FrontendR.string.kairo_saves_group), "MrJackSpade/KairoX86")
-    // A VGA screen; mouse motion is counted in host pixels (core/kairo/kairo_x86.h).
+    // A VGA screen; mouse motion is counted in the picture's pixels (core/kairo/kairo_x86.h).
     override val machine = Machine(640, 480, 4.0 / 3.0, "state.86s")
     // 86Box keeps no save states the frontend can take yet: the machine's own disks and CMOS keep its saves.
     override val saveStates = false

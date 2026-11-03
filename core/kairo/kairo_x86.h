@@ -81,7 +81,7 @@ struct KairoX86Api {
 
 	/* A key by its scan code: set 1, with 0x100 added for the keys sent after an E0 prefix. */
 	void (*key)(int scancode, bool down);
-	/* The mouse: motion in host pixels, and its buttons (bit 0 left, 1 right, 2 middle). */
+	/* The mouse: motion in the picture's pixels (86Box's raw input), and its buttons (bit 0 left, 1 right, 2 middle). */
 	void (*mouse_move)(int dx, int dy);
 	void (*mouse_buttons)(int buttons);
 	/* One of the joystick model's inputs (KAIRO_X86_JOYSTICK_*): an axis, -KAIRO_X86_AXIS_MAX to

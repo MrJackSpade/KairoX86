@@ -57,7 +57,10 @@ bool fast_forward = false;
 int  fixed_size_x = 640;
 int  fixed_size_y = 480;
 int  title_set;
-int  mouse_capture;
+/* The player's pointer is the machine's for its whole run (KairoX86#50): 86Box's mice report only while
+   the host holds it captured, as its own UI does after a click in the window. Kairo has no window to
+   click and no host pointer to give back, so it is held from the start and never let go. */
+int  mouse_capture = 1;
 
 volatile int cpu_thread_run = 1;
 
@@ -307,10 +310,10 @@ plat_vidapi(UNUSED(const char *api))
     return 0;
 }
 
+/* 86Box lets the pointer go on close and when a tablet changes mode; Kairo keeps it (mouse_capture). */
 void
-plat_mouse_capture(int on)
+plat_mouse_capture(UNUSED(int on))
 {
-    mouse_capture = on;
 }
 
 void
@@ -675,6 +678,9 @@ api_start(const char *vm_folder, const char *rom_folder, const struct KairoX86Ho
         random_seed(seed);
     for (uint8_t i = 1; i < GFXCARD_MAX; i++)
         gfxcard[i] = 0;
+    /* The host's motion is in the machine's picture pixels already (KairoX86#50): 86Box's raw
+       input takes it as it is, without scaling it from a 640x480 window it would think it has. */
+    mouse_set_raw(1);
     video_setblit(blit);
     pc_reset_hard_init();
     plat_pause(0);
