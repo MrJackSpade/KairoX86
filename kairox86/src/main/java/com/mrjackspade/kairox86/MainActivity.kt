@@ -111,7 +111,18 @@ class MainActivity : MachineActivity<X86Entry>() {
     /** The player's 86Box ROM set itself (its machines/, video/... folders), which 86Box's rom path names. */
     private val firmwareFolder by lazy { File(filesDir, "roms") }
 
-    override fun startGame(entry: X86Entry, game: CatalogGame, cancelled: AtomicBoolean, progress: (String) -> Unit) {
+    override fun startGame(entry: X86Entry, game: CatalogGame, cancelled: AtomicBoolean, progress: (String) -> Unit) =
+        start(entry, X86Catalog.startupCommands.value(game, emptyMap()), cancelled, progress)
+
+    /** The library's command line (KairoX86#47): the machine with the drives its 86box.cfg gives, nothing typed. */
+    override val commandLine = true
+
+    override fun startAtPrompt(entry: X86Entry, game: CatalogGame, cancelled: AtomicBoolean, progress: (String) -> Unit) =
+        start(entry, emptyList(), cancelled, progress)
+
+    /** Starts [entry]'s machine on its own drives, typing [commands] at its DOS prompt (KairoX86#46). */
+    private fun start(entry: X86Entry, commands: List<String>, cancelled: AtomicBoolean,
+                      progress: (String) -> Unit) {
         // A disk image opened from another app has no machine to go in.
         check(!entry.disk) { getString(R.string.machine_external) }
         val tree = checkNotNull(tree) { getString(FrontendR.string.kairo_library_choose_in_manage) }
@@ -119,9 +130,8 @@ class MainActivity : MachineActivity<X86Entry>() {
         installFreeFirmware(progress)
         val prepared = machines.prepare(entry, tree, cancelled)
         session = prepared
-        // The core's media (x86_core.cpp): the machine folder 86Box runs; its startup commands typed at
-        // the DOS prompt (KairoX86#46).
-        val settings = mapOf(StartupCommands.setting(X86Catalog.startupCommands.value(game, emptyMap())))
+        // The core's media (x86_core.cpp): the machine folder 86Box runs, and the commands typed at its prompt.
+        val settings = mapOf(StartupCommands.setting(commands))
         check(bridge.start(firmwareFolder.absolutePath, prepared.dir.absolutePath, listOf(prepared.dir.absolutePath),
             settings)) { "Another machine is still running" }
         awaitRunning()
