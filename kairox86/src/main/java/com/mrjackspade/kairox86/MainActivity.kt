@@ -144,6 +144,9 @@ class MainActivity : MachineActivity<X86Entry>() {
     /** The player's 86Box ROM set itself (its machines/, video/... folders), which 86Box's rom path names. */
     private val firmwareFolder by lazy { File(filesDir, "roms") }
 
+    /** The player's 86Box ROM set, imported by content into [firmwareFolder] (KairoX86#67). */
+    override val firmwareSets by lazy { listOf(UiText.res(R.string.firmware_rom_set) to X86Firmware.set(this, firmwareFolder)) }
+
     override fun startGame(entry: X86Entry, game: CatalogGame, cancelled: AtomicBoolean, progress: (String) -> Unit) =
         start(entry, X86Catalog.startupCommands.value(game, emptyMap()), cancelled, progress)
 

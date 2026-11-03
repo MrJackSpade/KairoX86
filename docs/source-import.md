@@ -23,6 +23,12 @@
 - **`kairox86-native-size` group:** each frame, the VGA family (`svga_doblit`: the renderers that draw each pixel twice across, when no cursor, overlay or accelerator draws over them and the same renderer drew the whole frame) and the CGA (40-column text and 320-wide graphics, not composite; its line doubling) say on their monitor how many times they drew each pixel across and each line down, and the frontend keeps one of each, so the core hands the host the machine's own pixels (KairoX86#37).
 - **`kairox86-guest-input` group:** every processor's INT decoder (the 386 and later interpreters, which the recompiler runs INT through, the 8088, the cycle-exact 8088 and the NEC V20/V30) passes each INT n, with AX and the caller's code address, to the frontend's `kairo_observe_int`, through the call's registers: it counts the BIOS keyboard waits and polls (INT 16h) and the mouse driver's reads (INT 33h) for the Auto touch mode (KairoX86#43), and for direct touch turns the program's next "get the position" (INT 33h AX=03h) into the driver's "set the position" (AX=04h) to the tapped point (KairoX86#44); with DS, it follows the console line DOS writes, so a keyboard read at a DOS prompt counts as the command shell waiting for a command (KairoX86#46).
 
+## 86Box ROM set index
+
+- **Source:** https://github.com/86Box/roms, commit `ebefe507a659192ad4c0155b984cdec30b1e1ecd` (2026-10-29, "Merge pull request #620 from MaxwellS04/Mach64"), the ROM set of the 86Box snapshot's date.
+- **Copied to:** `kairox86/src/main/assets/firmware/86box-roms.tsv`: no firmware, only each file's SHA-1, size and path in the set (1,776 files), written by `python tools/firmware_index.py <roms checkout> <commit> <out>` from the commit's Git objects. The set's own README, LICENSE and Git files are left out. The app recognizes the player's firmware by these digests under any name and puts each file at its path (KairoX86#67).
+- **Imported:** 2026-11-03.
+
 ## libsndfile
 
 - **Source:** https://github.com/libsndfile/libsndfile, tag `1.2.2` (commit `72f6af15e8f85157bd622ed45b979025828b7001`).
