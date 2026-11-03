@@ -757,17 +757,19 @@ svga_render_2bpp_headland_highres(svga_t *svga)
    waits for the queue to empty: before a frame is shown, before the buffer
    can change size, and on close. A line something else draws on (cursors,
    overlay) is drawn in place (svga->render_async). */
+/* KairoX86#38: a job holds what its line reads, taken as the guest scans the line: the line's
+   VRAM and the palette. Wider lines than RENDER_LINE_BYTES are drawn in place. */
+#define RENDER_LINE_BYTES 2048
+
 typedef struct render_job_t {
-    uint32_t       *p;
-    const uint8_t  *vram;
-    const uint32_t *map8;
-    uint32_t        memaddr;
-    uint32_t        mask;
-    uint32_t        dac;
-    int             dwords;
+    uint32_t *p;
+    uint32_t  dac;
+    int       dwords;
+    uint32_t  map8[256];
+    uint8_t   line[RENDER_LINE_BYTES];
 } render_job_t;
 
-#define RENDER_JOBS 4096 /* a power of 2, more lines than a frame has */
+#define RENDER_JOBS 2048 /* a power of 2, more lines than a frame has */
 
 static render_job_t render_jobs[RENDER_JOBS];
 static atomic_uint  render_head; /* next job queued, emulation thread */
@@ -780,13 +782,12 @@ static atomic_int   render_quit; /* KairoX86: svga_render_close ends the drawing
 static void
 render_8bpp_dwords(const render_job_t *job)
 {
-    uint32_t *p       = job->p;
-    uint32_t  memaddr = job->memaddr;
+    uint32_t *p = job->p;
 
     for (int c = 0; c < job->dwords; c++) {
-        const uint32_t dat = *(const uint32_t *) &job->vram[memaddr & job->mask];
+        uint32_t dat;
 
-        memaddr = (memaddr + 4) & job->mask;
+        memcpy(&dat, &job->line[4 * c], 4);
         p[0]    = job->map8[dat & job->dac];
         p[1]    = job->map8[(dat >> 8) & job->dac];
         p[2]    = job->map8[(dat >> 16) & job->dac];
@@ -847,8 +848,9 @@ svga_render_close(void)
     atomic_store_explicit(&render_quit, 0, memory_order_relaxed);
 }
 
-static void
-render_queue(const render_job_t *job)
+/* The next job's slot, which the emulation thread fills before render_commit(). */
+static render_job_t *
+render_slot(void)
 {
     const unsigned head = atomic_load_explicit(&render_head, memory_order_relaxed);
 
@@ -859,10 +861,17 @@ render_queue(const render_job_t *job)
     }
     if ((head - atomic_load_explicit(&render_tail, memory_order_acquire)) == RENDER_JOBS)
         svga_render_drain();
+    return &render_jobs[head & (RENDER_JOBS - 1)];
+}
+
+/* Queues the job render_slot() gave. */
+static void
+render_commit(void)
+{
+    const unsigned head = atomic_load_explicit(&render_head, memory_order_relaxed);
     /* A thread still drawing finds the job itself; one that found the queue
        empty is woken */
     const int was_empty = (head == atomic_load_explicit(&render_tail, memory_order_acquire));
-    render_jobs[head & (RENDER_JOBS - 1)] = *job;
     atomic_store_explicit(&render_head, head + 1, memory_order_release);
     if (was_empty)
         thread_set_event(render_wake);
@@ -1004,13 +1013,22 @@ svga_render_indexed_gfx(svga_t *svga, bool highres, bool combine8bits)
 #endif
         /* The dwords wholly left of hdisp to the drawing thread */
         x = 0;
-        if (svga->render_async && !svga->render_line_offset && !((mask + 1) & mask) && (svga->hdisp >= 8)) {
-            const render_job_t job = { p, vram, map8, memaddr, mask, dac, svga->hdisp / 4 };
+        if (svga->render_async && !svga->render_line_offset && !((mask + 1) & mask) && (svga->hdisp >= 8) &&
+            (svga->hdisp <= RENDER_LINE_BYTES)) {
+            render_job_t *job    = render_slot();
+            const int     dwords = svga->hdisp / 4;
 
-            render_queue(&job);
-            memaddr = (memaddr + (4 * job.dwords)) & mask;
-            p += 4 * job.dwords;
-            x = 4 * job.dwords;
+            job->p      = p;
+            job->dac    = dac;
+            job->dwords = dwords;
+            memcpy(job->map8, map8, sizeof(job->map8));
+            for (int c = 0; c < dwords; c++) {
+                memcpy(&job->line[4 * c], &vram[memaddr & mask], 4);
+                memaddr = (memaddr + 4) & mask;
+            }
+            render_commit();
+            p += 4 * dwords;
+            x = 4 * dwords;
         }
 
         for (; x <= end; x += 4) {

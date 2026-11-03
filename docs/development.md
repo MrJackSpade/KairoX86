@@ -45,6 +45,10 @@ game_profile <ROM set> <work dir> <machine folder> <frames> <script> [--warmup n
 
 It runs a fresh copy of the folder each time (86Box writes the CMOS and `86box.cfg` back as it runs). With a seed (1 unless `--seed 0`), the run is repeatable: 86Box's random numbers come from the seed and the guest's clock runs in guest time (`X86Machine::Config::seed`), so `--hashes` (each frame's picture and sound hash) of two runs or two builds can be compared line by line. `--runs n` runs the machine n times in one process, as the app runs one machine after another, and fails unless every run matches the first, which also catches the emulation reading memory it never wrote.
 
+### The raster test
+
+`python core/test/display/make_raster.py <folder>` writes a machine (the 486 with an S3 Trio64V2) booting a floppy (`core/test/display/raster.S`) that, in VESA mode 101h (640x480, 256 colours), changes the palette at every horizontal blank and writes video memory just behind the beam, as games' raster effects do. A build configured with `-DCMAKE_C_FLAGS=-DKAIROX86_SYNC_RENDER` draws every line in place; `game_profile --hashes` on both builds must give the same frames (KairoX86#38), so the threaded 8bpp renderer can never show anything drawing in place would not.
+
 ### Stop tests
 
 `python core/test/stops/make_floppies.py <folder>` writes one machine folder for each way a PC stops (KairoX86#34), each booting a floppy whose boot sector (`core/test/stops/boot.S`) stops it that way, and prints the machine list that expects each stop:

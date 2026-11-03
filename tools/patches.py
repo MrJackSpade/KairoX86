@@ -1280,6 +1280,127 @@ KAIROX86_REPEATABLE = [
      + '        sn76489->count[c] = (((random_generate() << 8) | random_generate()) & 0x3FF) << 6;' + _NL),
 ]
 
+# KairoX86#38: a build that draws every line in place (KAIROX86_SYNC_RENDER, tests only), to compare
+# the threaded 8bpp renderer's pictures against.
+KAIROX86_SYNC_RENDER = [
+    ('86box/src/video/vid_svga.c',
+     '        svga->render_async = !svga->overlay_on && !svga->dac_hwcursor_on && !svga->hwcursor_on;' + _NL,
+     '#ifdef KAIROX86_SYNC_RENDER /* KairoX86#38: every line drawn in place, to compare against */' + _NL
+     + '        svga->render_async = 0;' + _NL
+     + '#else' + _NL
+     + '        svga->render_async = !svga->overlay_on && !svga->dac_hwcursor_on && !svga->hwcursor_on;' + _NL
+     + '#endif' + _NL),
+]
+
+# KairoX86#38: a frame's picture does not depend on how its drawing is split. The threaded 8bpp
+# renderer (kairo9x-video) drew a queued line later from VRAM and the live palette, so a line showed
+# what the guest wrote after it was scanned: palette changes and VRAM written behind the beam (the
+# raster test, core/test/display) came out unlike drawing each line in place. A job now holds the
+# line's VRAM bytes and the palette, taken as the guest scans the line; the drawing thread reads
+# only those.
+_F = '86box/src/video/vid_svga_render.c'
+KAIROX86_RASTER = [
+    (_F,
+     'typedef struct render_job_t {' + _NL
+     + '    uint32_t       *p;' + _NL
+     + '    const uint8_t  *vram;' + _NL
+     + '    const uint32_t *map8;' + _NL
+     + '    uint32_t        memaddr;' + _NL
+     + '    uint32_t        mask;' + _NL
+     + '    uint32_t        dac;' + _NL
+     + '    int             dwords;' + _NL
+     + '} render_job_t;' + _NL
+     + _NL
+     + '#define RENDER_JOBS 4096 /* a power of 2, more lines than a frame has */' + _NL,
+     '/* KairoX86#38: a job holds what its line reads, taken as the guest scans the line: the line\'s' + _NL
+     + '   VRAM and the palette. Wider lines than RENDER_LINE_BYTES are drawn in place. */' + _NL
+     + '#define RENDER_LINE_BYTES 2048' + _NL
+     + _NL
+     + 'typedef struct render_job_t {' + _NL
+     + '    uint32_t *p;' + _NL
+     + '    uint32_t  dac;' + _NL
+     + '    int       dwords;' + _NL
+     + '    uint32_t  map8[256];' + _NL
+     + '    uint8_t   line[RENDER_LINE_BYTES];' + _NL
+     + '} render_job_t;' + _NL
+     + _NL
+     + '#define RENDER_JOBS 2048 /* a power of 2, more lines than a frame has */' + _NL),
+    (_F,
+     '    uint32_t *p       = job->p;' + _NL
+     + '    uint32_t  memaddr = job->memaddr;' + _NL
+     + _NL
+     + '    for (int c = 0; c < job->dwords; c++) {' + _NL
+     + '        const uint32_t dat = *(const uint32_t *) &job->vram[memaddr & job->mask];' + _NL
+     + _NL
+     + '        memaddr = (memaddr + 4) & job->mask;' + _NL
+     + '        p[0]    = job->map8[dat & job->dac];' + _NL,
+     '    uint32_t *p = job->p;' + _NL
+     + _NL
+     + '    for (int c = 0; c < job->dwords; c++) {' + _NL
+     + '        uint32_t dat;' + _NL
+     + _NL
+     + '        memcpy(&dat, &job->line[4 * c], 4);' + _NL
+     + '        p[0]    = job->map8[dat & job->dac];' + _NL),
+    (_F,
+     'static void' + _NL
+     + 'render_queue(const render_job_t *job)' + _NL
+     + '{' + _NL
+     + '    const unsigned head = atomic_load_explicit(&render_head, memory_order_relaxed);' + _NL,
+     '/* The next job\'s slot, which the emulation thread fills before render_commit(). */' + _NL
+     + 'static render_job_t *' + _NL
+     + 'render_slot(void)' + _NL
+     + '{' + _NL
+     + '    const unsigned head = atomic_load_explicit(&render_head, memory_order_relaxed);' + _NL),
+    (_F,
+     '    if ((head - atomic_load_explicit(&render_tail, memory_order_acquire)) == RENDER_JOBS)' + _NL
+     + '        svga_render_drain();' + _NL
+     + '    /* A thread still drawing finds the job itself; one that found the queue' + _NL
+     + '       empty is woken */' + _NL
+     + '    const int was_empty = (head == atomic_load_explicit(&render_tail, memory_order_acquire));' + _NL
+     + '    render_jobs[head & (RENDER_JOBS - 1)] = *job;' + _NL
+     + '    atomic_store_explicit(&render_head, head + 1, memory_order_release);' + _NL,
+     '    if ((head - atomic_load_explicit(&render_tail, memory_order_acquire)) == RENDER_JOBS)' + _NL
+     + '        svga_render_drain();' + _NL
+     + '    return &render_jobs[head & (RENDER_JOBS - 1)];' + _NL
+     + '}' + _NL
+     + _NL
+     + '/* Queues the job render_slot() gave. */' + _NL
+     + 'static void' + _NL
+     + 'render_commit(void)' + _NL
+     + '{' + _NL
+     + '    const unsigned head = atomic_load_explicit(&render_head, memory_order_relaxed);' + _NL
+     + '    /* A thread still drawing finds the job itself; one that found the queue' + _NL
+     + '       empty is woken */' + _NL
+     + '    const int was_empty = (head == atomic_load_explicit(&render_tail, memory_order_acquire));' + _NL
+     + '    atomic_store_explicit(&render_head, head + 1, memory_order_release);' + _NL),
+    (_F,
+     '        if (svga->render_async && !svga->render_line_offset && !((mask + 1) & mask) && (svga->hdisp >= 8)) {' + _NL
+     + '            const render_job_t job = { p, vram, map8, memaddr, mask, dac, svga->hdisp / 4 };' + _NL
+     + _NL
+     + '            render_queue(&job);' + _NL
+     + '            memaddr = (memaddr + (4 * job.dwords)) & mask;' + _NL
+     + '            p += 4 * job.dwords;' + _NL
+     + '            x = 4 * job.dwords;' + _NL
+     + '        }' + _NL,
+     '        if (svga->render_async && !svga->render_line_offset && !((mask + 1) & mask) && (svga->hdisp >= 8) &&' + _NL
+     + '            (svga->hdisp <= RENDER_LINE_BYTES)) {' + _NL
+     + '            render_job_t *job    = render_slot();' + _NL
+     + '            const int     dwords = svga->hdisp / 4;' + _NL
+     + _NL
+     + '            job->p      = p;' + _NL
+     + '            job->dac    = dac;' + _NL
+     + '            job->dwords = dwords;' + _NL
+     + '            memcpy(job->map8, map8, sizeof(job->map8));' + _NL
+     + '            for (int c = 0; c < dwords; c++) {' + _NL
+     + '                memcpy(&job->line[4 * c], &vram[memaddr & mask], 4);' + _NL
+     + '                memaddr = (memaddr + 4) & mask;' + _NL
+     + '            }' + _NL
+     + '            render_commit();' + _NL
+     + '            p += 4 * dwords;' + _NL
+     + '            x = 4 * dwords;' + _NL
+     + '        }' + _NL),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -1291,6 +1412,8 @@ PATCHES = {
     'kairox86-library': KAIROX86_LIBRARY,
     'kairox86-stop': KAIROX86_STOP,
     'kairox86-repeatable': KAIROX86_REPEATABLE,
+    'kairox86-sync-render': KAIROX86_SYNC_RENDER,
+    'kairox86-raster': KAIROX86_RASTER,
 }
 
 ADDED = [

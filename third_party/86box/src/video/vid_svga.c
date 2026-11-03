@@ -1440,7 +1440,11 @@ svga_do_render(svga_t *svga)
         if (svga->render_sync)
             svga->render_sync(svga);
         /* A line the cursors or the overlay draw on next is drawn in place */
+#ifdef KAIROX86_SYNC_RENDER /* KairoX86#38: every line drawn in place, to compare against */
+        svga->render_async = 0;
+#else
         svga->render_async = !svga->overlay_on && !svga->dac_hwcursor_on && !svga->hwcursor_on;
+#endif
 #ifndef K9X_NO_RENDER /* measurement only: the cost of rendering on this thread */
         svga->render(svga);
 #endif
