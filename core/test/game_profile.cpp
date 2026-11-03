@@ -208,6 +208,8 @@ int main(int argc, char **argv) {
         std::printf("host %.2f frames/s (guest %.2f), frame ms mean %.3f median %.3f p95 %.3f max %.3f over %zu frames\n",
                     1000.0 / mean, 1.0 / machine->frame_seconds(), mean, sorted[sorted.size() / 2],
                     sorted[std::min(sorted.size() - 1, sorted.size() * 95 / 100)], sorted.back(), times.size());
+        // The lock keys' lamps at the end: bit 0 Caps Lock, 1 Num Lock, 2 Scroll Lock.
+        std::printf("locks %d\n", machine->locks());
         machine->close();
     }
 
