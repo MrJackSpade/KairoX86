@@ -107,8 +107,14 @@ object X86Settings {
         ChoiceOption("utc", UiText.res(R.string.setting_clock_utc)),
         ChoiceOption("disabled", UiText.res(R.string.setting_clock_own))), "local"), MACHINE, "time_sync")
 
+    /**
+     * Skip memory check (KairoX86#60), the option every app with a counting BIOS has: the power-on self
+     * test runs flat out (core/kairo/frontend.c). KairoX86's own key, which 86Box keeps as it is.
+     */
+    val skipMemoryCheck = single(MachineOption.skipMemoryCheck(), "Kairo", "skip_memory_check")
+
     /** In the order they show; each after the ones it depends on. */
-    val all = listOf(machine, processor, memory, video, sound, network, hdc, scsi, fdc, mouse, joystick, clock)
+    val all = listOf(machine, processor, memory, video, sound, network, hdc, scsi, fdc, mouse, joystick, clock, skipMemoryCheck)
 
     /** The setting [option] is. */
     fun of(option: MachineOption): Setting = all.firstOrNull { it.option.id == option.id }

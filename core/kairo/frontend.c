@@ -39,6 +39,8 @@
 #include <86box/fdd.h>
 #include <86box/cdrom.h>
 #include <86box/mem.h>
+#include <86box/ini.h>
+#include <86box/config.h>
 #include "cpu.h"
 
 #ifdef _WIN32
@@ -676,7 +678,21 @@ void ui_sb_set_text(UNUSED(char *wstr)) { }
 void ui_sb_bugui(UNUSED(char *str)) { }
 void ui_sb_set_ready(UNUSED(int ready)) { }
 void ui_sb_mt32lcd(UNUSED(char *str)) { }
-void ui_hard_reset_completed(void) { }
+
+/* Skip memory check (KairoX86#60): the BIOS's power-on self test, memory count included, runs flat
+   out as loading does, in the guest's own time, so nothing the guest sees changes. It lasts from
+   each power-on (86Box's every hard reset ends here) until the BIOS starts the boot (INT 19h; its
+   first disk read, INT 13h AH=02h or 42h, for BIOSes that jump to their boot code without INT 19h;
+   INT 18h when nothing boots) or first waits for a key (a prompt, its setup). The machine's
+   86box.cfg holds the setting, [Kairo] skip_memory_check, "on" when it names none. */
+static atomic_bool self_test;
+
+void
+ui_hard_reset_completed(void)
+{
+    atomic_store(&self_test, strcmp(config_get_string("Kairo", "skip_memory_check", "on"), "off") != 0);
+}
+
 void ui_update_force_interpreter(void) { }
 
 /* fatal() ends here after reporting (ui_msgbox), never reaching its exit(). */
@@ -958,9 +974,13 @@ kairo_observe_int(uint8_t num, uint16_t *ax, uint16_t *bx, uint16_t *cx, uint16_
 
     if ((code_base < ROM_START) || (code_base >= ROM_END))
         atomic_store(&keyboard_wait, false);
+    /* Get a keystroke: a wait when the buffer is empty, else a key read at once. */
+    const bool key_wait = (num == 0x16) && ((ah == 0x00) || (ah == 0x10))
+        && (mem_readw_phys(BDA_KEYBOARD_HEAD) == mem_readw_phys(BDA_KEYBOARD_TAIL));
+    if (key_wait || (num == 0x18) || (num == 0x19) || ((num == 0x13) && ((ah == 0x02) || (ah == 0x42))))
+        atomic_store(&self_test, false);
     if (num == 0x16) {
-        /* Get a keystroke: a wait when the buffer is empty, else a key read at once. */
-        if (((ah == 0x00) || (ah == 0x10)) && (mem_readw_phys(BDA_KEYBOARD_HEAD) == mem_readw_phys(BDA_KEYBOARD_TAIL))) {
+        if (key_wait) {
             atomic_fetch_add_explicit(&keyboard_waits, 1, memory_order_relaxed);
             atomic_store(&keyboard_wait, true);
         } else if ((ah == 0x01) || (ah == 0x11))
@@ -1257,7 +1277,7 @@ api_run_frame(void)
     }
     /* The blit thread copies the frame: wait until it has, so screen() reads it whole. */
     video_wait_for_blit_monitor(0);
-    loading_frame = (floppy_busy != 0) || (floppy_changes != changes);
+    loading_frame = (floppy_busy != 0) || (floppy_changes != changes) || atomic_load(&self_test);
     if (halted_with_interrupts_off()) {
         halted_ms += frame_ms;
         if (halted_ms >= HALT_STOP_MS)

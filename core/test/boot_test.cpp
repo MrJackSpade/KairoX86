@@ -178,6 +178,8 @@ bool run_machine(int index, const std::string &rom_folder, const std::string &fo
     const uint8_t *pixels = nullptr;
     const std::string prefix = out + "/run" + std::to_string(index) + "-";
     std::string stop;
+    // The guest seconds the host ran flat out as loading (KairoX86#41) and the power-on self test (#60).
+    double loading = 0;
     while (guest < seconds) {
         for (const Press &press : presses) {
             if (press.frame == frames) machine->key(press.code, true);
@@ -189,6 +191,7 @@ bool run_machine(int index, const std::string &rom_folder, const std::string &fo
             break;
         }
         guest += machine->frame_seconds();
+        if (machine->loading()) loading += machine->frame_seconds();
         ++frames;
         for (uint32_t got; (got = machine->read_audio(audio.data(), uint32_t(audio.size() / 2))) > 0;) {
             audio_frames += got;
@@ -220,6 +223,7 @@ bool run_machine(int index, const std::string &rom_folder, const std::string &fo
     }
     std::printf("  %lu frames, %.2f guest s in %.2f host s (%.0f%%), %llu audio frames, peak %d\n", frames, guest, wall,
                 100.0 * guest / wall, static_cast<unsigned long long>(audio_frames), peak);
+    std::printf("  loading: %.2f guest s\n", loading);
     machine->close();
     machine.reset();
     const int threads_after = thread_count();

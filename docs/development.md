@@ -35,6 +35,8 @@ boot_test <ROM set> <work folder> <machine folder>[><stop text>][|...] <seconds>
 
 A machine given with `>stop text` must stop before `<seconds>` with a reason containing that text; any other must not stop.
 
+Each run reports the guest seconds the app would run flat out as loading (`loading:`): floppy activity, and the power-on self test while Skip memory check is on (KairoX86#60). A machine with `[Kairo]` `skip_memory_check = off` in its `86box.cfg` shows the difference.
+
 ### Measuring and repeatability
 
 `core/test/game_profile` (target `game_profile`, for the host and, with the NDK, the device) runs a machine folder a fixed number of frames as fast as the host can, with scripted input, and reports host time per guest frame:
