@@ -9,6 +9,7 @@
  * [rom_folder] is the player's 86Box ROM set, which says whose firmware is there ("available").
  *   "machines"      every machine: [{"id","name","type","available"}]
  *   "machine <id>"  what machine <id> takes: {"cpus":[{"family","name","speeds":[{"speed","multi","name"}]}],
- *                   "ram":{"min","max","step"} (KB), and its cards of each kind ("video", "sound",
- *                   "network", "hdc", "scsi", "fdc"): [{"id","name","available"}] */
+ *                   "ram":{"min","max","step"} (KB), its cards of each kind ("video", "sound",
+ *                   "network", "hdc", "scsi", "fdc") and mice ("mouse"): [{"id","name","available"}],
+ *                   and the game port's joysticks ("joystick"), the same for every machine */
 const char *hardware_query(const char *rom_folder, const char *query);

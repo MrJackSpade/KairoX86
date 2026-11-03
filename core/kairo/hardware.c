@@ -27,6 +27,7 @@
 #include <86box/scsi.h>
 #include <86box/fdc_ext.h>
 #include <86box/mouse.h>
+#include <86box/gameport.h>
 #include "cpu.h"
 
 #include "hardware.h"
@@ -91,6 +92,26 @@ struct kind {
     uintptr_t onboard; /* the machine flag that says the board has one ("internal") */
 };
 
+/* A mouse is there whatever the ROM set: 86Box's mice need no firmware of their own. */
+static int
+mouse_available(int mouse)
+{
+    const device_t *device = mouse_get_device(mouse);
+    return (device == NULL) || device_available(device);
+}
+
+static const char *
+mouse_internal_name(int mouse)
+{
+    return mouse_get_internal_name(mouse);
+}
+
+static const device_t *
+mouse_device(int mouse)
+{
+    return mouse_get_device(mouse);
+}
+
 static const struct kind kinds[] = {
     { "video",   video_get_internal_name,         video_card_getdevice,   video_card_available,   MACHINE_VIDEO },
     { "sound",   sound_card_get_internal_name,    sound_card_getdevice,   sound_card_available,   MACHINE_SOUND },
@@ -98,7 +119,23 @@ static const struct kind kinds[] = {
     { "hdc",     hdc_get_internal_name,           hdc_get_device,         hdc_available,          MACHINE_HDC },
     { "scsi",    scsi_card_get_internal_name,     scsi_card_getdevice,    scsi_card_available,    0 },
     { "fdc",     fdc_card_get_internal_name,      fdc_card_getdevice,     fdc_card_available,     MACHINE_FDC },
+    { "mouse",   mouse_internal_name,             mouse_device,           mouse_available,        MACHINE_MOUSE },
 };
+
+/* The game port's joysticks: every one 86Box has, for any machine (the game port is a card or the board's). */
+static void
+put_joysticks(void)
+{
+    put("[");
+    for (int js = 0; joystick_get_internal_name(js)[0]; js++) {
+        put(js ? ",{\"id\":" : "{\"id\":");
+        put_string(joystick_get_internal_name(js));
+        put(",\"name\":");
+        put_string(joystick_get_name(js));
+        put(",\"available\":true}");
+    }
+    put("]");
+}
 
 /* The cards of [kind] machine [m] takes: those 86Box's device_is_valid allows on its buses, and its
    onboard one ("internal") where the board has it. */
@@ -187,6 +224,8 @@ put_machine(int m)
         put(":");
         put_cards(&kinds[k], m);
     }
+    put(",\"joystick\":");
+    put_joysticks();
     put("}");
 }
 

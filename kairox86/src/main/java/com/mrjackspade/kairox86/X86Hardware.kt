@@ -24,7 +24,9 @@ object X86Hardware {
     const val HDC = "hdc"
     const val SCSI = "scsi"
     const val FDC = "fdc"
-    private val KINDS = listOf(VIDEO, SOUND, NETWORK, HDC, SCSI, FDC)
+    const val MOUSE = "mouse"
+    const val JOYSTICK = "joystick"
+    private val KINDS = listOf(VIDEO, SOUND, NETWORK, HDC, SCSI, FDC, MOUSE, JOYSTICK)
 
     /** The player's 86Box ROM set (MainActivity.firmwareFolder), set before the first query. */
     @Volatile lateinit var roms: File

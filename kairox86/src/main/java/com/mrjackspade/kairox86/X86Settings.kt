@@ -98,6 +98,8 @@ object X86Settings {
     val hdc = card("hdc", R.string.setting_hdc, X86Hardware.HDC, "Storage controllers", "hdc", onboardFirst = true)
     val scsi = card("scsi", R.string.setting_scsi, X86Hardware.SCSI, "Storage controllers", "scsicard_1", onboardFirst = false)
     val fdc = card("fdc", R.string.setting_fdc, X86Hardware.FDC, "Storage controllers", "fdc", onboardFirst = true)
+    val mouse = card("mouse", R.string.setting_mouse, X86Hardware.MOUSE, "Input devices", "mouse_type", onboardFirst = false)
+    val joystick = card("joystick", R.string.setting_joystick, X86Hardware.JOYSTICK, "Input devices", "joystick_type", onboardFirst = false)
 
     /** The clock the guest reads: the host's local time (86Box's default), UTC, or its own from its CMOS. */
     val clock = single(MachineOption("clock", UiText.res(R.string.setting_clock), listOf(
@@ -106,7 +108,7 @@ object X86Settings {
         ChoiceOption("disabled", UiText.res(R.string.setting_clock_own))), "local"), MACHINE, "time_sync")
 
     /** In the order they show; each after the ones it depends on. */
-    val all = listOf(machine, processor, memory, video, sound, network, hdc, scsi, fdc, clock)
+    val all = listOf(machine, processor, memory, video, sound, network, hdc, scsi, fdc, mouse, joystick, clock)
 
     /** The setting [option] is. */
     fun of(option: MachineOption): Setting = all.firstOrNull { it.option.id == option.id }
