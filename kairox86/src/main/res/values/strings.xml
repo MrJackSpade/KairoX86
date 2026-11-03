@@ -12,7 +12,7 @@
     <!-- A joystick button: %1$d is its number. -->
     <string name="joystick_button">Button %1$d</string>
     <!-- A direction of the second joystick: %1$s is the direction, such as Up. -->
-    <string name="joystick_2">Joystick 2 %1$s</string>
+    <string name="joystick_2">2 %1$s</string>
 
     <!-- What a library entry is, on its chip: a PC set up in a folder. -->
     <string name="media_machine">Machine</string>
