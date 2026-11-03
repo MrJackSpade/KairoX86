@@ -1,0 +1,1797 @@
+/*
+ * 86Box    A hypervisor and IBM PC system emulator that specializes in
+ *          running old operating systems and software designed for IBM
+ *          PC systems and compatibles from 1981 through fairly recent
+ *          system designs based on the PCI bus.
+ *
+ *          This file is part of the 86Box distribution.
+ *
+ *          Paradise VGA emulation
+ *           PC2086, PC3086 use PVGA1A
+ *           MegaPC uses W90C11A
+ *
+ * Authors: Sarah Walker, <https://pcem-emulator.co.uk/>
+ *          Miran Grca, <mgrca8@gmail.com>
+ *
+ *          Copyright 2008-2019 Sarah Walker.
+ *          Copyright 2016-2019 Miran Grca.
+ */
+#include <stdio.h>
+#include <stdint.h>
+#include <string.h>
+#include <stdlib.h>
+#include <wchar.h>
+#include <86box/86box.h>
+#include <86box/io.h>
+#include <86box/timer.h>
+#include <86box/mem.h>
+#include <86box/rom.h>
+#include <86box/mca.h>
+#include <86box/device.h>
+#include <86box/video.h>
+#include <86box/vid_xga.h>
+#include <86box/vid_svga.h>
+#include <86box/vid_svga_render.h>
+#include "vid_wd90c31.h"
+#include "vid_wd90c33.h"
+
+#define WD90C31_ROM      "roms/video/wd90c31a/BIOS.BIN"
+#define WD90C20_FONT_ROM "roms/machines/ibmps55_m35s/64F9074.BIN"
+#define SPEEDSTAR24X_ROM "roms/video/wd90c31a/wd90c31alrdiamondspeedstar24x1.BIN"
+#define WD90C33_ROM      "roms/video/wd90c33/wd90c33.bin"
+#define WD90C33ZZ_ROM    "roms/video/wd90c33/wd90c33zz.bin"
+#define TG486G_ROM       "roms/machines/tg486g/tg486g.bin"
+
+#define VAR_BYTE_MODE      (0 << 0)
+#define VAR_WORD_MODE_MA13 (1 << 0)
+#define VAR_WORD_MODE_MA15 (2 << 0)
+#define VAR_DWORD_MODE     (3 << 0)
+#define VAR_MODE_MASK      (3 << 0)
+#define VAR_ROW0_MA13      (1 << 2)
+#define VAR_ROW1_MA14      (1 << 3)
+
+typedef struct paradise_t {
+    svga_t svga;
+
+    rom_t bios_rom;
+    rom_t font_rom;
+
+    enum {
+        PVGA1A = 0,
+        WD90C11,
+        WD90C20,
+        WD90C30,
+        WD90C31,
+        WD90C33
+    } type;
+
+    uint32_t vram_mask;
+    uint32_t memory;
+
+    uint32_t read_bank[4], write_bank[4];
+
+    int interlace;
+
+    wd90c31_t *accel;
+    wd90c33_t *accel33;
+    int        speedstar24x;
+    int        att_dac;
+    uint8_t    dac_reads, dac_control;
+
+    uint8_t    pos_regs[8];
+    uint8_t    *font_rom_data;
+    uint8_t    font_page, font_ctrl;
+    uint8_t    local_bus[4];
+} paradise_t;
+
+static video_timings_t timing_paradise_pvga1a    = { .type = VIDEO_ISA, .write_b = 6, .write_w = 8, .write_l = 16, .read_b = 6, .read_w = 8, .read_l = 16 };
+static video_timings_t timing_paradise_wd90c_isa = { .type = VIDEO_ISA, .write_b = 3, .write_w = 3, .write_l =  6, .read_b = 5, .read_w = 5, .read_l = 10 };
+static video_timings_t timing_paradise_wd90c_mca = { .type = VIDEO_MCA, .write_b = 3, .write_w = 3, .write_l =  6, .read_b = 5, .read_w = 5, .read_l = 10 };
+static video_timings_t timing_paradise_wd90c_vlb = { .type = VIDEO_BUS, .write_b = 2, .write_w = 2, .write_l =  4, .read_b = 5, .read_w = 5, .read_l = 10 };
+
+void paradise_remap(paradise_t *paradise);
+
+/* The SpeedStar BIOS probes the SS2410 ID after unlocking port 3c6.
+   Its mode 72h writes 9eh (RGB888), modes 62h/63h write a0h (RGB555). */
+static uint8_t
+speedstar24x_ramdac_in(uint16_t addr, paradise_t *paradise)
+{
+    if (addr == 0x3c6) {
+        if (paradise->dac_reads == 4)
+            return 0x8e;
+        paradise->dac_reads++;
+    } else
+        paradise->dac_reads = 0;
+    return svga_in(addr, &paradise->svga);
+}
+
+static void
+speedstar24x_ramdac_out(uint16_t addr, uint8_t val, paradise_t *paradise)
+{
+    svga_t *svga = &paradise->svga;
+
+    if (addr == 0x3c6 && paradise->dac_reads == 4) {
+        paradise->dac_control = val;
+        svga->bpp             = (val & 0x80) ? ((val & 0x20) ? 15 : 24) : 8;
+        svga_recalctimings(svga);
+    } else
+        svga_out(addr, val, svga);
+    paradise->dac_reads = 0;
+}
+
+static void
+paradise_hwcursor_draw(svga_t *svga, int displine)
+{
+    paradise_t *paradise = svga->priv;
+
+    if (paradise->accel33)
+        wd90c33_hwcursor_draw(paradise->accel33, displine);
+    else
+        wd90c31_hwcursor_draw(paradise->accel, displine);
+}
+
+/* WD90C33 local bus interface registers (section 10). Only the BIOS writes
+   them; 2DF3h returns the BD[7:0] configuration straps. */
+static uint8_t
+paradise_local_bus_in(uint16_t addr, void *priv)
+{
+    paradise_t *paradise = (paradise_t *) priv;
+
+    if ((addr & 3) == 3)
+        return 0xff;
+    return paradise->local_bus[addr & 3];
+}
+
+static void
+paradise_local_bus_out(uint16_t addr, uint8_t val, void *priv)
+{
+    paradise_t *paradise = (paradise_t *) priv;
+
+    paradise->local_bus[addr & 3] = val;
+}
+
+/* PR34 (sequencer 14h) bits 6 and 7 are bit 8 of PR0(A) and PR0(B). */
+static uint32_t
+paradise_bank_offset(paradise_t *paradise, int alternate)
+{
+    svga_t  *svga   = &paradise->svga;
+    uint32_t offset = svga->gdcreg[alternate ? 0x0a : 0x09] << 12;
+
+    if (paradise->type == WD90C33)
+        offset |= (svga->seqregs[0x14] & (alternate ? 0x80 : 0x40)) << (alternate ? 13 : 14);
+    return offset;
+}
+
+static void
+paradise_update_decode_mask(paradise_t *paradise)
+{
+    svga_t *svga = &paradise->svga;
+
+    if (svga->crtc[0x2f] & 0x02)
+        svga->decode_mask = 0x3ffff;
+    else switch (svga->gdcreg[0x0b] & 0xc0) {
+        case 0x00: case 0x40:
+            svga->decode_mask = 0x3ffff;
+            break;
+        case 0x80:
+            svga->decode_mask = 0x7ffff;
+            break;
+        case 0xc0:
+            /* PR18 bit 7 enables the second megabyte. */
+            svga->decode_mask = ((paradise->type == WD90C33) && (svga->crtc[0x3e] & 0x80)) ? 0x1fffff : 0xfffff;
+            break;
+    }
+}
+
+uint8_t
+paradise_in(uint16_t addr, void *priv)
+{
+    paradise_t *paradise = (paradise_t *) priv;
+    svga_t     *svga     = &paradise->svga;
+    uint8_t     max_sr   = (paradise->type >= WD90C30) ? 0x15 : 0x12;
+
+    if (((addr & 0xfff0) == 0x3d0 || (addr & 0xfff0) == 0x3b0) && !(svga->miscout & 1))
+        addr ^= 0x60;
+
+    switch (addr) {
+        case 0x3c5:
+            if (svga->seqaddr > 7) {
+                if (paradise->type < WD90C11 || svga->seqregs[6] != 0x48)
+                    return 0xff;
+                if (svga->seqaddr > max_sr)
+                    return 0xff;
+                return svga->seqregs[svga->seqaddr & 0x1f];
+            }
+            break;
+
+        case 0x3c6:
+        case 0x3c7:
+        case 0x3c8:
+        case 0x3c9:
+            if (paradise->speedstar24x)
+                return speedstar24x_ramdac_in(addr, paradise);
+            if (paradise->att_dac)
+                return att49x_ramdac_in(addr, 0, svga->ramdac, svga);
+            if (paradise->type == WD90C33)
+                return sc1502x_ramdac_in(addr, svga->ramdac, svga);
+            if (paradise->type >= WD90C30)
+                return sc1148x_ramdac_in(addr, 0, svga->ramdac, svga);
+            return svga_in(addr, svga);
+
+        case 0x3cf:
+            if (svga->gdcaddr >= 9 && svga->gdcaddr <= 0x0e) {
+                if (svga->gdcreg[0x0f] & 0x10)
+                    return 0xff;
+            }
+            switch (svga->gdcaddr) {
+                case 0x0f:
+                    return (svga->gdcreg[0x0f] & 0x17) | 0x80;
+
+                default:
+                    break;
+            }
+            break;
+
+        case 0x3D4:
+            return svga->crtcreg;
+        case 0x3D5:
+            if ((paradise->type == PVGA1A) && (svga->crtcreg & 0x20))
+                return 0xff;
+            if (svga->crtcreg > 0x29 && svga->crtcreg < 0x30 && (svga->crtc[0x29] & 0x88) != 0x80)
+                return 0xff;
+            if ((paradise->type == WD90C20) && (svga->crtcreg == 0x34))
+                return 0x00; /* PR1B flat panel unlock is write-only */
+            return svga->crtc[svga->crtcreg];
+
+        default:
+            break;
+    }
+    return svga_in(addr, svga);
+}
+
+void
+paradise_out(uint16_t addr, uint8_t val, void *priv)
+{
+    paradise_t *paradise = (paradise_t *) priv;
+    svga_t     *svga     = &paradise->svga;
+    xga_t      *xga      = (xga_t *) svga->xga;
+    uint8_t     old;
+
+    if (((addr & 0xfff0) == 0x3d0 || (addr & 0xfff0) == 0x3b0) && !(svga->miscout & 1))
+        addr ^= 0x60;
+
+    switch (addr) {
+        case 0x3c2:
+            if (paradise->speedstar24x)
+                icd2061_write(svga->clock_gen, (val >> 2) & 3);
+            break;
+
+        case 0x3c5:
+            if (svga->seqaddr > 7) {
+                if (paradise->type < WD90C11 || svga->seqregs[6] != 0x48)
+                    return;
+                if (paradise->type >= WD90C31 && svga->seqaddr > 0x15)
+                    return;
+                svga->seqregs[svga->seqaddr & 0x1f] = val;
+                if ((svga->seqaddr == 0x11) || ((paradise->type == WD90C33) && (svga->seqaddr == 0x14))) {
+                    paradise_remap(paradise);
+                }
+                if (paradise->type >= WD90C31 && svga->seqaddr == 0x12)
+                    svga_recalctimings(svga);
+                return;
+            }
+            break;
+
+        case 0x3c6:
+        case 0x3c7:
+        case 0x3c8:
+        case 0x3c9:
+            if (paradise->speedstar24x)
+                speedstar24x_ramdac_out(addr, val, paradise);
+            else if (paradise->att_dac)
+                att49x_ramdac_out(addr, 0, val, svga->ramdac, svga);
+            else if (paradise->type == WD90C33)
+                sc1502x_ramdac_out(addr, val, svga->ramdac, svga);
+            else if (paradise->type >= WD90C30)
+                sc1148x_ramdac_out(addr, 0, val, svga->ramdac, svga);
+            else
+                svga_out(addr, val, svga);
+            return;
+
+        case 0x3cf:
+            if (svga->gdcaddr >= 9 && svga->gdcaddr <= 0x0e) {
+                if ((svga->gdcreg[0x0f] & 7) != 5)
+                    return;
+            }
+
+            switch (svga->gdcaddr) {
+                case 6:
+                    if ((svga->gdcreg[6] & 0x0c) != (val & 0xc)) {
+                        switch (val & 0x0c) {
+                            case 0x0: /*128k at A0000*/
+                                mem_mapping_set_addr(&svga->mapping, 0xa0000, 0x20000);
+                                svga->banked_mask = 0xffff;
+                                break;
+                            case 0x4: /*64k at A0000*/
+                                mem_mapping_set_addr(&svga->mapping, 0xa0000, 0x10000);
+                                svga->banked_mask = 0xffff;
+                                if (xga_active && (svga->xga != NULL)) {
+                                    xga->on = 0;
+                                    mem_mapping_set_handler(&svga->mapping, svga->read, svga->readw, svga->readl, svga->write, svga->writew, svga->writel);
+                                }
+                                break;
+                            case 0x8: /*32k at B0000*/
+                                mem_mapping_set_addr(&svga->mapping, 0xb0000, 0x08000);
+                                svga->banked_mask = 0x7fff;
+                                break;
+                            case 0xC: /*32k at B8000*/
+                                mem_mapping_set_addr(&svga->mapping, 0xb8000, 0x08000);
+                                svga->banked_mask = 0x7fff;
+                                break;
+
+                            default:
+                                break;
+                        }
+                    }
+                    svga->gdcreg[6] = val;
+                    paradise_remap(paradise);
+                    return;
+
+                case 9:
+                case 0x0a:
+                    svga->gdcreg[svga->gdcaddr] = val;
+                    paradise_remap(paradise);
+                    return;
+                case 0x0b:
+                    svga->gdcreg[0x0b] = val;
+                    svga->gdcreg[0x0b] &= ~0xc0;
+                    if (paradise->memory >= 1024)
+                        svga->gdcreg[0x0b] |= 0xc0;
+                    else if (paradise->memory == 512)
+                        svga->gdcreg[0x0b] |= 0x80;
+                    else
+                        svga->gdcreg[0x0b] |= 0x40;
+
+                    paradise_update_decode_mask(paradise);
+                    paradise_remap(paradise);
+                    return;
+                case 0x0c:
+                    if (paradise->type < WD90C31)
+                        break;
+                    svga->gdcreg[0x0c] = val;
+                    svga_recalctimings(svga);
+                    return;
+                case 0x0e:
+                    svga->gdcreg[0x0e] = val;
+                    svga_recalctimings(svga);
+                    return;
+
+                default:
+                    break;
+            }
+            break;
+
+        case 0x3D4:
+            svga->crtcreg = val & 0x3f;
+            return;
+        case 0x3D5:
+            if ((paradise->type == PVGA1A) && (svga->crtcreg & 0x20))
+                return;
+            if ((svga->crtcreg < 7) && (svga->crtc[0x11] & 0x80))
+                return;
+            if ((svga->crtcreg == 7) && (svga->crtc[0x11] & 0x80))
+                val = (svga->crtc[7] & ~0x10) | (val & 0x10);
+            if (paradise->type == WD90C20) {
+                /* CRTC 31h-3Eh are the WD90C20's PR18..PR41 registers, not the
+                   "WD90Cxx" identification string the other WD parts expose there.
+                   They are gated by PR1B (34h) rather than by PR10 (29h). */
+                if (svga->crtcreg >= 0x31 && svga->crtcreg <= 0x3e) {
+                    if (svga->crtcreg == 0x31) /* PR18 flat panel status is read-only */
+                        return;
+                    old                       = svga->crtc[svga->crtcreg];
+                    svga->crtc[svga->crtcreg] = val;
+                    break;
+                }
+            } else if (svga->crtcreg >= 0x31 && svga->crtcreg <= 0x37)
+                return;
+            if (svga->crtcreg > 0x29 && (svga->crtc[0x29] & 7) != 5)
+                return;
+            old                       = svga->crtc[svga->crtcreg];
+            svga->crtc[svga->crtcreg] = val;
+
+            if (old != val) {
+                if (svga->crtcreg < 0xe || svga->crtcreg > 0x10) {
+                    if ((svga->crtcreg == 0x2f) || (svga->crtcreg == 0x3e)) {
+                        paradise_update_decode_mask(paradise);
+                        paradise_remap(paradise);
+                    }
+                    if ((svga->crtcreg == 0xc) || (svga->crtcreg == 0xd)) {
+                        svga->fullchange = 3;
+                        svga->memaddr_latch   = ((svga->crtc[0xc] << 8) | svga->crtc[0xd]) + ((svga->crtc[8] & 0x60) >> 5);
+                    } else {
+                        svga->fullchange = changeframecount;
+                        svga_recalctimings(svga);
+                    }
+                }
+            }
+            break;
+
+        default:
+            break;
+    }
+
+    svga_out(addr, val, svga);
+}
+
+void
+paradise_remap(paradise_t *paradise)
+{
+    svga_t *svga    = &paradise->svga;
+
+    if (svga->seqregs[0x11] & 0x80) {
+        paradise->read_bank[0] = paradise_bank_offset(paradise, 0);
+        paradise->read_bank[1] = paradise->read_bank[0] + 0x8000;
+
+        paradise->write_bank[0] = paradise_bank_offset(paradise, 1);
+        paradise->write_bank[1] = paradise->write_bank[0] + 0x8000;
+
+        if ((svga->gdcreg[6] & 0x0c) == 0x00) {
+            paradise->read_bank[2] = paradise->read_bank[1] + 0x8000;
+            paradise->read_bank[3] = paradise->read_bank[2] + 0x8000;
+
+            paradise->write_bank[2] = paradise->write_bank[1] + 0x8000;
+            paradise->write_bank[3] = paradise->write_bank[2] + 0x8000;
+        } else {
+            if (svga->gdcreg[6] & 0x08) {
+                paradise->read_bank[1] = paradise->read_bank[0];
+
+                paradise->write_bank[1] = paradise->write_bank[0];
+            }
+
+            paradise->read_bank[2] = paradise->read_bank[0];
+            paradise->read_bank[3] = paradise->read_bank[1];
+
+            paradise->write_bank[2] = paradise->write_bank[0];
+            paradise->write_bank[3] = paradise->write_bank[1];
+        }
+    } else if (svga->gdcreg[0x0b] & 0x08) {
+        if ((svga->gdcreg[6] & 0x0c) == 0x00) {
+            paradise->read_bank[0] = paradise_bank_offset(paradise, 1);
+            paradise->read_bank[1] = paradise->read_bank[0] + 0x8000;
+            paradise->read_bank[2] = paradise_bank_offset(paradise, 0);
+            paradise->read_bank[3] = paradise->read_bank[2] + 0x8000;
+
+            paradise->write_bank[0] = paradise_bank_offset(paradise, 1);
+            paradise->write_bank[1] = paradise->write_bank[0] + 0x8000;
+            paradise->write_bank[2] = paradise_bank_offset(paradise, 0);
+            paradise->write_bank[3] = paradise->write_bank[2] + 0x8000;
+       } else if ((svga->gdcreg[6] & 0x0c) == 0x04) {
+            paradise->read_bank[0] = paradise_bank_offset(paradise, 1);
+            paradise->read_bank[1] = paradise_bank_offset(paradise, 0) + 0x8000;
+            paradise->read_bank[2] = paradise->read_bank[0];
+            paradise->read_bank[3] = paradise->read_bank[1];
+
+            paradise->write_bank[0] = paradise_bank_offset(paradise, 1);
+            paradise->write_bank[1] = paradise_bank_offset(paradise, 0) + 0x8000;
+            paradise->write_bank[2] = paradise->write_bank[0];
+            paradise->write_bank[3] = paradise->write_bank[1];
+       } else {
+            paradise->read_bank[0] = paradise_bank_offset(paradise, 1);
+            paradise->read_bank[1] = paradise->read_bank[0];
+            paradise->read_bank[2] = paradise->read_bank[0];
+            paradise->read_bank[3] = paradise->read_bank[0];
+
+            paradise->write_bank[0] = paradise_bank_offset(paradise, 1);
+            paradise->write_bank[1] = paradise->write_bank[0];
+            paradise->write_bank[2] = paradise->write_bank[0];
+            paradise->write_bank[3] = paradise->write_bank[0];
+       }
+    } else {
+        paradise->read_bank[0] = paradise_bank_offset(paradise, 0);
+        paradise->read_bank[1] = paradise->read_bank[0] + 0x8000;
+
+        paradise->write_bank[0] = paradise_bank_offset(paradise, 0);
+        paradise->write_bank[1] = paradise->write_bank[0] + 0x8000;
+
+        if ((svga->gdcreg[6] & 0x0c) == 0x00) {
+            paradise->read_bank[2] = paradise->read_bank[1] + 0x8000;
+            paradise->read_bank[3] = paradise->read_bank[2] + 0x8000;
+
+            paradise->write_bank[2] = paradise->write_bank[1] + 0x8000;
+            paradise->write_bank[3] = paradise->write_bank[2] + 0x8000;
+        } else {
+            if (svga->gdcreg[6] & 0x08) {
+                paradise->read_bank[1] = paradise->read_bank[0];
+
+                paradise->write_bank[1] = paradise->write_bank[0];
+            }
+
+            paradise->read_bank[2] = paradise->read_bank[0];
+            paradise->read_bank[3] = paradise->read_bank[1];
+
+            paradise->write_bank[2] = paradise->write_bank[0];
+            paradise->write_bank[3] = paradise->write_bank[1];
+        }
+   }
+
+    /* There are separate drivers for 1M and 512K/256K versions of the PVGA chips. */
+    if ((svga->gdcreg[0x0b] & 0xc0) < 0xc0) {
+        paradise->read_bank[1] &= 0x7ffff;
+        paradise->write_bank[1] &= 0x7ffff;
+    } else {
+        paradise->read_bank[1] &= svga->decode_mask | 0xfffff;
+        paradise->write_bank[1] &= svga->decode_mask | 0xfffff;
+    }
+}
+
+void
+paradise_render_4bpp_word_highres(svga_t *svga)
+{
+    int       x;
+    int       oddeven;
+    uint32_t  addr;
+    uint32_t *p;
+    uint8_t   edat[4];
+    uint8_t   dat;
+    uint32_t  changed_addr;
+
+    if ((svga->displine + svga->y_add) < 0)
+        return;
+
+    changed_addr = ((svga->memaddr & 0x3fffc) << 1);
+
+    if (svga->changedvram[changed_addr >> 12] || svga->changedvram[(changed_addr >> 12) + 1] || svga->fullchange) {
+        p = &svga->monitor->target_buffer->line[svga->displine + svga->y_add][svga->x_add];
+
+        if (svga->firstline_draw == 2000)
+            svga->firstline_draw = svga->displine;
+        svga->lastline_draw = svga->displine;
+
+        for (x = 0; x <= (svga->hdisp + svga->scrollcache); x += 8) {
+            addr    = ((svga->memaddr & 0x3fffc) << 1);
+            oddeven = 0;
+
+            oddeven = (svga->memaddr & 2) ? 1 : 0;
+            *(uint32_t *) (&edat[0]) = *(uint32_t *) (&svga->vram[addr | oddeven]) & 0x00ff00ff;
+            svga->memaddr = (svga->memaddr + 2) & svga->vram_mask;
+
+            dat  = edatlookup[edat[0] >> 6][edat[1] >> 6] | (edatlookup[edat[2] >> 6][edat[3] >> 6] << 2);
+            p[0] = svga->pallook[svga->egapal[(dat >> 4) & svga->plane_mask]];
+            p[1] = svga->pallook[svga->egapal[dat & svga->plane_mask]];
+            dat  = edatlookup[(edat[0] >> 4) & 3][(edat[1] >> 4) & 3] |
+                   (edatlookup[(edat[2] >> 4) & 3][(edat[3] >> 4) & 3] << 2);
+            p[2] = svga->pallook[svga->egapal[(dat >> 4) & svga->plane_mask]];
+            p[3] = svga->pallook[svga->egapal[dat & svga->plane_mask]];
+            dat  = edatlookup[(edat[0] >> 2) & 3][(edat[1] >> 2) & 3] |
+                   (edatlookup[(edat[2] >> 2) & 3][(edat[3] >> 2) & 3] << 2);
+            p[4] = svga->pallook[svga->egapal[(dat >> 4) & svga->plane_mask]];
+            p[5] = svga->pallook[svga->egapal[dat & svga->plane_mask]];
+            dat  = edatlookup[edat[0] & 3][edat[1] & 3] | (edatlookup[edat[2] & 3][edat[3] & 3] << 2);
+            p[6] = svga->pallook[svga->egapal[(dat >> 4) & svga->plane_mask]];
+            p[7] = svga->pallook[svga->egapal[dat & svga->plane_mask]];
+
+            p += 8;
+        }
+    }
+}
+
+static int
+paradise_mode_is_word(svga_t *svga)
+{
+    int func_nr;
+
+    if (svga->fb_only)
+        func_nr = 0;
+    else {
+        if (svga->force_dword_mode)
+            func_nr = VAR_DWORD_MODE;
+        else if (svga->crtc[0x14] & 0x40)
+            func_nr = svga->packed_chain4 ? VAR_BYTE_MODE : VAR_DWORD_MODE;
+        else if (svga->crtc[0x17] & 0x40)
+            func_nr = VAR_BYTE_MODE;
+        else if (svga->crtc[0x17] & 0x20)
+            func_nr = VAR_WORD_MODE_MA15;
+        else
+            func_nr = VAR_WORD_MODE_MA13;
+
+        if (!(svga->crtc[0x17] & 0x01))
+            func_nr |= VAR_ROW0_MA13;
+        if (!(svga->crtc[0x17] & 0x02))
+            func_nr |= VAR_ROW1_MA14;
+    }
+
+    return (func_nr == 2);
+}
+
+void
+paradise_recalctimings(svga_t *svga)
+{
+    paradise_t *paradise = (paradise_t *) svga->priv;
+    int clk_sel = 0;
+
+    svga->lowres = !(svga->gdcreg[0x0e] & 0x01);
+
+    /* Flat panel mode: the panel supplies the timing, so the BIOS leaves the CRTC
+       totals and the visible height zeroed. Fill only what is zero, so a mode the
+       guest programs itself is left alone. */
+    if ((paradise->type == WD90C20) && (svga->crtc[0x32] & 0x10)) {
+        static const uint8_t panel_defaults[12][2] = {
+            { 0x00, 0x5f }, { 0x02, 0x50 }, { 0x03, 0x82 }, { 0x04, 0x55 }, { 0x05, 0x81 },
+            { 0x06, 0xbf }, { 0x07, 0x1f }, { 0x10, 0x9c }, { 0x11, 0x8e }, { 0x12, 0x8f },
+            { 0x15, 0x96 }, { 0x16, 0xb9 }
+        };
+        for (uint8_t i = 0; i < 12; i++) {
+            if (!svga->crtc[panel_defaults[i][0]])
+                svga->crtc[panel_defaults[i][0]] = panel_defaults[i][1];
+        }
+    }
+
+    if (paradise->type >= WD90C31) {
+        /* Packed chain-4 storage matches the CRTC doubleword layout only.
+           In text mode the BIOS temporarily enables chain-4 to seed the
+           BitBLT blank-row pattern; that write must use VGA addressing. */
+        svga->packed_chain4 = !!(svga->crtc[0x14] & 0x40);
+        /* The WD90C33's memory organizations (tables 7-3 to 7-6) map byte
+           mode CPU addresses straight through as well, which its drivers'
+           256-colour modes use. */
+        if ((paradise->type == WD90C33) && (svga->crtc[0x17] & 0x40))
+            svga->packed_chain4 = 1;
+        svga->fast = (svga->gdcreg[8] == 0xff && !(svga->gdcreg[3] & 0x18) && !svga->gdcreg[1]) &&
+                     ((svga->chain4 && (svga->packed_chain4 || svga->force_old_addr)) || svga->fb_only) &&
+                     !(svga->adv_flags & FLAG_ADDR_BY8);
+    }
+
+    if (paradise->type >= WD90C30) {
+        if (svga->crtc[0x3e] & 0x01)
+            svga->vtotal |= 0x400;
+        if (svga->crtc[0x3e] & 0x02)
+            svga->dispend |= 0x400;
+        if (svga->crtc[0x3e] & 0x04)
+            svga->vsyncstart |= 0x400;
+        if (svga->crtc[0x3e] & 0x08)
+            svga->vblankstart |= 0x400;
+        if (svga->crtc[0x3e] & 0x10)
+            svga->split |= 0x400;
+        if ((paradise->type == WD90C33) && (svga->crtc[0x3e] & 0x20))
+            svga->htotal += 0x100;
+    }
+
+    if (paradise->type >= WD90C11)
+        svga->interlace = !!(svga->crtc[0x2d] & 0x20);
+
+    if (paradise->type < WD90C30) {
+        if ((svga->gdcreg[6] & 1) || (svga->attrregs[0x10] & 1)) {
+            if ((svga->bpp >= 8) && !svga->lowres) {
+                svga->render = svga_render_8bpp_highres;
+                if (paradise->type < WD90C11)
+                    svga->vram_display_mask = (svga->crtc[0x2f] & 0x02) ? 0x3ffff : paradise->vram_mask;
+            }
+        }
+        if (paradise->type >= WD90C11)  switch (svga->crtc[0x2f] & 0x60) {
+            case 0x60: case 0x40:
+                svga->vram_display_mask = 0x3ffff;
+                break;
+            case 0x20:
+                svga->vram_display_mask = 0x7ffff;
+                break;
+            case 0x00:
+                svga->vram_display_mask = 0xfffff;
+                break;
+        }
+    } else {
+        clk_sel = ((svga->miscout >> 2) & 0x03);
+        if (!paradise->speedstar24x) {
+            if (!(svga->gdcreg[0x0c] & 0x02))
+                clk_sel |= 0x04;
+
+            clk_sel |= (svga->seqregs[0x12] & 0x04) << 1;
+            clk_sel ^= 0x04; /*VGATTL*/
+        }
+
+        svga->clock = (cpuclock * (double) (1ULL << 32)) / svga->getclock(clk_sel, svga->clock_gen);
+        if ((svga->gdcreg[6] & 1) || (svga->attrregs[0x10] & 1)) {
+            if ((svga->bpp >= 8) && !svga->lowres) {
+                if (svga->bpp == 24) {
+                    svga->render = svga_render_24bpp_highres;
+                    svga->hdisp /= 3;
+                } else if (svga->bpp == 16) {
+                    svga->render = svga_render_16bpp_highres;
+                    svga->hdisp >>= 1;
+                    if (svga->hdisp == 788)
+                        svga->hdisp += 12;
+                } else if (svga->bpp == 15) {
+                    svga->render = svga_render_15bpp_highres;
+                    svga->hdisp >>= 1;
+                    if (svga->hdisp == 788)
+                        svga->hdisp += 12;
+                } else
+                    svga->render = svga_render_8bpp_highres;
+
+                svga->vram_display_mask = (svga->crtc[0x2f] & 0x02) ? 0x3ffff : paradise->vram_mask;
+            } else if ((svga->bpp <= 8) && svga->lowres && !svga->interlace && (svga->hdisp >= 1024) &&
+                       (svga->miscout >= 0x27) && (svga->miscout <= 0x2f))
+                svga->interlace = 1; /*Horrible tweak to re-enable the interlace after returning to
+                                       a windowed DOS box in Win3.x*/
+        }
+    }
+
+    /*
+       Yes, this is basically hack but I'm going to look at a proper rewrite in
+       86Box 6.0.
+     */
+    if ((paradise->type == WD90C11) && (svga->hdisp == 1024) &&
+        (svga->render == svga_render_4bpp_highres) && paradise_mode_is_word(svga))
+        svga->render = paradise_render_4bpp_word_highres;
+
+    /* The BIOS doubles the CRTC horizontal counts along with halved dot clock
+       (sequencer bit 3), so the generic 16/18 dots per character is twice
+       the real row and the row gets fetched (and drawn) twice over. */
+    if ((paradise->type == WD90C20) && (svga->seqregs[1] & 0x08) &&
+        ((svga->render == svga_render_4bpp_lowres) || (svga->render == svga_render_2bpp_lowres) ||
+         (svga->render == svga_render_text_40)))
+        svga->hdisp >>= 1;
+}
+
+uint32_t
+paradise_decode_addr(paradise_t *paradise, uint32_t addr, int write)
+{
+    svga_t   *svga            = &paradise->svga;
+    int       memory_map_mode = (svga->gdcreg[6] >> 2) & 3;
+
+    addr &= 0x1ffff;
+
+    switch (memory_map_mode) {
+        case 0:
+            break;
+        case 1:
+            if (addr >= 0x10000)
+                return 0xffffffff;
+            break;
+        case 2:
+            addr -= 0x10000;
+            if (addr >= 0x8000)
+                return 0xffffffff;
+            break;
+        default:
+        case 3:
+            addr -= 0x18000;
+            if (addr >= 0x8000)
+                return 0xffffffff;
+            break;
+    }
+
+    if (write)
+        addr = (addr & 0x7fff) + paradise->write_bank[(addr >> 15) & 3];
+    else
+        addr = (addr & 0x7fff) + paradise->read_bank[(addr >> 15) & 3];
+
+
+    return addr;
+}
+
+static void
+paradise_write(uint32_t addr, uint8_t val, void *priv)
+{
+    paradise_t *paradise = (paradise_t *) priv;
+    svga_t     *svga     = &paradise->svga;
+    uint32_t    prev_addr;
+    uint32_t    prev_addr2;
+
+    if (paradise->accel33 && wd90c33_mem_write(paradise->accel33, addr, val, sizeof(val)))
+        return;
+
+    addr = paradise_decode_addr(paradise, addr, 1);
+    if (addr == 0xffffffff)
+        return;
+
+    /*Could be done in a better way but it works.*/
+    if (!svga->lowres || (svga->attrregs[0x10] & 0x40)) {
+        if (((svga->gdcreg[6] & 0x0c) == 0x04) && (svga->crtc[0x14] & 0x40) && ((svga->gdcreg[0x0b] & 0xc0) == 0xc0) && !svga->chain4) {
+            prev_addr  = addr & 3;
+            prev_addr2 = addr & 0xfffc;
+            if (prev_addr == 3) {
+                if ((addr & 0x30000) != 0x30000)
+                    addr = (addr >> 16) | (prev_addr << 16) | prev_addr2;
+            } else if (prev_addr == 2) {
+                if ((addr & 0x30000) != 0x20000)
+                    addr = (addr >> 16) | (prev_addr << 16) | prev_addr2;
+            } else if (prev_addr == 1) {
+                if ((addr & 0x30000) != 0x10000)
+                    addr = (addr >> 16) | (prev_addr << 16) | prev_addr2;
+            } else {
+                if (addr & 0x30000)
+                    addr = (addr >> 16) | (prev_addr << 16) | prev_addr2;
+            }
+        }
+    }
+    svga_write_linear(addr, val, svga);
+}
+
+static void
+paradise_writew(uint32_t addr, uint16_t val, void *priv)
+{
+    paradise_t *paradise = (paradise_t *) priv;
+    svga_t     *svga     = &paradise->svga;
+    uint32_t    prev_addr;
+    uint32_t    prev_addr2;
+
+    if (paradise->accel33 && wd90c33_mem_write(paradise->accel33, addr, val, sizeof(val)))
+        return;
+
+    addr = paradise_decode_addr(paradise, addr, 1);
+    if (addr == 0xffffffff)
+        return;
+
+    /*Could be done in a better way but it works.*/
+    if (!svga->lowres || (svga->attrregs[0x10] & 0x40)) {
+        if (((svga->gdcreg[6] & 0x0c) == 0x04) && (svga->crtc[0x14] & 0x40) && ((svga->gdcreg[0x0b] & 0xc0) == 0xc0) && !svga->chain4) {
+            prev_addr  = addr & 3;
+            prev_addr2 = addr & 0xfffc;
+            if (prev_addr == 3) {
+                if ((addr & 0x30000) != 0x30000)
+                    addr = (addr >> 16) | (prev_addr << 16) | prev_addr2;
+            } else if (prev_addr == 2) {
+                if ((addr & 0x30000) != 0x20000)
+                    addr = (addr >> 16) | (prev_addr << 16) | prev_addr2;
+            } else if (prev_addr == 1) {
+                if ((addr & 0x30000) != 0x10000)
+                    addr = (addr >> 16) | (prev_addr << 16) | prev_addr2;
+            } else {
+                if (addr & 0x30000)
+                    addr = (addr >> 16) | (prev_addr << 16) | prev_addr2;
+            }
+        }
+    }
+    svga_writew_linear(addr, val, svga);
+}
+
+static uint8_t
+paradise_read(uint32_t addr, void *priv)
+{
+    paradise_t *paradise = (paradise_t *) priv;
+    svga_t     *svga     = &paradise->svga;
+    uint32_t    prev_addr;
+    uint32_t    prev_addr2;
+
+    addr = paradise_decode_addr(paradise, addr, 0);
+    if (addr == 0xffffffff)
+        return 0xff;
+
+    /*Could be done in a better way but it works.*/
+    if (!svga->lowres || (svga->attrregs[0x10] & 0x40)) {
+        if (((svga->gdcreg[6] & 0x0c) == 0x04) && (svga->crtc[0x14] & 0x40) && ((svga->gdcreg[0x0b] & 0xc0) == 0xc0) && !svga->chain4) {
+            prev_addr  = addr & 3;
+            prev_addr2 = addr & 0xfffc;
+            if (prev_addr == 3) {
+                if ((addr & 0x30000) != 0x30000)
+                    addr = (addr >> 16) | (prev_addr << 16) | prev_addr2;
+            } else if (prev_addr == 2) {
+                if ((addr & 0x30000) != 0x20000)
+                    addr = (addr >> 16) | (prev_addr << 16) | prev_addr2;
+            } else if (prev_addr == 1) {
+                if ((addr & 0x30000) != 0x10000)
+                    addr = (addr >> 16) | (prev_addr << 16) | prev_addr2;
+            } else {
+                if (addr & 0x30000)
+                    addr = (addr >> 16) | (prev_addr << 16) | prev_addr2;
+            }
+        }
+    }
+    return svga_read_linear(addr, svga);
+}
+
+static uint16_t
+paradise_readw(uint32_t addr, void *priv)
+{
+    paradise_t *paradise = (paradise_t *) priv;
+    svga_t     *svga     = &paradise->svga;
+    uint32_t    prev_addr;
+    uint32_t    prev_addr2;
+
+    addr = paradise_decode_addr(paradise, addr, 0);
+    if (addr == 0xffffffff)
+        return 0xffff;
+
+    /*Could be done in a better way but it works.*/
+    if (!svga->lowres || (svga->attrregs[0x10] & 0x40)) {
+        if (((svga->gdcreg[6] & 0x0c) == 0x04) && (svga->crtc[0x14] & 0x40) && ((svga->gdcreg[0x0b] & 0xc0) == 0xc0) && !svga->chain4) {
+            prev_addr  = addr & 3;
+            prev_addr2 = addr & 0xfffc;
+            if (prev_addr == 3) {
+                if ((addr & 0x30000) != 0x30000)
+                    addr = (addr >> 16) | (prev_addr << 16) | prev_addr2;
+            } else if (prev_addr == 2) {
+                if ((addr & 0x30000) != 0x20000)
+                    addr = (addr >> 16) | (prev_addr << 16) | prev_addr2;
+            } else if (prev_addr == 1) {
+                if ((addr & 0x30000) != 0x10000)
+                    addr = (addr >> 16) | (prev_addr << 16) | prev_addr2;
+            } else {
+                if (addr & 0x30000)
+                    addr = (addr >> 16) | (prev_addr << 16) | prev_addr2;
+            }
+        }
+    }
+    return svga_readw_linear(addr, svga);
+}
+
+static void *
+paradise_init_ex(const device_t *info, uint32_t memory, int speedstar24x, int att_dac)
+{
+    paradise_t *paradise = calloc(1, sizeof(paradise_t));
+    svga_t     *svga     = &paradise->svga;
+
+    if (info->local == PVGA1A)
+        video_inform(VIDEO_FLAG_TYPE_SPECIAL, &timing_paradise_pvga1a);
+    else if (info->flags & DEVICE_MCA)
+        video_inform(VIDEO_FLAG_TYPE_SPECIAL, &timing_paradise_wd90c_mca);
+    else if (info->flags & DEVICE_VLB)
+        video_inform(VIDEO_FLAG_TYPE_SPECIAL, &timing_paradise_wd90c_vlb);
+    else
+        video_inform(VIDEO_FLAG_TYPE_SPECIAL, &timing_paradise_wd90c_isa);
+
+    paradise->memory       = memory;
+    paradise->speedstar24x = speedstar24x;
+
+    switch (info->local & 0xff) {
+        case PVGA1A:
+            svga_init(info, svga, paradise, (memory << 10), /*256kb default*/
+                      paradise_recalctimings,
+                      paradise_in, paradise_out,
+                      NULL,
+                      NULL);
+            paradise->vram_mask = (memory << 10) - 1;
+            svga->decode_mask   = (memory << 10) - 1;
+            break;
+        case WD90C11:
+        case WD90C20:
+            svga_init(info, svga, paradise, (memory << 10), /*512kb default*/
+                      paradise_recalctimings,
+                      paradise_in, paradise_out,
+                      NULL,
+                      NULL);
+            paradise->vram_mask = (memory << 10) - 1;
+            svga->decode_mask   = (memory << 10) - 1;
+            break;
+        case WD90C30:
+        case WD90C31:
+        case WD90C33:
+            svga_init(info, svga, paradise, (memory << 10),
+                      paradise_recalctimings,
+                      paradise_in, paradise_out,
+                      NULL,
+                      NULL);
+            paradise->vram_mask = (memory << 10) - 1;
+            svga->decode_mask   = (memory << 10) - 1;
+            /* Reuse the WD90C30's SC11487-compatible DAC for the generic ROM.
+               The WD90C30 board has a W82C487-80; Diamond uses an SS2410. */
+            /* The WD90C33 BIOS's default DAC commands (80h, E0h and 60h for
+               15, 16 and 24 bpp) are those of a Sierra SC15025. The
+               WD90C33-ZZ card's and the TriGem 486G's BIOSes are set up for a
+               DAC that takes 80h, C0h and E0h, like the AT&T 20C491. */
+            paradise->att_dac = att_dac;
+            if (paradise->att_dac)
+                svga->ramdac = device_add(&att491_ramdac_device);
+            else if ((info->local & 0xff) == WD90C33)
+                svga->ramdac = device_add(&sc1502x_ramdac_device);
+            else
+                svga->ramdac = paradise->speedstar24x ? NULL : device_add(&sc11487_ramdac_device);
+            svga->clock_gen     = device_add(paradise->speedstar24x ? &icd2061_device : &ics90c64a_903_device);
+            svga->getclock      = paradise->speedstar24x ? icd2061_getclock : ics90c64a_vclk_getclock;
+            if ((info->local & 0xff) == WD90C31) {
+                svga->hwcursor_draw = paradise_hwcursor_draw;
+                paradise->accel     = wd90c31_init(svga);
+            } else if ((info->local & 0xff) == WD90C33) {
+                svga->hwcursor_draw = paradise_hwcursor_draw;
+                paradise->accel33   = wd90c33_init(svga);
+                io_sethandler(0x2df0, 0x0004, paradise_local_bus_in, NULL, NULL,
+                              paradise_local_bus_out, NULL, NULL, paradise);
+            }
+            break;
+
+        default:
+            break;
+    }
+
+    svga->read = paradise_read;
+    svga->readw = paradise_readw;
+    svga->readl = NULL;
+    svga->write = paradise_write;
+    svga->writew = paradise_writew;
+    svga->writel = NULL;
+    mem_mapping_set_handler(&svga->mapping, paradise_read, paradise_readw, NULL, paradise_write, paradise_writew, NULL);
+    mem_mapping_set_p(&svga->mapping, paradise);
+
+    io_sethandler(0x03a0, 0x0040, paradise_in, NULL, NULL, paradise_out, NULL, NULL, paradise);
+
+    /* Western Digital chipset identification (read-only CRTC registers).
+       The WD90C20 has none: CRTC 31h-3Eh are its PR registers (PR18/19/1A/1B,
+       flat panel control, mapping RAM) instead of an identification string. */
+    if ((info->local & 0xff) != WD90C20) {
+        svga->crtc[0x31] = 'W';
+        svga->crtc[0x32] = 'D';
+        svga->crtc[0x33] = '9';
+        svga->crtc[0x34] = '0';
+        svga->crtc[0x35] = 'C';
+
+        switch (info->local & 0xff) {
+            case WD90C11:
+                svga->crtc[0x36] = '1';
+                svga->crtc[0x37] = '1';
+                break;
+            case WD90C30:
+                svga->crtc[0x36] = '3';
+                svga->crtc[0x37] = '0';
+                break;
+            case WD90C31:
+                svga->crtc[0x36] = '3';
+                svga->crtc[0x37] = '1';
+                break;
+            case WD90C33:
+                svga->crtc[0x36] = '3';
+                svga->crtc[0x37] = '3';
+                break;
+
+            default:
+                break;
+        }
+    }
+
+    svga->bpp     = 8;
+    svga->miscout = 0;
+
+    paradise->type = info->local & 0xff;
+
+    svga->hoverride = 1;
+
+    return paradise;
+}
+
+void *
+paradise_init(const device_t *info, uint32_t memory)
+{
+    return paradise_init_ex(info, memory, 0, 0);
+}
+
+static void *
+paradise_pvga1a_ncr3302_init(const device_t *info)
+{
+    paradise_t *paradise = paradise_init(info, 256);
+
+    if (paradise)
+        rom_init(&paradise->bios_rom, "roms/machines/3302/c000-wd_1987-1989-740011-003058-019c.bin", 0xc0000, 0x8000, 0x7fff, 0, MEM_MAPPING_EXTERNAL);
+
+    return paradise;
+}
+
+static void *
+paradise_pvga1a_pc2086_init(const device_t *info)
+{
+    paradise_t *paradise = paradise_init(info, 256);
+
+    if (paradise)
+        rom_init(&paradise->bios_rom, "roms/machines/pc2086/40186.ic171", 0xc0000, 0x8000, 0x7fff, 0, MEM_MAPPING_EXTERNAL);
+
+    return paradise;
+}
+
+static void *
+paradise_pvga1a_pc3086_init(const device_t *info)
+{
+    paradise_t *paradise = paradise_init(info, 256);
+
+    if (paradise)
+        rom_init(&paradise->bios_rom, "roms/machines/pc3086/c000.bin", 0xc0000, 0x8000, 0x7fff, 0, MEM_MAPPING_EXTERNAL);
+
+    return paradise;
+}
+
+static void *
+paradise_pvga1a_standalone_init(const device_t *info)
+{
+    paradise_t *paradise;
+    uint32_t memsize = device_get_config_int("memory");
+
+    paradise = paradise_init(info, memsize);
+
+    if (paradise)
+        rom_init(&paradise->bios_rom, "roms/video/pvga1a/BIOS.BIN", 0xc0000, 0x8000, 0x7fff, 0, MEM_MAPPING_EXTERNAL);
+
+    return paradise;
+}
+
+static int
+paradise_pvga1a_standalone_available(void)
+{
+    return rom_present("roms/video/pvga1a/BIOS.BIN");
+}
+
+static void *
+paradise_wd90c11_megapc_init(const device_t *info)
+{
+    paradise_t *paradise = paradise_init(info, 512);
+
+    if (paradise)
+        rom_init_interleaved(&paradise->bios_rom,
+                             "roms/machines/megapc/41651-bios lo.u18",
+                             "roms/machines/megapc/211253-bios hi.u19",
+                             0xc0000, 0x8000, 0x7fff, 0, MEM_MAPPING_EXTERNAL);
+
+    return paradise;
+}
+
+static void *
+paradise_wd90c11_standalone_init(const device_t *info)
+{
+    paradise_t *paradise = paradise_init(info, 512);
+
+    if (paradise)
+        rom_init(&paradise->bios_rom, "roms/video/wd90c11/WD90C11.VBI", 0xc0000, 0x8000, 0x7fff, 0, MEM_MAPPING_EXTERNAL);
+
+    return paradise;
+}
+
+static int
+paradise_wd90c11_standalone_available(void)
+{
+    return rom_present("roms/video/wd90c11/WD90C11.VBI");
+}
+
+/* The font ROM window is 8 KB wide and can sit at any of the 16 slots from C0000h. */
+static uint32_t
+paradise_wd90c20_fontrom_base(paradise_t *paradise)
+{
+    return 0xc0000 + ((paradise->pos_regs[3] & 0x0f) * 0x2000);
+}
+
+static void
+paradise_wd90c20_fontrom_remap(paradise_t *paradise)
+{
+    if (paradise->font_rom_data == NULL)
+        return;
+
+    paradise->font_rom.rom = paradise->font_rom_data + ((paradise->font_page & 0x3f) << 13);
+    mem_mapping_set_addr(&paradise->font_rom.mapping, paradise_wd90c20_fontrom_base(paradise), 0x2000);
+
+    if (!(paradise->font_ctrl & 0x01))
+        mem_mapping_disable(&paradise->font_rom.mapping);
+}
+
+static uint8_t
+paradise_wd90c20_font_in(uint16_t port, void *priv)
+{
+    paradise_t *paradise = (paradise_t *) priv;
+
+    switch (port & 0x0003) {
+        case 0x0002: /* 1162h: high byte of the segment the window sits at */
+            return (uint8_t) (paradise_wd90c20_fontrom_base(paradise) >> 12);
+        case 0x0003: /* 1163h: bit 0 is the window enable */
+            return paradise->font_ctrl & 0x01;
+        default:
+            break;
+    }
+
+    return 0xff;
+}
+
+static void
+paradise_wd90c20_font_out(uint16_t port, uint8_t val, void *priv)
+{
+    paradise_t *paradise = (paradise_t *) priv;
+
+    switch (port & 0x0003) {
+        case 0x0000: /* 1160h: font ROM page select, 64 pages of 8 KB */
+            paradise->font_page = val & 0x3f;
+            paradise_wd90c20_fontrom_remap(paradise);
+            break;
+        case 0x0003: /* 1163h: bit 0 is the window enable */
+            paradise->font_ctrl = val & 0x01;
+            paradise_wd90c20_fontrom_remap(paradise);
+            break;
+
+        default:
+            break;
+    }
+}
+
+/* WD90C20 display adapter POS. The machine's display adapter is a card
+   (the system ROM carries its video BIOS), not planar video. */
+static uint8_t
+paradise_wd90c20_mca_read(const uint16_t port, void *priv)
+{
+    const paradise_t *paradise = (paradise_t *) priv;
+
+    return paradise->pos_regs[port & 7];
+}
+
+static void
+paradise_wd90c20_mca_write(const uint16_t port, uint8_t val, void *priv)
+{
+    paradise_t *paradise = (paradise_t *) priv;
+
+    if (port < 0x0102)
+        return;
+
+    /* Save the MCA register value. */
+    paradise->pos_regs[port & 7] = val;
+
+    paradise_wd90c20_fontrom_remap(paradise);
+}
+
+static uint8_t
+paradise_wd90c20_mca_feedb(void *priv)
+{
+    const paradise_t *paradise = (paradise_t *) priv;
+
+    return paradise->pos_regs[2] & 0x01;
+}
+
+/* 0x3C3 gates the controller off the bus. The generic vga_enable/disable
+   assume a vga_t, so the machine's port handler forwards to these instead. */
+void
+paradise_wd90c20_vga_disable(void *priv, uint16_t port)
+{
+    paradise_t *paradise = (paradise_t *) priv;
+    svga_t     *svga     = &paradise->svga;
+
+    io_removehandler(0x03a0, 0x0040, paradise_in, NULL, NULL, paradise_out, NULL, NULL, paradise);
+    mem_mapping_disable(&svga->mapping);
+    svga->vga_enabled = 0;
+
+    if (port == 0x03c3)
+        svga_recalctimings(svga);
+}
+
+void
+paradise_wd90c20_vga_enable(void *priv, uint16_t port)
+{
+    paradise_t *paradise = (paradise_t *) priv;
+    svga_t     *svga     = &paradise->svga;
+
+    /* Remove first, so that re-enabling an already enabled controller
+       does not install the same I/O handlers twice. */
+    io_removehandler(0x03a0, 0x0040, paradise_in, NULL, NULL, paradise_out, NULL, NULL, paradise);
+    io_sethandler(0x03c0, 0x0020, paradise_in, NULL, NULL, paradise_out, NULL, NULL, paradise);
+    if (!(svga->miscout & 1))
+        io_sethandler(0x03a0, 0x0020, paradise_in, NULL, NULL, paradise_out, NULL, NULL, paradise);
+
+    mem_mapping_enable(&svga->mapping);
+    svga->vga_enabled = 1;
+
+    if (port == 0x03c3)
+        svga_recalctimings(svga);
+}
+
+static void
+paradise_wd90c20_mca_reset(void *priv)
+{
+    paradise_t *paradise = (paradise_t *) priv;
+
+    /* Adapter ID 90FDh per the reference disk. */
+    paradise->pos_regs[0] = 0xfd;
+    paradise->pos_regs[1] = 0x90;
+
+    /* Page 0 carries the option ROM header, so it must be the one the BIOS's
+       C0000h scan sees; the window stays enabled until software turns it off. */
+    paradise->font_page = 0x00;
+    paradise->font_ctrl = 0x01;
+    paradise_wd90c20_fontrom_remap(paradise);
+
+    /* A reset leaves the controller enabled. */
+    paradise->svga.vga_enabled = 1;
+
+    paradise_wd90c20_mca_write(0x102, 0, paradise);
+}
+
+static void *
+paradise_wd90c20_5535s_init(const device_t *info)
+{
+    /* Two TC511664J (64K x 16) DRAMs on the adapter: 256 KB. */
+    paradise_t *paradise = paradise_init(info, 256);
+
+    if (paradise != NULL) {
+        paradise_wd90c20_mca_reset(paradise);
+
+        /* The flat panel hangs off the adapter, so 3C2h switch sense has to
+           report "no cable" for the BIOS to select the panel display path. */
+        paradise->svga.cable_connected = 0;
+
+        /* Load the whole image, then shrink the mapping to a single 8 KB window:
+           the page is picked by pointing font_rom.rom into the image instead. */
+        rom_init(&paradise->font_rom, WD90C20_FONT_ROM, 0xc0000, 0x80000, 0x7ffff, 0x0000,
+                 MEM_MAPPING_EXTERNAL);
+        paradise->font_rom_data  = paradise->font_rom.rom;
+        paradise->font_rom.sz    = 0x2000;
+        paradise->font_rom.mask  = 0x1fff;
+        paradise_wd90c20_fontrom_remap(paradise);
+
+        io_sethandler(0x1160, 0x0004, paradise_wd90c20_font_in, NULL, NULL,
+                      paradise_wd90c20_font_out, NULL, NULL, paradise);
+
+        /* Slot 3 is the card's specific slot, so the card must take this one. */
+        mca_add_to_slot(paradise_wd90c20_mca_read, paradise_wd90c20_mca_write,
+                        paradise_wd90c20_mca_feedb, paradise_wd90c20_mca_reset,
+                        paradise, 2);
+    }
+
+    return paradise;
+}
+
+static void *
+paradise_wd90c30_standalone_init(const device_t *info)
+{
+    paradise_t *paradise;
+    uint32_t memsize = device_get_config_int("memory");
+
+    paradise = paradise_init(info, memsize);
+
+    if (paradise)
+        rom_init(&paradise->bios_rom, "roms/video/wd90c30/90C30-LR.VBI", 0xc0000, 0x8000, 0x7fff, 0, MEM_MAPPING_EXTERNAL);
+
+    return paradise;
+}
+
+static int
+paradise_wd90c30_standalone_available(void)
+{
+    return rom_present("roms/video/wd90c30/90C30-LR.VBI");
+}
+
+static void *
+paradise_wd90c31_standalone_init(const device_t *info)
+{
+    const char *bios      = device_get_config_bios("bios");
+    int         speedstar = !!device_get_bios_local(info, bios);
+    uint32_t    memory    = speedstar ? 1024 : device_get_config_int("memory");
+    paradise_t *paradise  = paradise_init_ex(info, memory, speedstar, 0);
+    const char *rom       = device_get_bios_file(info, bios, 0);
+
+    rom_init(&paradise->bios_rom, rom, 0xc0000, 0x8000, 0x7fff, 0, MEM_MAPPING_EXTERNAL);
+    return paradise;
+}
+
+static void *
+paradise_wd90c33_init(const device_t *info)
+{
+    const char *bios     = device_get_config_bios("bios");
+    paradise_t *paradise = paradise_init_ex(info, device_get_config_int("memory"), 0,
+                                            !!device_get_bios_local(info, bios));
+
+    rom_init(&paradise->bios_rom, device_get_bios_file(info, bios, 0), 0xc0000, 0x8000, 0x7fff, 0, MEM_MAPPING_EXTERNAL);
+    return paradise;
+}
+
+/* The video BIOS is the first 32 KB of the machine's BIOS image. The chipset
+   decodes C0000h-C7FFFh to the bus, so it is mapped like a card's ROM. */
+static void *
+paradise_wd90c33_onboard_init(const device_t *info)
+{
+    paradise_t *paradise = paradise_init_ex(info, device_get_config_int("memory"), 0, 1);
+
+    rom_init(&paradise->bios_rom, TG486G_ROM, 0xc0000, 0x8000, 0x7fff, 0, MEM_MAPPING_EXTERNAL);
+    return paradise;
+}
+
+static void *
+paradise_wd90c31_onboard_init(const device_t *info)
+{
+    uint32_t    memory    = device_get_config_int("memory");
+    paradise_t *paradise  = paradise_init(info, memory);
+
+    return paradise;
+}
+
+void
+paradise_close(void *priv)
+{
+    paradise_t *paradise = (paradise_t *) priv;
+
+    if (paradise->accel)
+        wd90c31_close(paradise->accel);
+    if (paradise->accel33) {
+        wd90c33_close(paradise->accel33);
+        io_removehandler(0x2df0, 0x0004, paradise_local_bus_in, NULL, NULL,
+                         paradise_local_bus_out, NULL, NULL, paradise);
+    }
+    svga_close(&paradise->svga);
+
+    free(paradise);
+}
+
+void
+paradise_speed_changed(void *priv)
+{
+    paradise_t *paradise = (paradise_t *) priv;
+
+    svga_recalctimings(&paradise->svga);
+}
+
+void
+paradise_force_redraw(void *priv)
+{
+    paradise_t *paradise = (paradise_t *) priv;
+
+    paradise->svga.fullchange = changeframecount;
+}
+
+const device_t paradise_pvga1a_pc2086_device = {
+    .name          = "Paradise PVGA1A On-Board (Amstrad PC2086)",
+    .internal_name = "pvga1a_pc2086",
+    .flags         = 0,
+    .local         = PVGA1A,
+    .init          = paradise_pvga1a_pc2086_init,
+    .close         = paradise_close,
+    .reset         = NULL,
+    .available     = NULL,
+    .speed_changed = paradise_speed_changed,
+    .force_redraw  = paradise_force_redraw,
+    .machine       = "Amstrad PC2086",
+    .config        = NULL
+};
+
+const device_t paradise_pvga1a_pc3086_device = {
+    .name          = "Paradise PVGA1A On-Board (Amstrad PC3086)",
+    .internal_name = "pvga1a_pc3086",
+    .flags         = 0,
+    .local         = PVGA1A,
+    .init          = paradise_pvga1a_pc3086_init,
+    .close         = paradise_close,
+    .reset         = NULL,
+    .available     = NULL,
+    .speed_changed = paradise_speed_changed,
+    .force_redraw  = paradise_force_redraw,
+    .machine       = "Amstrad PC3086",
+    .config        = NULL
+};
+
+static const device_config_t paradise_pvga1a_config[] = {
+  // clang-format off
+    {
+        .name           = "memory",
+        .description    = "Memory size",
+        .type           = CONFIG_SELECTION,
+        .default_string = NULL,
+        .default_int    = 512,
+        .file_filter    = NULL,
+        .spinner        = { 0 },
+        .selection      = {
+            { .description = "256 KB", .value = 256 },
+            { .description = "512 KB", .value = 512 },
+            { .description = ""                     }
+        },
+        .bios           = { { 0 } }
+    },
+    { .name = "", .description = "", .type = CONFIG_END }
+  // clang-format on
+};
+
+const device_t paradise_pvga1a_ncr3302_device = {
+    .name          = "Paradise PVGA1A On-Board (NCR 3302)",
+    .internal_name = "pvga1a_ncr3302",
+    .flags         = 0,
+    .local         = PVGA1A,
+    .init          = paradise_pvga1a_ncr3302_init,
+    .close         = paradise_close,
+    .reset         = NULL,
+    .available     = NULL,
+    .speed_changed = paradise_speed_changed,
+    .force_redraw  = paradise_force_redraw,
+    .machine       = "NCR 3302",
+    .config        = paradise_pvga1a_config
+};
+
+const device_t paradise_pvga1a_device = {
+    .name          = "Paradise PVGA1A",
+    .internal_name = "pvga1a",
+    .flags         = DEVICE_ISA,
+    .local         = PVGA1A,
+    .init          = paradise_pvga1a_standalone_init,
+    .close         = paradise_close,
+    .reset         = NULL,
+    .available     = paradise_pvga1a_standalone_available,
+    .speed_changed = paradise_speed_changed,
+    .force_redraw  = paradise_force_redraw,
+    .config        = paradise_pvga1a_config
+};
+
+const device_t paradise_wd90c11_megapc_device = {
+    .name          = "Paradise WD90C11 On-Board (Amstrad MegaPC)",
+    .internal_name = "wd90c11_megapc",
+    .flags         = 0,
+    .local         = WD90C11,
+    .init          = paradise_wd90c11_megapc_init,
+    .close         = paradise_close,
+    .reset         = NULL,
+    .available     = NULL,
+    .speed_changed = paradise_speed_changed,
+    .force_redraw  = paradise_force_redraw,
+    .machine       = "Amstrad MegaPC",
+    .config        = NULL
+};
+
+const device_t paradise_wd90c11_device = {
+    .name          = "Paradise WD90C11-LR",
+    .internal_name = "wd90c11",
+    .flags         = DEVICE_ISA,
+    .local         = WD90C11,
+    .init          = paradise_wd90c11_standalone_init,
+    .close         = paradise_close,
+    .reset         = NULL,
+    .available     = paradise_wd90c11_standalone_available,
+    .speed_changed = paradise_speed_changed,
+    .force_redraw  = paradise_force_redraw,
+    .config        = NULL
+};
+
+const device_t paradise_wd90c20_5535s_device = {
+    .name          = "Paradise WD90C20 On-Board (IBM PS/55 model 5535-S)",
+    .internal_name = "wd90c20_5535s",
+    .flags         = DEVICE_MCA,
+    .local         = WD90C20,
+    .init          = paradise_wd90c20_5535s_init,
+    .close         = paradise_close,
+    .reset         = NULL,
+    .available     = NULL,
+    .speed_changed = paradise_speed_changed,
+    .force_redraw  = paradise_force_redraw,
+    .machine       = "IBM PS/55 model 5535-S",
+    .config        = NULL
+};
+
+static const device_config_t paradise_wd90c30_config[] = {
+  // clang-format off
+    {
+        .name           = "memory",
+        .description    = "Memory size",
+        .type           = CONFIG_SELECTION,
+        .default_string = NULL,
+        .default_int    = 1024,
+        .file_filter    = NULL,
+        .spinner        = { 0 },
+        .selection      = {
+            { .description = "256 KB", .value =  256 },
+            { .description = "512 KB", .value =  512 },
+            { .description = "1 MB",   .value = 1024 },
+            { .description = ""                      }
+        },
+        .bios           = { { 0 } }
+    },
+    { .name = "", .description = "", .type = CONFIG_END }
+  // clang-format on
+};
+
+static const device_config_t paradise_wd90c31_config[] = {
+  // clang-format off
+    {
+        .name           = "bios",
+        .description    = "BIOS",
+        .type           = CONFIG_BIOS,
+        .default_string = "wd90c31",
+        .default_int    = 0,
+        .file_filter    = NULL,
+        .spinner        = { 0 },
+        .bios           = {
+            {
+                .name          = "Paradise",
+                .internal_name = "wd90c31",
+                .bios_type     = BIOS_NORMAL,
+                .files_no      = 1,
+                .local         = 0,
+                .size          = 65536,
+                .files         = { WD90C31_ROM, "" }
+            },
+            {
+                /* SS2410 RAMDAC and ICD2061 clock; always 1 MB (the default). */
+                .name          = "Diamond SpeedStar 24X",
+                .internal_name = "speedstar24x",
+                .bios_type     = BIOS_NORMAL,
+                .files_no      = 1,
+                .local         = 1,
+                .size          = 32768,
+                .flags         = BIOS_FIXED_MEMORY,
+                .files         = { SPEEDSTAR24X_ROM, "" }
+            },
+            { .files_no = 0 }
+        }
+    },
+    {
+        .name           = "memory",
+        .description    = "Memory size",
+        .type           = CONFIG_SELECTION,
+        .default_string = NULL,
+        .default_int    = 1024,
+        .file_filter    = NULL,
+        .spinner        = { 0 },
+        .selection      = {
+            { .description = "256 KB", .value =  256 },
+            { .description = "512 KB", .value =  512 },
+            { .description = "1 MB",   .value = 1024 },
+            { .description = ""                      }
+        },
+        .bios           = { { 0 } }
+    },
+    { .name = "", .description = "", .type = CONFIG_END }
+  // clang-format on
+};
+
+static const device_config_t paradise_wd90c31_onboard_config[] = {
+  // clang-format off
+    {
+        .name           = "memory",
+        .description    = "Memory size",
+        .type           = CONFIG_SELECTION,
+        .default_string = NULL,
+        .default_int    = 512,
+        .file_filter    = NULL,
+        .spinner        = { 0 },
+        .selection      = {
+            { .description = "512 KB", .value =  512 },
+            { .description = "1 MB",   .value = 1024 },
+            { .description = ""                      }
+        },
+        .bios           = { { 0 } }
+    },
+    { .name = "", .description = "", .type = CONFIG_END }
+  // clang-format on
+};
+
+const device_t paradise_wd90c30_device = {
+    .name          = "Paradise WD90C30-LR",
+    .internal_name = "wd90c30",
+    .flags         = DEVICE_ISA,
+    .local         = WD90C30,
+    .init          = paradise_wd90c30_standalone_init,
+    .close         = paradise_close,
+    .reset         = NULL,
+    .available     = paradise_wd90c30_standalone_available,
+    .speed_changed = paradise_speed_changed,
+    .force_redraw  = paradise_force_redraw,
+    .config        = paradise_wd90c30_config
+};
+
+const device_t paradise_wd90c31_device = {
+    .name          = "Paradise WD90C31A-LR",
+    .internal_name = "wd90c31",
+    .flags         = DEVICE_ISA16,
+    .local         = WD90C31,
+    .init          = paradise_wd90c31_standalone_init,
+    .close         = paradise_close,
+    .reset         = NULL,
+    .available     = NULL,
+    .speed_changed = paradise_speed_changed,
+    .force_redraw  = paradise_force_redraw,
+    .config        = paradise_wd90c31_config
+};
+
+const device_t paradise_wd90c31_onboard_device = {
+    .name          = "Paradise WD90C31A-LR On-Board",
+    .internal_name = "wd90c31_onboard",
+    .flags         = DEVICE_ISA16,
+    .local         = WD90C31,
+    .init          = paradise_wd90c31_onboard_init,
+    .close         = paradise_close,
+    .reset         = NULL,
+    .available     = NULL,
+    .speed_changed = paradise_speed_changed,
+    .force_redraw  = paradise_force_redraw,
+    .config        = paradise_wd90c31_onboard_config
+};
+
+static const device_config_t paradise_wd90c33_config[] = {
+  // clang-format off
+    {
+        .name           = "bios",
+        .description    = "BIOS",
+        .type           = CONFIG_BIOS,
+        .default_string = "wd90c33",
+        .default_int    = 0,
+        .file_filter    = NULL,
+        .spinner        = { 0 },
+        .bios           = {
+            {
+                /* Sierra SC15025 RAMDAC. */
+                .name          = "Western Digital (Sierra RAMDAC)",
+                .internal_name = "wd90c33",
+                .bios_type     = BIOS_NORMAL,
+                .files_no      = 1,
+                .local         = 0,
+                .size          = 32768,
+                .files         = { WD90C33_ROM, "" }
+            },
+            {
+                /* AT&T 20C491 RAMDAC. */
+                .name          = "Western Digital WD90C33-ZZ (AT&T RAMDAC)",
+                .internal_name = "wd90c33zz",
+                .bios_type     = BIOS_NORMAL,
+                .files_no      = 1,
+                .local         = 1,
+                .size          = 65536,
+                .files         = { WD90C33ZZ_ROM, "" }
+            },
+            { .files_no = 0 }
+        }
+    },
+    {
+        .name           = "memory",
+        .description    = "Memory size",
+        .type           = CONFIG_SELECTION,
+        .default_string = NULL,
+        .default_int    = 1024,
+        .file_filter    = NULL,
+        .spinner        = { 0 },
+        .selection      = {
+            { .description = "512 KB", .value =  512 },
+            { .description = "1 MB",   .value = 1024 },
+            { .description = "2 MB",   .value = 2048 },
+            { .description = ""                      }
+        },
+        .bios           = { { 0 } }
+    },
+    { .name = "", .description = "", .type = CONFIG_END }
+  // clang-format on
+};
+
+static const device_config_t paradise_wd90c33_onboard_config[] = {
+  // clang-format off
+    {
+        .name           = "memory",
+        .description    = "Memory size",
+        .type           = CONFIG_SELECTION,
+        .default_string = NULL,
+        .default_int    = 1024,
+        .file_filter    = NULL,
+        .spinner        = { 0 },
+        .selection      = {
+            { .description = "512 KB", .value =  512 },
+            { .description = "1 MB",   .value = 1024 },
+            { .description = "2 MB",   .value = 2048 },
+            { .description = ""                      }
+        },
+        .bios           = { { 0 } }
+    },
+    { .name = "", .description = "", .type = CONFIG_END }
+  // clang-format on
+};
+
+const device_t paradise_wd90c33_device = {
+    .name          = "Paradise WD90C33",
+    .internal_name = "wd90c33",
+    .flags         = DEVICE_ISA16,
+    .local         = WD90C33,
+    .init          = paradise_wd90c33_init,
+    .close         = paradise_close,
+    .reset         = NULL,
+    .available     = NULL,
+    .speed_changed = paradise_speed_changed,
+    .force_redraw  = paradise_force_redraw,
+    .config        = paradise_wd90c33_config
+};
+
+const device_t paradise_wd90c33_vlb_device = {
+    .name          = "Paradise WD90C33 (VLB)",
+    .internal_name = "wd90c33_vlb",
+    .flags         = DEVICE_VLB,
+    .local         = WD90C33,
+    .init          = paradise_wd90c33_init,
+    .close         = paradise_close,
+    .reset         = NULL,
+    .available     = NULL,
+    .speed_changed = paradise_speed_changed,
+    .force_redraw  = paradise_force_redraw,
+    .config        = paradise_wd90c33_config
+};
+
+const device_t paradise_wd90c33_onboard_device = {
+    .name          = "Paradise WD90C33 On-Board (TriGem 486G)",
+    .internal_name = "wd90c33_onboard",
+    .flags         = DEVICE_VLB,
+    .local         = WD90C33,
+    .init          = paradise_wd90c33_onboard_init,
+    .close         = paradise_close,
+    .reset         = NULL,
+    .available     = NULL,
+    .speed_changed = paradise_speed_changed,
+    .force_redraw  = paradise_force_redraw,
+    .machine       = "TriGem 486G",
+    .config        = paradise_wd90c33_onboard_config
+};
