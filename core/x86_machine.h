@@ -48,9 +48,10 @@ public:
     // The mouse: motion in host pixels, and button 1 (left), 2 (right) or 3 (middle).
     void mouse_move(int dx, int dy);
     void mouse_button(int button, bool down);
-    // A game port joystick's axis (-32767 to 32767) and buttons (0 to 3).
-    void joystick_axis(int joystick, int axis, int value);
-    void joystick_button(int joystick, int button, bool down);
+    // One of the joystick model's inputs (kairo_x86.h): axis 0 to 3 (-32767 to 32767), button 0 to 3,
+    // counted joystick by joystick in the order 86Box lists the model's inputs.
+    void joystick_axis(int axis, int value);
+    void joystick_button(int button, bool down);
     // The lock keys' lamps: bit 0 Caps Lock, 1 Num Lock, 2 Scroll Lock.
     int locks() const;
 

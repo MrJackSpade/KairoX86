@@ -91,8 +91,8 @@ static int             picture_width;
 static int             picture_height;
 
 /* The joysticks the host gives, which joystick_process hands to the game port. */
-static int joystick_axes[KAIRO_X86_JOYSTICKS][KAIRO_X86_JOYSTICK_AXES];
-static int joystick_buttons[KAIRO_X86_JOYSTICKS][KAIRO_X86_JOYSTICK_BUTTONS];
+static int input_axes[KAIRO_X86_JOYSTICK_AXES];
+static int input_buttons[KAIRO_X86_JOYSTICK_BUTTONS];
 
 static void
 report(void (*to)(void *, const char *), const char *message)
@@ -429,16 +429,37 @@ joystick_init(void)
 {
 }
 
-/* Each block, on the host's thread: the host's joysticks to the game port's. */
+/* Each block, on the host's thread: the host's inputs to the joystick model the machine has (its
+   86box.cfg's joystick_type). Axis or button i is input i % n of joystick i / n, n being the model's
+   axes or buttons a joystick: the order 86Box lists a model's inputs in, joystick by joystick
+   (KairoX86#52). Each joystick the model has is present (86Box reads a joystick without a host
+   joystick number as unplugged). */
 void
-joystick_process(UNUSED(uint8_t gp))
+joystick_process(uint8_t gp)
 {
-    for (int j = 0; j < KAIRO_X86_JOYSTICKS; j++) {
-        for (int a = 0; a < KAIRO_X86_JOYSTICK_AXES; a++)
-            joystick_state[0][j].axis[a] = joystick_axes[j][a];
-        for (int b = 0; b < KAIRO_X86_JOYSTICK_BUTTONS; b++)
-            joystick_state[0][j].button[b] = joystick_buttons[j][b];
+    const int type = joystick_type[gp];
+
+    if ((gp != 0) || (type == JS_TYPE_NONE))
+        return;
+    const int sticks  = joystick_get_max_joysticks(type);
+    const int axes    = joystick_get_axis_count(type);
+    const int buttons = joystick_get_button_count(type);
+
+    for (int j = 0; (j < sticks) && (j < MAX_JOYSTICKS); j++) {
+        joystick_state[gp][j].plat_joystick_nr = j + 1;
+        for (int a = 0; a < MAX_JOY_AXES; a++)
+            joystick_state[gp][j].axis[a] = 0;
+        for (int b = 0; b < MAX_JOY_BUTTONS; b++)
+            joystick_state[gp][j].button[b] = 0;
     }
+    if (axes > 0)
+        for (int i = 0; i < KAIRO_X86_JOYSTICK_AXES; i++)
+            if ((i / axes) < sticks)
+                joystick_state[gp][i / axes].axis[i % axes] = input_axes[i];
+    if (buttons > 0)
+        for (int i = 0; i < KAIRO_X86_JOYSTICK_BUTTONS; i++)
+            if ((i / buttons) < sticks)
+                joystick_state[gp][i / buttons].button[i % buttons] = input_buttons[i];
 }
 
 static void
@@ -460,19 +481,19 @@ api_mouse_buttons(int buttons)
 }
 
 static void
-api_joystick_axis(int joystick, int axis, int value)
+api_joystick_axis(int axis, int value)
 {
-    if ((joystick < 0) || (joystick >= KAIRO_X86_JOYSTICKS) || (axis < 0) || (axis >= KAIRO_X86_JOYSTICK_AXES))
+    if ((axis < 0) || (axis >= KAIRO_X86_JOYSTICK_AXES))
         return;
-    joystick_axes[joystick][axis] = value;
+    input_axes[axis] = value;
 }
 
 static void
-api_joystick_button(int joystick, int button, bool down)
+api_joystick_button(int button, bool down)
 {
-    if ((joystick < 0) || (joystick >= KAIRO_X86_JOYSTICKS) || (button < 0) || (button >= KAIRO_X86_JOYSTICK_BUTTONS))
+    if ((button < 0) || (button >= KAIRO_X86_JOYSTICK_BUTTONS))
         return;
-    joystick_buttons[joystick][button] = down ? 128 : 0;
+    input_buttons[button] = down ? 128 : 0;
 }
 
 static int

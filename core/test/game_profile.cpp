@@ -11,8 +11,9 @@
 //
 // <script> is a comma-separated list of <frame>:<+|-><code> events, by frame from the start: "+"
 // presses, "-" lets go. A code is a set 1 scan code (0x1c is Enter, 0x3b is F1; 0x100 added for an
-// E0 key), "m1" to "m3" a mouse button, or "j1" to "j4" the first joystick's buttons. "-" alone is
-// no input.
+// E0 key), "m1" to "m3" a mouse button, "j1" to "j4" the joystick model's buttons 1 to 4, or "p0" to
+// "p3" / "n0" to "n3" its axis 0 to 3 pushed to its positive / negative end ("-" lets it back to the
+// middle; kairo_x86.h counts the model's inputs). "-" alone is no input.
 //
 // Options:
 //   --warmup <n>    run n frames before measuring (script frames count from the start)
@@ -54,7 +55,7 @@ int fail(const std::string &message) {
 struct Event {
     long frame;
     bool down;
-    char kind;  // 'k' a scan code, 'm' a mouse button, 'j' a joystick button
+    char kind;  // 'k' a scan code, 'm' a mouse button, 'j' a joystick button, 'p'/'n' a joystick axis
     int code;
 };
 
@@ -71,7 +72,7 @@ bool parse_script(const std::string &script, std::vector<Event> &events, std::st
         }
         const std::string what = item.substr(colon + 2);
         Event event{std::stol(item.substr(0, colon)), item[colon + 1] == '+', 'k', 0};
-        if (what[0] == 'm' || what[0] == 'j') {
+        if (what[0] == 'm' || what[0] == 'j' || what[0] == 'p' || what[0] == 'n') {
             event.kind = what[0];
             event.code = std::stoi(what.substr(1));
         } else {
@@ -174,7 +175,8 @@ int main(int argc, char **argv) {
                 if (event.frame != frame) continue;
                 if (event.kind == 'k') machine->key(event.code, event.down);
                 else if (event.kind == 'm') machine->mouse_button(event.code, event.down);
-                else machine->joystick_button(0, event.code - 1, event.down);
+                else if (event.kind == 'j') machine->joystick_button(event.code - 1, event.down);
+            else machine->joystick_axis(event.code, event.down ? (event.kind == 'p' ? 32767 : -32767) : 0);
             }
             const auto before = Clock::now();
             if (!machine->run_frame(error)) return fail("stopped at frame " + std::to_string(frame) + ": " + error);

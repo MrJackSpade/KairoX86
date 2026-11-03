@@ -16,8 +16,9 @@ using kairox86::X86Machine;
 constexpr int kMachineFolder = 0;
 // Scan codes (X86Keys): set 1, with 0x100 for the keys after an E0 prefix.
 constexpr int kKeyCodes = 0x200;
-// The joystick controls in X86Keys.joystick order: the first joystick's directions and its four
-// buttons, then the second joystick's directions.
+// The joystick controls in X86Keys.joystick order: the first stick's directions (the joystick
+// model's axes 0 and 1), four buttons (its buttons 0 to 3), then the second stick's directions (its
+// axes 2 and 3): one model input each (kairo_x86.h).
 constexpr int kJoystickControls = 12;
 constexpr int kAxisMax = 32767;
 
@@ -56,7 +57,7 @@ public:
         if (control < 0 || control >= kJoystickControls) return;
         controls_[control] = down;
         if (control >= 4 && control < 8) {
-            machine_->joystick_button(0, control - 4, down);
+            machine_->joystick_button(control - 4, down);
             return;
         }
         // Directions: each axis from its pair of controls (up/down, left/right).
@@ -64,8 +65,8 @@ public:
         const int base = stick == 0 ? 0 : 8;
         const int y = (controls_[base + 1] ? kAxisMax : 0) - (controls_[base] ? kAxisMax : 0);
         const int x = (controls_[base + 3] ? kAxisMax : 0) - (controls_[base + 2] ? kAxisMax : 0);
-        machine_->joystick_axis(stick, 0, x);
-        machine_->joystick_axis(stick, 1, y);
+        machine_->joystick_axis(stick * 2, x);
+        machine_->joystick_axis(stick * 2 + 1, y);
     }
 
     void mouse_move(int dx, int dy) override { machine_->mouse_move(dx, dy); }

@@ -49,6 +49,10 @@ It runs a fresh copy of the folder each time (86Box writes the CMOS and `86box.c
 
 `python core/test/display/make_raster.py <folder>` writes a machine (the 486 with an S3 Trio64V2) booting a floppy (`core/test/display/raster.S`) that, in VESA mode 101h (640x480, 256 colours), changes the palette at every horizontal blank and writes video memory just behind the beam, as games' raster effects do. A build configured with `-DCMAKE_C_FLAGS=-DKAIROX86_SYNC_RENDER` draws every line in place; `game_profile --hashes` on both builds must give the same frames (KairoX86#38), so the threaded 8bpp renderer can never show anything drawing in place would not.
 
+### The game port test
+
+`python core/test/input/make_joyport.py <folder>` writes three machines (the 486 with a 2-axis 2-button pair of joysticks, a 2-axis 4-button joystick and a 4-axis 4-button one) booting a floppy (`core/test/input/joyport.S`) that reads the game port at 201h as DOS games do and shows its buttons and its four axes' timings, and prints the `game_profile` script that pushes each of the joystick model's inputs in turn (`--shots 30`; frame 900 nothing, then one input every 60 frames). Each input must change exactly one reading (KairoX86#52).
+
 ### Stop tests
 
 `python core/test/stops/make_floppies.py <folder>` writes one machine folder for each way a PC stops (KairoX86#34), each booting a floppy whose boot sector (`core/test/stops/boot.S`) stops it that way, and prints the machine list that expects each stop:

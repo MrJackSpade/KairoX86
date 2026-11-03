@@ -32,9 +32,12 @@ extern "C" {
  * gets its frames. Guest time, not the host's: two runs end their frames at the same points. */
 #define KAIRO_X86_MAX_FRAME_MS 50
 
-/* The game port's joysticks and their controls. */
-#define KAIRO_X86_JOYSTICKS 2
-#define KAIRO_X86_JOYSTICK_AXES 2
+/* The joystick model's inputs (KairoX86#52): four axes and four buttons, counted in the order 86Box
+ * lists the model's inputs, joystick by joystick (its axis and button names). A two-joystick
+ * 2-axis 2-button model takes axes 2 and 3 and buttons 2 and 3 as its second joystick's; a 4-axis
+ * 4-button one as its own Z and zX axes (throttle and rudder) and buttons 3 and 4. An input the
+ * model does not have reaches nothing. */
+#define KAIRO_X86_JOYSTICK_AXES 4
 #define KAIRO_X86_JOYSTICK_BUTTONS 4
 #define KAIRO_X86_AXIS_MAX 32767
 
@@ -77,9 +80,10 @@ struct KairoX86Api {
 	/* The mouse: motion in host pixels, and its buttons (bit 0 left, 1 right, 2 middle). */
 	void (*mouse_move)(int dx, int dy);
 	void (*mouse_buttons)(int buttons);
-	/* A game port joystick's axis (-KAIRO_X86_AXIS_MAX to KAIRO_X86_AXIS_MAX) and buttons. */
-	void (*joystick_axis)(int joystick, int axis, int value);
-	void (*joystick_button)(int joystick, int button, bool down);
+	/* One of the joystick model's inputs (KAIRO_X86_JOYSTICK_*): an axis, -KAIRO_X86_AXIS_MAX to
+	 * KAIRO_X86_AXIS_MAX, or a button. */
+	void (*joystick_axis)(int axis, int value);
+	void (*joystick_button)(int button, bool down);
 	/* The lock keys' lamps (KAIRO_X86_*_LOCK). */
 	int (*locks)(void);
 
