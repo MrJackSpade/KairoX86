@@ -374,13 +374,32 @@ plat_mmap(size_t size, uint8_t executable, uint8_t* large)
        program's functions with BL and its data with ADRP
        (codegen_backend_arm64_ops.c). */
     if (executable) {
+        extern char     __ehdr_start[];
         extern char     _end[];
         const uintptr_t align = (uintptr_t) 2 << 20;
-        const uintptr_t at    = ((uintptr_t) _end + (16 << 20) + align - 1) & ~(align - 1);
-        void           *pool  = mmap((void *) at, size, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_ANON | MAP_PRIVATE | MAP_FIXED_NOREPLACE, -1, 0);
+        const uintptr_t reach = (uintptr_t) 4 << 30;
+        const uintptr_t above = ((uintptr_t) _end + align - 1) & ~(align - 1);
+        const uintptr_t below = ((uintptr_t) __ehdr_start - size) & ~(align - 1);
+        void           *pool  = MAP_FAILED;
 
+        /* KairoX86: the nearest free place to the core, after it and before it in turn. */
+        for (uintptr_t step = 0; (pool == MAP_FAILED) && (step < reach); step += align) {
+            const uintptr_t places[2] = { above + step, (below > step) ? (below - step) : 0 };
+            for (int i = 0; (i < 2) && (pool == MAP_FAILED); i++) {
+                if (!places[i])
+                    continue;
+                pool = mmap((void *) places[i], size, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_ANON | MAP_PRIVATE | MAP_FIXED_NOREPLACE, -1, 0);
+                if ((pool == MAP_FAILED) && (errno != EEXIST))
+                    fatal("plat_mmap: the recompiler's pool at %p: %s\n", (void *) places[i], strerror(errno));
+                /* A kernel without MAP_FIXED_NOREPLACE takes the place as a hint: elsewhere is taken. */
+                if ((pool != MAP_FAILED) && ((uintptr_t) pool != places[i])) {
+                    munmap(pool, size);
+                    pool = MAP_FAILED;
+                }
+            }
+        }
         if (pool == MAP_FAILED)
-            fatal("plat_mmap: no room for the recompiler at %p after the program: %s\n", (void *) at, strerror(errno));
+            fatal("plat_mmap: no room for the recompiler within 4 GiB of the program\n");
         return pool;
     }
 #    endif

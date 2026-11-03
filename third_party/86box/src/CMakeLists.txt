@@ -24,7 +24,15 @@ if(APPLE)
     set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
 endif()
 
-add_executable(86Box
+# KairoX86: the core as a library its host loads, a fresh copy per machine.
+macro(kairo_86box_target name)
+    if(KAIRO_LIBRARY)
+        add_library(${name} SHARED ${ARGN})
+    else()
+        add_executable(${name} ${ARGN})
+    endif()
+endmacro()
+kairo_86box_target(86Box
     86box.c
     config.c
     timer.c

@@ -1031,6 +1031,113 @@ KAIROX86_LICENSE = [
      '    set(HAS_VDE OFF) # KairoX86: net_vde.c (GPL-2.0-only) is left out' + _NL + '    if(HAS_VDE)' + _NL),
 ]
 
+# KairoX86's build of the core (core/CMakeLists.txt): 86Box as a library its host loads afresh for
+# each machine (KAIRO_LIBRARY), with KairoX86's frontend in place of the headless program and its
+# null audio (KAIRO_FRONTEND, core/kairo/), and the CHD reader of the shared frontend, which every
+# Kairo app that reads CHDs uses (KAIRO_LIBCHDR, shared cmake/KairoChd.cmake).
+KAIROX86_LIBRARY = [
+    ('86box/src/CMakeLists.txt',
+     'add_executable(86Box' + _NL,
+     '# KairoX86: the core as a library its host loads, a fresh copy per machine.' + _NL
+     + 'macro(kairo_86box_target name)' + _NL
+     + '    if(KAIRO_LIBRARY)' + _NL
+     + '        add_library(${name} SHARED ${ARGN})' + _NL
+     + '    else()' + _NL
+     + '        add_executable(${name} ${ARGN})' + _NL
+     + '    endif()' + _NL
+     + 'endmacro()' + _NL
+     + 'kairo_86box_target(86Box' + _NL),
+    ('86box/src/cdrom/CMakeLists.txt',
+     'add_subdirectory(libchdr)' + _NL,
+     '# KairoX86: KAIRO_LIBCHDR names a chdr-static the build already has (the shared frontend\'s).' + _NL
+     + 'if(NOT KAIRO_LIBCHDR)' + _NL
+     + '    add_subdirectory(libchdr)' + _NL
+     + 'endif()' + _NL),
+    ('86box/src/cdrom/CMakeLists.txt',
+     'add_library(PkgConfig::SNDFILE ALIAS SndFile::sndfile)' + _NL,
+     '# KairoX86: an interface over SndFile::sndfile, which may itself be an alias (libsndfile built' + _NL
+     + '# from source names it one), and an alias of an alias is not allowed.' + _NL
+     + 'add_library(PkgConfig::SNDFILE INTERFACE IMPORTED)' + _NL
+     + 'target_link_libraries(PkgConfig::SNDFILE INTERFACE SndFile::sndfile)' + _NL),
+    ('86box/src/cdrom/CMakeLists.txt',
+     'target_link_libraries(cdrom chdr-static)' + _NL,
+     'target_link_libraries(cdrom chdr-static)' + _NL
+     + '# KairoX86: the CD image reader includes sndfile.h, which libsndfile built from source writes' + _NL
+     + '# into its build folder; linking it gives the reader its headers and builds it first.' + _NL
+     + 'target_link_libraries(cdrom PkgConfig::SNDFILE)' + _NL),
+    # The version header names 86Box's own project (PROJECT_*), not the top-level one
+    # (CMAKE_PROJECT_*), which is KairoX86's core when 86Box is built inside it.
+    ('86box/CMakeLists.txt',
+     'if(NOT CMAKE_PROJECT_VERSION_PATCH)' + _NL + '    set(CMAKE_PROJECT_VERSION_PATCH 0)' + _NL,
+     'if(NOT PROJECT_VERSION_PATCH)' + _NL + '    set(PROJECT_VERSION_PATCH 0)' + _NL),
+    # The recompiler's pool near the core's code (Kairo9X PERF-FINDINGS #47), which as a library
+    # loaded among others is not the program: the nearest free place after or before the library,
+    # within ADRP's 4 GiB, instead of one fixed address past it. The code generator takes BL/ADRP
+    # only for what is in reach, so where the pool lands does not change the guest.
+    ('86box/src/unix/sdl_plat_unix.c',
+     '        extern char     _end[];' + _NL
+     + '        const uintptr_t align = (uintptr_t) 2 << 20;' + _NL
+     + '        const uintptr_t at    = ((uintptr_t) _end + (16 << 20) + align - 1) & ~(align - 1);' + _NL
+     + '        void           *pool  = mmap((void *) at, size, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_ANON | MAP_PRIVATE | MAP_FIXED_NOREPLACE, -1, 0);' + _NL
+     + _NL
+     + '        if (pool == MAP_FAILED)' + _NL
+     + '            fatal("plat_mmap: no room for the recompiler at %p after the program: %s\\n", (void *) at, strerror(errno));' + _NL,
+     '        extern char     __ehdr_start[];' + _NL
+     + '        extern char     _end[];' + _NL
+     + '        const uintptr_t align = (uintptr_t) 2 << 20;' + _NL
+     + '        const uintptr_t reach = (uintptr_t) 4 << 30;' + _NL
+     + '        const uintptr_t above = ((uintptr_t) _end + align - 1) & ~(align - 1);' + _NL
+     + '        const uintptr_t below = ((uintptr_t) __ehdr_start - size) & ~(align - 1);' + _NL
+     + '        void           *pool  = MAP_FAILED;' + _NL
+     + _NL
+     + '        /* KairoX86: the nearest free place to the core, after it and before it in turn. */' + _NL
+     + '        for (uintptr_t step = 0; (pool == MAP_FAILED) && (step < reach); step += align) {' + _NL
+     + '            const uintptr_t places[2] = { above + step, (below > step) ? (below - step) : 0 };' + _NL
+     + '            for (int i = 0; (i < 2) && (pool == MAP_FAILED); i++) {' + _NL
+     + '                if (!places[i])' + _NL
+     + '                    continue;' + _NL
+     + '                pool = mmap((void *) places[i], size, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_ANON | MAP_PRIVATE | MAP_FIXED_NOREPLACE, -1, 0);' + _NL
+     + '                if ((pool == MAP_FAILED) && (errno != EEXIST))' + _NL
+     + '                    fatal("plat_mmap: the recompiler\'s pool at %p: %s\\n", (void *) places[i], strerror(errno));' + _NL
+     + '                /* A kernel without MAP_FIXED_NOREPLACE takes the place as a hint: elsewhere is taken. */' + _NL
+     + '                if ((pool != MAP_FAILED) && ((uintptr_t) pool != places[i])) {' + _NL
+     + '                    munmap(pool, size);' + _NL
+     + '                    pool = MAP_FAILED;' + _NL
+     + '                }' + _NL
+     + '            }' + _NL
+     + '        }' + _NL
+     + '        if (pool == MAP_FAILED)' + _NL
+     + '            fatal("plat_mmap: no room for the recompiler within 4 GiB of the program\\n");' + _NL),
+] + [
+    ('86box/src/include/86box/version.h.in', line + _NL, line.replace('@CMAKE_PROJECT_', '@PROJECT_') + _NL)
+    for line in (
+        '#define EMU_NAME    "@CMAKE_PROJECT_NAME@"',
+        '#define EMU_VERSION       "@CMAKE_PROJECT_VERSION@"',
+        '#define EMU_VERSION_MAJ   @CMAKE_PROJECT_VERSION_MAJOR@',
+        '#define EMU_VERSION_MIN   @CMAKE_PROJECT_VERSION_MINOR@',
+        '#define EMU_VERSION_PATCH @CMAKE_PROJECT_VERSION_PATCH@',
+        '# define EMU_ROMS_URL  "https://github.com/@CMAKE_PROJECT_NAME@/roms/releases/v@CMAKE_PROJECT_VERSION_MAJOR@'
+        '.@CMAKE_PROJECT_VERSION_MINOR@" EMU_VERSION_ROMS_SUFFIX',
+        '# define EMU_DOCS_URL  "https://86box.readthedocs.io/en/v@CMAKE_PROJECT_VERSION_MAJOR@'
+        '.@CMAKE_PROJECT_VERSION_MINOR@/"',
+        '# define EMU_ROMS_URL  "https://github.com/@CMAKE_PROJECT_NAME@/roms/releases/latest"',
+    )
+] + [
+    ('86box/src/sound/CMakeLists.txt',
+     'elseif(K9X_NULL_AUDIO)' + _NL + '    target_sources(snd PRIVATE null_audio.c)' + _NL,
+     'elseif(KAIRO_FRONTEND)' + _NL + '    # KairoX86: its frontend takes the sound (core/kairo/).' + _NL
+     + 'elseif(K9X_NULL_AUDIO)' + _NL + '    target_sources(snd PRIVATE null_audio.c)' + _NL),
+    ('86box/src/unix/CMakeLists.txt',
+     'add_library(plat OBJECT' + _NL + '    headless_main.c' + _NL + '    sdl_plat.c' + _NL + ')' + _NL,
+     'add_library(plat OBJECT' + _NL + '    sdl_plat.c' + _NL + ')' + _NL
+     + '# KairoX86: KAIRO_FRONTEND is the frontend in place of the headless program (core/kairo/).' + _NL
+     + 'if(KAIRO_FRONTEND)' + _NL
+     + '    target_sources(plat PRIVATE ${KAIRO_FRONTEND})' + _NL
+     + 'else()' + _NL
+     + '    target_sources(plat PRIVATE headless_main.c)' + _NL
+     + 'endif()' + _NL),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -1039,6 +1146,7 @@ PATCHES = {
     'kairo9x-video': KAIRO9X_VIDEO,
     'kairo9x-sound': KAIRO9X_SOUND,
     'kairox86-license': KAIROX86_LICENSE,
+    'kairox86-library': KAIROX86_LIBRARY,
 }
 
 ADDED = [

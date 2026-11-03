@@ -88,6 +88,8 @@ elseif(SNDIO)
     endif()
 
     include_directories(${SNDIO_INCLUDE_DIRS})
+elseif(KAIRO_FRONTEND)
+    # KairoX86: its frontend takes the sound (core/kairo/).
 elseif(K9X_NULL_AUDIO)
     target_sources(snd PRIVATE null_audio.c)
 elseif(OPENAL)

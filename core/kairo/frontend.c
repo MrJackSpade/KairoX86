@@ -1,0 +1,553 @@
+/*
+ * KairoX86: 86Box's frontend inside the kairox86_86box library (kairo_x86.h). It replaces the
+ * headless program (src/unix/headless_main.c) and its null audio: it starts 86Box on a machine
+ * folder, runs it a frame at a time on the host's thread, keeps the last picture, mixes the sound
+ * streams to one, and takes the host's keyboard, mouse and joysticks.
+ *
+ * Copyright 2026 MrJackSpade.
+ *
+ * This program is free software; you can redistribute it and/or modify it under the terms of the
+ * GNU General Public License as published by the Free Software Foundation; either version 2 of the
+ * License, or (at your option) any later version.
+ */
+#include <pthread.h>
+#include <setjmp.h>
+#include <stdarg.h>
+#include <stdatomic.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <wchar.h>
+
+#include <86box/86box.h>
+#include <86box/keyboard.h>
+#include <86box/mouse.h>
+#include <86box/plat.h>
+#include <86box/plat_unused.h>
+#include <86box/thread.h>
+#include <86box/timer.h>
+#include <86box/nvr.h>
+#include <86box/version.h>
+#include <86box/video.h>
+#include <86box/ui.h>
+#include <86box/sound.h>
+#include <86box/gameport.h>
+
+#include "kairo_x86.h"
+
+/* ---- Globals the 86Box frontends define ---- */
+
+int  rctrl_is_lalt;
+int  update_icons;
+int  kbd_req_capture;
+int  hide_status_bar;
+int  hide_tool_bar;
+bool fast_forward = false;
+int  fixed_size_x = 640;
+int  fixed_size_y = 480;
+int  title_set;
+int  mouse_capture;
+
+volatile int cpu_thread_run = 1;
+
+plat_joystick_state_t plat_joystick_state[MAX_PLAT_JOYSTICKS];
+joystick_state_t      joystick_state[GAMEPORT_MAX][MAX_JOYSTICKS];
+
+/* ---- The machine run ---- */
+
+static struct KairoX86Host host;
+static pthread_t           host_thread;
+static jmp_buf             stopped;   /* where do_stop() returns to on the host's thread */
+static bool                running;   /* a start or run_frame is on the stack, with stopped set */
+static bool                dead;      /* the machine stopped: nothing runs it again */
+static int                 frame_ms;  /* the guest time the last frame lasted */
+static int                 nvr_ms;    /* guest time since the CMOS was last saved */
+
+static pthread_mutex_t blit_lock = PTHREAD_MUTEX_INITIALIZER;
+static char            title[512] = EMU_NAME;
+
+/* The last picture, copied from the video card's bitmap on 86Box's blit thread. */
+static pthread_mutex_t picture_lock = PTHREAD_MUTEX_INITIALIZER;
+static uint32_t       *picture;
+static int             picture_alloc;
+static int             picture_width;
+static int             picture_height;
+
+/* The joysticks the host gives, which joystick_process hands to the game port. */
+static int joystick_axes[KAIRO_X86_JOYSTICKS][KAIRO_X86_JOYSTICK_AXES];
+static int joystick_buttons[KAIRO_X86_JOYSTICKS][KAIRO_X86_JOYSTICK_BUTTONS];
+
+static void
+report(void (*to)(void *, const char *), const char *message)
+{
+    if (to != NULL)
+        to(host.context, message);
+}
+
+/* ---- Sound: every stream resampled to OUTPUT_RATE and mixed ---- */
+
+#define OUTPUT_RATE 48000
+/* Stereo frames each stream's queue holds: two seconds, far more than a frame's worth. */
+#define QUEUE_FRAMES (OUTPUT_RATE * 2)
+#define STREAMS      16
+
+typedef struct {
+    int16_t queue[QUEUE_FRAMES * 2];
+    int     read;
+    int     count;
+    double  phase;     /* the resampler's position between the last input frame and the next */
+    int32_t last[2];   /* the last input frame, for interpolation */
+    bool    primed;
+} stream_t;
+
+static pthread_mutex_t sound_lock = PTHREAD_MUTEX_INITIALIZER;
+static stream_t        streams[STREAMS];
+
+static void
+stream_push(stream_t *s, int32_t l, int32_t r)
+{
+    if (s->count == QUEUE_FRAMES) {
+        /* The host stopped taking sound: the oldest frame goes. */
+        s->read = (s->read + 1) % QUEUE_FRAMES;
+        s->count--;
+    }
+    int at = (s->read + s->count) % QUEUE_FRAMES;
+    s->queue[at * 2]     = (int16_t) (l < -32768 ? -32768 : (l > 32767 ? 32767 : l));
+    s->queue[at * 2 + 1] = (int16_t) (r < -32768 ? -32768 : (r > 32767 ? 32767 : r));
+    s->count++;
+}
+
+/* A block of a stream (src) in interleaved stereo, size values (frames * 2), as 16-bit or float. */
+void
+givealbuffer_common(const void *buf, const uint8_t src, const int size)
+{
+    const int rate = sound_stream_rate(src);
+
+    if ((src >= STREAMS) || (rate <= 0) || (size <= 0))
+        return;
+    pthread_mutex_lock(&sound_lock);
+    stream_t    *s    = &streams[src];
+    const double step = (double) rate / OUTPUT_RATE;
+    for (int i = 0; i < size / 2; i++) {
+        int32_t l;
+        int32_t r;
+        if (sound_is_float) {
+            l = (int32_t) (((const float *) buf)[i * 2] * 32767.0f);
+            r = (int32_t) (((const float *) buf)[i * 2 + 1] * 32767.0f);
+        } else {
+            l = ((const int16_t *) buf)[i * 2];
+            r = ((const int16_t *) buf)[i * 2 + 1];
+        }
+        if (!s->primed) {
+            s->last[0] = l;
+            s->last[1] = r;
+            s->primed  = true;
+            continue;
+        }
+        /* Linear interpolation from the last input frame to this one, at the output rate. */
+        while (s->phase < 1.0) {
+            stream_push(s, (int32_t) (s->last[0] + (l - s->last[0]) * s->phase),
+                        (int32_t) (s->last[1] + (r - s->last[1]) * s->phase));
+            s->phase += step;
+        }
+        s->phase -= 1.0;
+        s->last[0] = l;
+        s->last[1] = r;
+    }
+    pthread_mutex_unlock(&sound_lock);
+}
+
+static uint32_t
+api_read_audio(int16_t *stereo, uint32_t max_frames)
+{
+    pthread_mutex_lock(&sound_lock);
+    /* The main stream (the sound cards and the speaker) sets how much there is; the others (CD
+       audio, MIDI synthesis, drive noises) add what they have to it. */
+    uint32_t frames = (uint32_t) streams[I_NORMAL].count;
+    if (frames > max_frames)
+        frames = max_frames;
+    for (uint32_t f = 0; f < frames; f++) {
+        int32_t mix[2] = { 0, 0 };
+        for (int i = 0; i < STREAMS; i++) {
+            stream_t *s = &streams[i];
+            if (s->count == 0)
+                continue;
+            mix[0] += s->queue[s->read * 2];
+            mix[1] += s->queue[s->read * 2 + 1];
+            s->read = (s->read + 1) % QUEUE_FRAMES;
+            s->count--;
+        }
+        stereo[f * 2]     = (int16_t) (mix[0] < -32768 ? -32768 : (mix[0] > 32767 ? 32767 : mix[0]));
+        stereo[f * 2 + 1] = (int16_t) (mix[1] < -32768 ? -32768 : (mix[1] > 32767 ? 32767 : mix[1]));
+    }
+    pthread_mutex_unlock(&sound_lock);
+    return frames;
+}
+
+static int
+api_sample_rate(void)
+{
+    return OUTPUT_RATE;
+}
+
+/* The rest of 86Box's audio backend: no host devices, no capture. */
+const char *sound_get_output_devices(void) { return NULL; }
+const char *sound_get_input_devices(void) { return NULL; }
+void al_capture_open(void) { }
+void al_capture_close(void) { }
+int  al_capture_get_rate(void) { return OUTPUT_RATE; }
+int  sound_get_device_sample_rate(UNUSED(const char *device_name)) { return 0; }
+int  sound_get_device_supported_rates(UNUSED(const char *device_name), UNUSED(int *rates_out), UNUSED(int max_rates)) { return 0; }
+void closeal(void) { }
+void inital(void) { }
+int  al_capture_available(void) { return 0; }
+void al_capture_start(void) { }
+void al_capture_stop(void) { }
+void al_capture_get_data(UNUSED(int16_t *buf), size_t *len) { *len = 0; }
+void al_set_midi(UNUSED(const int freq), UNUSED(const int buf_size)) { }
+
+/* ---- Video ---- */
+
+/* On 86Box's blit thread: the video card finished a frame in its bitmap. */
+static void
+blit(int x, int y, int w, int h, int monitor_index)
+{
+    const bitmap_t *target = monitors[monitor_index].target_buffer;
+
+    if ((monitor_index == 0) && (target != NULL) && (x >= 0) && (y >= 0) && (x < target->w) && (y < target->h)) {
+        if ((x + w) > target->w)
+            w = target->w - x;
+        if ((y + h) > target->h)
+            h = target->h - y;
+        pthread_mutex_lock(&picture_lock);
+        if ((w * h) > picture_alloc) {
+            uint32_t *grown = realloc(picture, (size_t) w * (size_t) h * sizeof(uint32_t));
+            if (grown == NULL) {
+                pthread_mutex_unlock(&picture_lock);
+                report(host.fatal, "Out of memory for the picture");
+                abort();
+            }
+            picture       = grown;
+            picture_alloc = w * h;
+        }
+        for (int row = 0; row < h; row++)
+            memcpy(&picture[row * w], &target->line[y + row][x], (size_t) w * sizeof(uint32_t));
+        picture_width  = w;
+        picture_height = h;
+        pthread_mutex_unlock(&picture_lock);
+    }
+    video_blit_complete_monitor(monitor_index);
+}
+
+static const uint32_t *
+api_screen(int *width, int *height, int *pitch)
+{
+    /* Called between frames, after run_frame waited for the blit: the picture is not changing. */
+    *width  = picture_width;
+    *height = picture_height;
+    *pitch  = picture_width;
+    return picture;
+}
+
+void
+startblit(void)
+{
+    pthread_mutex_lock(&blit_lock);
+}
+
+void
+endblit(void)
+{
+    pthread_mutex_unlock(&blit_lock);
+}
+
+int
+plat_vidapi(UNUSED(const char *api))
+{
+    return 0;
+}
+
+void
+plat_mouse_capture(int on)
+{
+    mouse_capture = on;
+}
+
+void
+plat_resize(UNUSED(int w), UNUSED(int h), UNUSED(int monitor_index))
+{
+}
+
+void
+plat_resize_request(UNUSED(int w), UNUSED(int h), int monitor_index)
+{
+    atomic_store(&doresize_monitors[monitor_index], 0);
+}
+
+void
+sdl_close(void)
+{
+}
+
+/* ---- UI: messages go to the host ---- */
+
+void
+ui_window_title_real(void)
+{
+    title_set = 0;
+}
+
+char *
+ui_window_title(char *str)
+{
+    if (!str)
+        return title;
+    strncpy(title, str, sizeof(title) - 1);
+    return str;
+}
+
+void ui_emu_status(UNUSED(int speed_percent)) { }
+void ui_init_monitor(UNUSED(int monitor_index)) { }
+void ui_deinit_monitor(UNUSED(int monitor_index)) { }
+
+int
+ui_msgbox_header(int flags, char *header, char *message)
+{
+    char text[1024];
+
+    snprintf(text, sizeof(text), "%s%s%s", header ? header : "", (header && message) ? ": " : "", message ? message : "");
+    if (flags & MBX_FATAL) {
+        report(host.fatal, text);
+        /* fatal() then calls do_stop(), which ends the machine run. */
+    } else
+        report(host.notice, text);
+    return 1;
+}
+
+int
+ui_msgbox(int flags, char *message)
+{
+    return ui_msgbox_header(flags, NULL, message);
+}
+
+void
+ui_progress_wait(UNUSED(const char *message), int total, int (*poll)(void *arg), void *arg)
+{
+    while (poll(arg) < total)
+        plat_delay_ms(10);
+}
+
+int
+ui_confirm_unsupported_hardware(UNUSED(const ui_unsupported_hardware_t *items), UNUSED(int count), UNUSED(int machine_missing))
+{
+    return 1;
+}
+
+void ui_sb_update_icon_state(UNUSED(int tag), UNUSED(int state)) { }
+void ui_sb_update_icon(UNUSED(int tag), UNUSED(int active)) { }
+void ui_sb_update_icon_write(UNUSED(int tag), UNUSED(int active)) { }
+void ui_sb_update_icon_wp(UNUSED(int tag), UNUSED(int state)) { }
+void ui_sb_update_tip(UNUSED(int arg)) { }
+void ui_sb_update_panes(void) { }
+void ui_sb_update_text(void) { }
+void ui_sb_set_text(UNUSED(char *wstr)) { }
+void ui_sb_bugui(UNUSED(char *str)) { }
+void ui_sb_set_ready(UNUSED(int ready)) { }
+void ui_sb_mt32lcd(UNUSED(char *str)) { }
+void ui_hard_reset_completed(void) { }
+void ui_update_force_interpreter(void) { }
+
+/* fatal() ends here after reporting: the run unwinds to the host, whose machine is then over. */
+void
+do_stop(void)
+{
+    is_quit = 1;
+    dead    = true;
+    if (running && pthread_equal(pthread_self(), host_thread))
+        longjmp(stopped, 1);
+    /* 86Box failed on one of its own threads, which cannot unwind the host's: the message went to
+       the host before this (ui_msgbox), and the process ends here instead of in exit(). */
+    abort();
+}
+
+/* ---- Input ---- */
+
+void
+joystick_init(void)
+{
+}
+
+/* Each block, on the host's thread: the host's joysticks to the game port's. */
+void
+joystick_process(UNUSED(uint8_t gp))
+{
+    for (int j = 0; j < KAIRO_X86_JOYSTICKS; j++) {
+        for (int a = 0; a < KAIRO_X86_JOYSTICK_AXES; a++)
+            joystick_state[0][j].axis[a] = joystick_axes[j][a];
+        for (int b = 0; b < KAIRO_X86_JOYSTICK_BUTTONS; b++)
+            joystick_state[0][j].button[b] = joystick_buttons[j][b];
+    }
+}
+
+static void
+api_key(int scancode, bool down)
+{
+    keyboard_input(down, (uint16_t) scancode);
+}
+
+static void
+api_mouse_move(int dx, int dy)
+{
+    mouse_scale(dx, dy);
+}
+
+static void
+api_mouse_buttons(int buttons)
+{
+    mouse_set_buttons_ex(buttons);
+}
+
+static void
+api_joystick_axis(int joystick, int axis, int value)
+{
+    if ((joystick < 0) || (joystick >= KAIRO_X86_JOYSTICKS) || (axis < 0) || (axis >= KAIRO_X86_JOYSTICK_AXES))
+        return;
+    joystick_axes[joystick][axis] = value;
+}
+
+static void
+api_joystick_button(int joystick, int button, bool down)
+{
+    if ((joystick < 0) || (joystick >= KAIRO_X86_JOYSTICKS) || (button < 0) || (button >= KAIRO_X86_JOYSTICK_BUTTONS))
+        return;
+    joystick_buttons[joystick][button] = down ? 128 : 0;
+}
+
+static int
+api_locks(void)
+{
+    uint8_t caps = 0, num = 0, scroll = 0, kana = 0;
+
+    keyboard_get_states(&caps, &num, &scroll, &kana);
+    return (caps ? KAIRO_X86_CAPS_LOCK : 0) | (num ? KAIRO_X86_NUM_LOCK : 0) | (scroll ? KAIRO_X86_SCROLL_LOCK : 0);
+}
+
+/* ---- Lifecycle ---- */
+
+static bool
+api_start(const char *vm_folder, const char *rom_folder, const struct KairoX86Host *given)
+{
+    char *argv[] = { "kairox86", "-P", (char *) vm_folder, "-R", (char *) rom_folder, "-N", NULL };
+
+    host        = *given;
+    host_thread = pthread_self();
+    if (setjmp(stopped)) {
+        running = false;
+        return false;
+    }
+    running = true;
+    if (!pc_init(6, argv)) {
+        report(host.fatal, "86Box could not read its command line");
+        running = false;
+        dead    = true;
+        return false;
+    }
+    if (!pc_init_roms()) {
+        report(host.fatal, "86Box found no firmware");
+        running = false;
+        dead    = true;
+        return false;
+    }
+    pc_init_modules();
+    for (uint8_t i = 1; i < GFXCARD_MAX; i++)
+        gfxcard[i] = 0;
+    video_setblit(blit);
+    pc_reset_hard_init();
+    plat_pause(0);
+    is_cpu_thread = 1;
+    is_quit       = 0;
+    running       = false;
+    return true;
+}
+
+static bool
+api_run_frame(void)
+{
+    if (dead)
+        return false;
+    if (setjmp(stopped)) {
+        running = false;
+        return false;
+    }
+    running = true;
+    const uint64_t frames = monitors[0].mon_renderedframes;
+    frame_ms              = 0;
+    while ((monitors[0].mon_renderedframes == frames) && (frame_ms < KAIRO_X86_MAX_FRAME_MS)) {
+        pc_run();
+        frame_ms++;
+        if (++nvr_ms >= 2000) {
+            nvr_ms = 0;
+            if (nvr_dosave) {
+                nvr_save();
+                nvr_dosave = 0;
+            }
+        }
+    }
+    /* The blit thread copies the frame: wait until it has, so screen() reads it whole. */
+    video_wait_for_blit_monitor(0);
+    running = false;
+    return !dead;
+}
+
+static double
+api_frame_seconds(void)
+{
+    return frame_ms / 1000.0;
+}
+
+static void
+api_reset(void)
+{
+    pc_reset_hard();
+}
+
+static void
+api_stop(void)
+{
+    if (dead)
+        return;
+    if (setjmp(stopped)) {
+        running = false;
+        return;
+    }
+    running = true;
+    pc_close(NULL);
+    running = false;
+    dead    = true;
+}
+
+static const struct KairoX86Api api = {
+    .start           = api_start,
+    .run_frame       = api_run_frame,
+    .frame_seconds   = api_frame_seconds,
+    .screen          = api_screen,
+    .sample_rate     = api_sample_rate,
+    .read_audio      = api_read_audio,
+    .key             = api_key,
+    .mouse_move      = api_mouse_move,
+    .mouse_buttons   = api_mouse_buttons,
+    .joystick_axis   = api_joystick_axis,
+    .joystick_button = api_joystick_button,
+    .locks           = api_locks,
+    .reset           = api_reset,
+    .stop            = api_stop,
+};
+
+KAIRO_X86_EXPORT const struct KairoX86Api *
+KairoX86_Api(void)
+{
+    return &api;
+}

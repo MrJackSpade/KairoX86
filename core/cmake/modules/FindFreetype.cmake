@@ -1,0 +1,15 @@
+# KairoX86: 86Box's find_package(Freetype) finds the FreeType core/CMakeLists.txt builds from
+# third_party/freetype before 86Box.
+if(NOT TARGET freetype)
+    message(FATAL_ERROR "FindFreetype: freetype is not built; core/CMakeLists.txt adds it first")
+endif()
+get_target_property(FREETYPE_INCLUDE_DIRS freetype INTERFACE_INCLUDE_DIRECTORIES)
+set(FREETYPE_INCLUDE_DIR_ft2build "${KAIROX86_THIRD_PARTY}/freetype/include")
+set(FREETYPE_INCLUDE_DIRS "${KAIROX86_THIRD_PARTY}/freetype/include")
+set(FREETYPE_LIBRARIES freetype)
+set(FREETYPE_FOUND TRUE)
+set(Freetype_FOUND TRUE)
+if(NOT TARGET Freetype::Freetype)
+    add_library(Freetype::Freetype INTERFACE IMPORTED GLOBAL)
+    target_link_libraries(Freetype::Freetype INTERFACE freetype)
+endif()

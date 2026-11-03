@@ -17,10 +17,16 @@
 
 set(WITH_SYSTEM_ZLIB ON)
 set(WITH_SYSTEM_ZSTD ON)
-add_subdirectory(libchdr)
+# KairoX86: KAIRO_LIBCHDR names a chdr-static the build already has (the shared frontend's).
+if(NOT KAIRO_LIBCHDR)
+    add_subdirectory(libchdr)
+endif()
 
 find_package(SndFile CONFIG REQUIRED)
-add_library(PkgConfig::SNDFILE ALIAS SndFile::sndfile)
+# KairoX86: an interface over SndFile::sndfile, which may itself be an alias (libsndfile built
+# from source names it one), and an alias of an alias is not allowed.
+add_library(PkgConfig::SNDFILE INTERFACE IMPORTED)
+target_link_libraries(PkgConfig::SNDFILE INTERFACE SndFile::sndfile)
 
 add_library(cdrom OBJECT
     cdrom.c
@@ -40,6 +46,9 @@ add_library(cdrom OBJECT
     cdrom_chd.c
 )
 target_link_libraries(cdrom chdr-static)
+# KairoX86: the CD image reader includes sndfile.h, which libsndfile built from source writes
+# into its build folder; linking it gives the reader its headers and builds it first.
+target_link_libraries(cdrom PkgConfig::SNDFILE)
 if(NOT WIN32)
 	target_include_directories(86Box PRIVATE PkgConfig::SNDFILE)
 endif()

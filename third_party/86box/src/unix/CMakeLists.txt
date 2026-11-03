@@ -1,9 +1,14 @@
 # POC: headless frontend (automation socket only).
 
 add_library(plat OBJECT
-    headless_main.c
     sdl_plat.c
 )
+# KairoX86: KAIRO_FRONTEND is the frontend in place of the headless program (core/kairo/).
+if(KAIRO_FRONTEND)
+    target_sources(plat PRIVATE ${KAIRO_FRONTEND})
+else()
+    target_sources(plat PRIVATE headless_main.c)
+endif()
 target_include_directories(plat PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/headless_sdl)
 
 if(WIN32)
