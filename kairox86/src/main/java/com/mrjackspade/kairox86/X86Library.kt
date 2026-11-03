@@ -85,7 +85,7 @@ class X86Library(private val context: Context) {
             if (!scan.forceHash && prior.size == file.size && prior.modified == file.modified) return prior
         }
         scan.hashStarted(file.path)
-        val bytes = checkNotNull(context.contentResolver.openInputStream(file.uri)) { "Unable to open ${file.path}" }
+        val bytes = checkNotNull(context.contentResolver.openInputStream(file.uri)) { context.getString(R.string.machine_open_failed, file.path) }
             .use { it.readBytes() }
         return entryOf(file, contentIdOf(bytes), null)
     }
@@ -100,10 +100,10 @@ class X86Library(private val context: Context) {
     fun prepare(entry: X86Entry, tree: Uri, cancelled: AtomicBoolean): Session {
         val folder = findFolder(tree, entry.path)
         val dir = File(context.filesDir, "session/${GameKey(entry.id).hashName}")
-        check(!dir.exists() || dir.deleteRecursively()) { "Could not clear the session folder" }
-        check(dir.mkdirs()) { "Could not create the session folder" }
+        check(!dir.exists() || dir.deleteRecursively()) { context.getString(R.string.machine_session_failed) }
+        check(dir.mkdirs()) { context.getString(R.string.machine_session_failed) }
         val media = File(context.filesDir, "session-media/${dir.name}")
-        check(!media.exists() || media.deleteRecursively()) { "Could not clear the session's media folder" }
+        check(!media.exists() || media.deleteRecursively()) { context.getString(R.string.machine_session_failed) }
         val session = Session(entry.id, tree, folder, dir, media)
         try {
             session.fill(folder, dir, "", cancelled)
@@ -134,7 +134,7 @@ class X86Library(private val context: Context) {
         val query = DocumentsContract.buildChildDocumentsUriUsingTree(tree, parent)
         return checkNotNull(context.contentResolver.query(query,
             arrayOf(Document.COLUMN_DOCUMENT_ID, Document.COLUMN_DISPLAY_NAME, Document.COLUMN_MIME_TYPE), null, null, null)) {
-            "Could not list a folder of the games folder"
+            context.getString(R.string.machine_list_failed)
         }.use { cursor ->
             buildList { while (cursor.moveToNext()) add(Child(cursor.getString(0), cursor.getString(1), cursor.getString(2) == Document.MIME_TYPE_DIR)) }
         }
@@ -175,11 +175,11 @@ class X86Library(private val context: Context) {
          */
         fun link(entry: X86Entry): File {
             val kind = checkNotNull(diskKind(entry.path)) { "${entry.path} is no disk image" }
-            check(media.isDirectory || media.mkdirs()) { "Could not create the session's media folder" }
+            check(media.isDirectory || media.mkdirs()) { context.getString(R.string.machine_session_failed) }
             val file = File(media, "${open.size}-${entry.path.substringAfterLast('/')}")
             // A floppy may be written, as on the PC; a CD only read.
             val descriptor = checkNotNull(context.contentResolver.openFileDescriptor(Uri.parse(entry.uri),
-                if (kind == DiskKind.FLOPPY) "rw" else "r")) { "Unable to open ${entry.path}" }
+                if (kind == DiskKind.FLOPPY) "rw" else "r")) { context.getString(R.string.machine_open_failed, entry.path) }
             open += descriptor
             Os.symlink("/proc/self/fd/${descriptor.fd}", file.path)
             return file
@@ -191,18 +191,18 @@ class X86Library(private val context: Context) {
                 if (cancelled.get()) throw java.util.concurrent.CancellationException("Cancelled")
                 val path = if (relative.isEmpty()) child.name else "$relative/${child.name}"
                 val file = File(target, child.name)
-                require(file.canonicalPath.startsWith(dir.canonicalPath + File.separator)) { "Unsafe file name ${child.name}" }
+                require(file.canonicalPath.startsWith(dir.canonicalPath + File.separator)) { context.getString(R.string.machine_unsafe_name, child.name) }
                 val uri = DocumentsContract.buildDocumentUriUsingTree(tree, child.id)
                 when {
                     child.folder -> {
-                        check(file.mkdirs()) { "Could not create ${file.path}" }
+                        check(file.mkdirs()) { context.getString(R.string.machine_create_failed, path) }
                         fill(child.id, file, path, cancelled)
                     }
-                    copied(path) -> checkNotNull(context.contentResolver.openInputStream(uri)) { "Unable to open $path" }
+                    copied(path) -> checkNotNull(context.contentResolver.openInputStream(uri)) { context.getString(R.string.machine_open_failed, path) }
                         .use { input -> file.outputStream().use { input.copyTo(it) } }
                     else -> {
                         // The file opened in place, for reading and writing (its disk may be written).
-                        val descriptor = checkNotNull(context.contentResolver.openFileDescriptor(uri, "rw")) { "Unable to open $path" }
+                        val descriptor = checkNotNull(context.contentResolver.openFileDescriptor(uri, "rw")) { context.getString(R.string.machine_open_failed, path) }
                         open += descriptor
                         Os.symlink("/proc/self/fd/${descriptor.fd}", file.path)
                     }
@@ -226,7 +226,7 @@ class X86Library(private val context: Context) {
             val nvrFolder = children(tree, folder).firstOrNull { it.name == NVR && it.folder }?.id
                 ?: DocumentsContract.createDocument(context.contentResolver, DocumentsContract.buildDocumentUriUsingTree(tree, folder),
                     Document.MIME_TYPE_DIR, NVR)?.let(DocumentsContract::getDocumentId)
-                ?: error("Could not create nvr/ in the machine's folder")
+                ?: error(context.getString(R.string.machine_create_failed, NVR))
             for (file in nvr.listFiles().orEmpty().filter { it.isFile }) writeFile(nvrFolder, file, file.name)
         }
 
@@ -236,8 +236,8 @@ class X86Library(private val context: Context) {
             val uri = existing?.let { DocumentsContract.buildDocumentUriUsingTree(tree, it.id) }
                 ?: DocumentsContract.createDocument(context.contentResolver, DocumentsContract.buildDocumentUriUsingTree(tree, parent),
                     "application/octet-stream", name)
-                ?: error("Could not create $name in the machine's folder")
-            checkNotNull(context.contentResolver.openOutputStream(uri, "wt")) { "Could not write $name" }
+                ?: error(context.getString(R.string.machine_create_failed, name))
+            checkNotNull(context.contentResolver.openOutputStream(uri, "wt")) { context.getString(R.string.machine_write_failed, name) }
                 .use { output -> file.inputStream().use { it.copyTo(output) } }
         }
 
@@ -256,7 +256,7 @@ class X86Library(private val context: Context) {
         val text = config(entry, tree)
         for (change in changes) text[change.section, change.key] = change.value
         val uri = configUri(tree, entry)
-        checkNotNull(context.contentResolver.openOutputStream(uri, "wt")) { "Could not write ${entry.path}/$CONFIG" }
+        checkNotNull(context.contentResolver.openOutputStream(uri, "wt")) { context.getString(R.string.machine_write_failed, "${entry.path}/$CONFIG") }
             .use { it.write(text.toString().toByteArray(Charsets.UTF_8)) }
     }
 
@@ -268,7 +268,7 @@ class X86Library(private val context: Context) {
     }
 
     private fun readConfig(tree: Uri, entry: X86Entry): String =
-        checkNotNull(context.contentResolver.openInputStream(configUri(tree, entry))) { "Unable to open ${entry.path}/$CONFIG" }
+        checkNotNull(context.contentResolver.openInputStream(configUri(tree, entry))) { context.getString(R.string.machine_open_failed, "${entry.path}/$CONFIG") }
             .use { it.readBytes().toString(Charsets.UTF_8) }
 
     /** A disk image picked on the device (MachineLibrary.inspectExternal), for a drive. */

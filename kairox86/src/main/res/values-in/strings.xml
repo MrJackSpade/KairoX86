@@ -1,0 +1,125 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Indonesian (in): the translation of values/strings.xml. Each EN comment is the English a string translates; update it with the translation. Check with shared/tools/translations.py check. -->
+<resources>
+    <!-- %1$s is the app's name, KairoX86; %2$s the emulator it runs, 86Box; %3$s the machine, IBM PC compatible;
+         %4$s the bundled firmware, GLaBIOS; %5$s its GitHub repository. -->
+    <!-- EN: %1$s uses %2$s\'s %3$s emulation and the %4$s firmware. Source and provenance: github.com/%5$s. -->
+    <string name="credits">%1$s uses %2$s\'s %3$s emulation and the %4$s firmware. Source and provenance: github.com/%5$s.</string>
+    <!-- EN: Choose a games folder to find the machines in it: each is a folder holding an 86box.cfg and its disks -->
+    <string name="library_empty">Choose a games folder to find the machines in it: each is a folder holding an 86box.cfg and its disks</string>
+    <!-- %1$s is the machine's name, IBM PC compatible; %2$s the app's name, KairoX86. -->
+    <!-- EN: Select the folder for your %1$s machines. %2$s finds every folder in it that holds an 86box.cfg, with its disks. -->
+    <string name="folder_description">Select the folder for your %1$s machines. %2$s finds every folder in it that holds an 86box.cfg, with its disks.</string>
+    <!-- EN: The game port\'s two joysticks. -->
+    <string name="joystick_help">The game port\'s two joysticks.</string>
+    <!-- A joystick button: %1$d is its number. -->
+    <!-- EN: Button %1$d -->
+    <string name="joystick_button">Button %1$d</string>
+    <!-- A direction of the second joystick: %1$s is the direction, such as Up. -->
+    <!-- EN: 2 %1$s -->
+    <string name="joystick_2">2 %1$s</string>
+    <!-- What a library entry is, on its chip: a PC set up in a folder. -->
+    <!-- EN: Machine -->
+    <string name="media_machine">Machine</string>
+    <!-- %1$s is the machine's name. -->
+    <!-- EN: %1$s has no 86box.cfg -->
+    <string name="machine_config_missing">%1$s has no 86box.cfg</string>
+    <!-- %1$s is the folder's path in the games folder. -->
+    <!-- EN: The folder %1$s is gone -->
+    <string name="machine_folder_missing">The folder %1$s is gone</string>
+    <!-- EN: Another app can open a disk image, but KairoX86 runs machines: put the machine\'s folder in the games folder -->
+    <string name="machine_external">Another app can open a disk image, but KairoX86 runs machines: put the machine\'s folder in the games folder</string>
+    <!-- EN: KairoX86 does not delete a machine\'s folder: remove it in a file manager -->
+    <string name="machine_delete">KairoX86 does not delete a machine\'s folder: remove it in a file manager</string>
+    <!-- %1$s is the machine's name. -->
+    <!-- EN: Preparing %1$s… -->
+    <string name="machine_preparing">Preparing %1$s…</string>
+    <!-- EN: Another machine is still running -->
+    <string name="machine_still_running">Another machine is still running</string>
+    <!-- EN: The machine\'s working folder could not be prepared -->
+    <string name="machine_session_failed">The machine\'s working folder could not be prepared</string>
+    <!-- EN: A folder of the games folder could not be read -->
+    <string name="machine_list_failed">A folder of the games folder could not be read</string>
+    <!-- %1$s is a file's path in the machine's folder. -->
+    <!-- EN: %1$s could not be opened -->
+    <string name="machine_open_failed">%1$s could not be opened</string>
+    <!-- %1$s is a file's path in the machine's folder. -->
+    <!-- EN: %1$s could not be written -->
+    <string name="machine_write_failed">%1$s could not be written</string>
+    <!-- %1$s is a file or folder's path in the machine's folder. -->
+    <!-- EN: %1$s could not be created -->
+    <string name="machine_create_failed">%1$s could not be created</string>
+    <!-- %1$s is the name of a file in the machine's folder. -->
+    <!-- EN: %1$s is not a name a machine\'s file can have -->
+    <string name="machine_unsafe_name">%1$s is not a name a machine\'s file can have</string>
+    <!-- EN: The machine\'s settings and CMOS could not be saved to its folder -->
+    <string name="machine_write_back_failed">The machine\'s settings and CMOS could not be saved to its folder</string>
+    <!-- What a disk image is, on its chip on the Disks page. -->
+    <!-- EN: Disk -->
+    <string name="media_disk">Disk</string>
+    <!-- The removable drives of the Disks page. -->
+    <!-- EN: Floppy A -->
+    <string name="media_floppy_a">Floppy A</string>
+    <!-- EN: Floppy B -->
+    <string name="media_floppy_b">Floppy B</string>
+    <!-- EN: CD-ROM -->
+    <string name="media_cd">CD-ROM</string>
+    <!-- A ZIP, MO or other removable disk a machine needs, as "The %1$s this game needs is not in the library" names it. -->
+    <!-- EN: Removable disk -->
+    <string name="media_removable_disk">Removable disk</string>
+    <!-- A tape a machine needs, as "The %1$s this game needs is not in the library" names it. -->
+    <!-- EN: Tape -->
+    <string name="media_tape">Tape</string>
+    <!-- %1$s is the file's name. -->
+    <!-- EN: %1$s is no floppy or CD image -->
+    <string name="machine_not_disk">%1$s is no floppy or CD image</string>
+    <!-- EN: A disk goes in a running machine -->
+    <string name="machine_disk_no_machine">A disk goes in a running machine</string>
+    <!-- The machine settings (86box.cfg), each with 86Box's own choices (Kairo#143). -->
+    <!-- EN: Machine -->
+    <string name="setting_machine">Machine</string>
+    <!-- EN: Processor -->
+    <string name="setting_processor">Processor</string>
+    <!-- EN: Memory -->
+    <string name="setting_memory">Memory</string>
+    <!-- EN: Video card -->
+    <string name="setting_video">Video card</string>
+    <!-- EN: Sound card -->
+    <string name="setting_sound">Sound card</string>
+    <!-- EN: Network card -->
+    <string name="setting_network">Network card</string>
+    <!-- EN: Hard disk controller -->
+    <string name="setting_hdc">Hard disk controller</string>
+    <!-- EN: SCSI controller -->
+    <string name="setting_scsi">SCSI controller</string>
+    <!-- EN: Floppy controller -->
+    <string name="setting_fdc">Floppy controller</string>
+    <!-- EN: Mouse -->
+    <string name="setting_mouse">Mouse</string>
+    <!-- EN: Joystick -->
+    <string name="setting_joystick">Joystick</string>
+    <!-- A card setting's choice: the one built into the machine's board. -->
+    <!-- EN: Onboard -->
+    <string name="setting_card_onboard">Onboard</string>
+    <!-- Why a machine or card cannot be picked. -->
+    <!-- EN: Its firmware is not in your 86Box ROM set -->
+    <string name="setting_firmware_missing">Its firmware is not in your 86Box ROM set</string>
+    <!-- The Firmware page's group for the 86Box ROM set the player imports. -->
+    <!-- EN: 86Box ROM set -->
+    <string name="firmware_rom_set">86Box ROM set</string>
+    <!-- EN: A file of the 86Box ROM set -->
+    <string name="firmware_rom_description">A file of the 86Box ROM set</string>
+    <!-- EN: Import the folder holding your 86Box ROM set. Its files are found by content, whatever their names. -->
+    <string name="firmware_rom_set_note">Import the folder holding your 86Box ROM set. Its files are found by content, whatever their names.</string>
+    <!-- A machine setting (86box.cfg time_sync): the clock the guest reads. -->
+    <!-- EN: Clock -->
+    <string name="setting_clock">Clock</string>
+    <!-- EN: Local time -->
+    <string name="setting_clock_local">Local time</string>
+    <!-- EN: UTC -->
+    <string name="setting_clock_utc">UTC</string>
+    <!-- EN: The machine\'s own -->
+    <string name="setting_clock_own">The machine\'s own</string>
+    <!-- EN: Direct tap puts the pointer at your finger in DOS games. Elsewhere it moves the pointer there from the screen\'s top-left corner, which some programs do not follow. -->
+    <string name="direct_touch_explanation">Direct tap puts the pointer at your finger in DOS games. Elsewhere it moves the pointer there from the screen\'s top-left corner, which some programs do not follow.</string>
+</resources>

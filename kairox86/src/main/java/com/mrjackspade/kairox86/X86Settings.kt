@@ -1,5 +1,6 @@
 package com.mrjackspade.kairox86
 
+import com.mrjackspade.kairo.frontend.R as FrontendR
 import com.mrjackspade.kairo.frontend.ChoiceOption
 import com.mrjackspade.kairo.frontend.MachineOption
 import com.mrjackspade.kairo.frontend.UiText
@@ -72,7 +73,7 @@ object X86Settings {
             val takes = takes(values)
             val step = if (takes.ramStep > 0) takes.ramStep else takes.ramMax - takes.ramMin
             generateSequence(takes.ramMin) { size -> (size + step).takeIf { step > 0 && it <= takes.ramMax } }
-                .map { size -> ChoiceOption(size.toString(), UiText.fixed(memoryLabel(size))) }.toList()
+                .map { size -> ChoiceOption(size.toString(), memoryLabel(size)) }.toList()
         },
         // No mem_size in 86box.cfg: KairoX86's default for the machine (core/kairo/hardware.c, KairoX86#62).
         defaultWith = { values -> takes(values).ramDefault.toString() },
@@ -84,13 +85,20 @@ object X86Settings {
             dependsOn = listOf(MACHINE_ID),
             choicesWith = { values ->
                 takes(values).cards.getValue(kind).map { card ->
-                    ChoiceOption(card.id, UiText.fixed(card.name), null, firmwareMissing.takeIf { !card.available })
+                    ChoiceOption(card.id, cardLabel(card), null, firmwareMissing.takeIf { !card.available })
                 }
             },
             defaultWith = { values ->
                 val cards = takes(values).cards.getValue(kind)
                 if (onboardFirst && cards.any { it.id == "internal" }) "internal" else "none"
             }), section, key)
+
+    /** A card's name: 86Box's own, but the app's words for no card and the board's own (86Box's "None", "Internal"). */
+    private fun cardLabel(card: X86Hardware.Card): UiText = when (card.id) {
+        "none" -> UiText.res(FrontendR.string.kairo_none)
+        "internal" -> UiText.res(R.string.setting_card_onboard)
+        else -> UiText.fixed(card.name)
+    }
 
     val video = card("video", R.string.setting_video, X86Hardware.VIDEO, "Video", "gfxcard", onboardFirst = true)
     val sound = card("sound", R.string.setting_sound, X86Hardware.SOUND, "Sound", "sndcard", onboardFirst = false)
@@ -120,5 +128,6 @@ object X86Settings {
     fun of(option: MachineOption): Setting = all.firstOrNull { it.option.id == option.id }
         ?: error("${option.id} is no KairoX86 machine setting")
 
-    private fun memoryLabel(kb: Int): String = if (kb % 1024 == 0) "${kb / 1024} MB" else "$kb KB"
+    private fun memoryLabel(kb: Int): UiText =
+        if (kb % 1024 == 0) UiText.res(FrontendR.string.kairo_memory_mb, kb / 1024) else UiText.res(FrontendR.string.kairo_memory_kb, kb)
 }

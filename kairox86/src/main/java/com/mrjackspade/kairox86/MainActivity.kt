@@ -78,7 +78,7 @@ class MainActivity : MachineActivity<X86Entry>() {
     override val maxKeyCode = X86Keys.MAX_CODE
     override fun guestKey(androidKey: Int) = X86Keys.fromAndroid(androidKey)
     override val joystickControls get() = X86Keys.joystick
-    override val controllerSpec = ControllerGuestSpec("IBM PC", X86Keys.bindableCodes, { X86Keys.label(it) ?: "Key $it" },
+    override val controllerSpec = ControllerGuestSpec("IBM PC", X86Keys.bindableCodes, { X86Keys.label(it) ?: error("KairoX86 has no key $it") },
         X86Keys.modifiers, X86Keys.joystick.zip(X86Keys.joystickLabels), UiText.res(R.string.joystick_help),
         ControllerGuestSpec.STANDARD_ACTIONS, X86Keys.layout)
     override val bindingsCodec = X86Keys.bindings
@@ -169,7 +169,7 @@ class MainActivity : MachineActivity<X86Entry>() {
         // The core's media (x86_core.cpp): the machine folder 86Box runs, and the commands typed at its prompt.
         val settings = mapOf(StartupCommands.setting(commands))
         check(bridge.start(firmwareFolder.absolutePath, prepared.dir.absolutePath, listOf(prepared.dir.absolutePath),
-            settings)) { "Another machine is still running" }
+            settings)) { getString(R.string.machine_still_running) }
         awaitRunning()
         followKeyboard()
         // What the machine's drives hold, from its 86box.cfg, as the Disks page shows it.

@@ -24,6 +24,17 @@
     <string name="machine_delete">KairoX86 does not delete a machine\'s folder: remove it in a file manager</string>
     <!-- %1$s is the machine's name. -->
     <string name="machine_preparing">Preparing %1$s…</string>
+    <string name="machine_still_running">Another machine is still running</string>
+    <string name="machine_session_failed">The machine\'s working folder could not be prepared</string>
+    <string name="machine_list_failed">A folder of the games folder could not be read</string>
+    <!-- %1$s is a file's path in the machine's folder. -->
+    <string name="machine_open_failed">%1$s could not be opened</string>
+    <!-- %1$s is a file's path in the machine's folder. -->
+    <string name="machine_write_failed">%1$s could not be written</string>
+    <!-- %1$s is a file or folder's path in the machine's folder. -->
+    <string name="machine_create_failed">%1$s could not be created</string>
+    <!-- %1$s is the name of a file in the machine's folder. -->
+    <string name="machine_unsafe_name">%1$s is not a name a machine\'s file can have</string>
     <string name="machine_write_back_failed">The machine\'s settings and CMOS could not be saved to its folder</string>
 
     <!-- What a disk image is, on its chip on the Disks page. -->
@@ -51,6 +62,8 @@
     <string name="setting_fdc">Floppy controller</string>
     <string name="setting_mouse">Mouse</string>
     <string name="setting_joystick">Joystick</string>
+    <!-- A card setting's choice: the one built into the machine's board. -->
+    <string name="setting_card_onboard">Onboard</string>
     <!-- Why a machine or card cannot be picked. -->
     <string name="setting_firmware_missing">Its firmware is not in your 86Box ROM set</string>
     <!-- The Firmware page's group for the 86Box ROM set the player imports. -->
