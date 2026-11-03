@@ -31,6 +31,16 @@ _start:
     movw    %ax, %ss
     movw    $0x7c00, %sp
     sti
+    /* "STOP n" on the screen (BIOS teletype), so a picture shows the boot sector ran. */
+    movw    $banner, %si
+0:  lodsb
+    testb   %al, %al
+    jz      0f
+    movb    $0x0e, %ah
+    xorw    %bx, %bx
+    int     $0x10
+    jmp     0b
+0:
 
 #if MODE == MODE_HALT
     cli
@@ -166,6 +176,10 @@ gdt_desc:
     .word   gdt_desc - gdt - 1
     .long   gdt
 #endif
+
+banner:
+    .ascii  "STOP "
+    .byte   '0' + MODE, 13, 10, 0
 
     .org    510
     .byte   0x55, 0xaa
