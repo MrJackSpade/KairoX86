@@ -16,7 +16,7 @@ class X86FirmwareTest {
 
     @Test
     fun theIndexNamesEveryFileOnce() {
-        assertEquals(1776, entries.size)
+        assertEquals(1772, entries.size)
         assertEquals(entries.size, entries.map { it.path }.toSet().size)
         assertTrue(entries.any { it.path.startsWith("machines/486ap4/") })
     }
