@@ -170,6 +170,7 @@ int main(int argc, char **argv) {
         std::vector<int16_t> audio(48000 * 2);
         std::vector<double> times;
         times.reserve(size_t(frames));
+        long loading = 0, last_loading = -1;
         for (long frame = 0; frame < warmup + frames; ++frame) {
             for (const Event &event : events) {
                 if (event.frame != frame) continue;
@@ -181,6 +182,10 @@ int main(int argc, char **argv) {
             const auto before = Clock::now();
             if (!machine->run_frame(error)) return fail("stopped at frame " + std::to_string(frame) + ": " + error);
             const double ms = std::chrono::duration<double, std::milli>(Clock::now() - before).count();
+            if (machine->loading()) {
+                ++loading;
+                last_loading = frame;
+            }
             uint32_t got, total = 0;
             uint64_t sound = 1469598103934665603ull;
             while ((got = machine->read_audio(audio.data(), uint32_t(audio.size() / 2))) > 0) {
@@ -210,6 +215,8 @@ int main(int argc, char **argv) {
         std::printf("host %.2f frames/s (guest %.2f), frame ms mean %.3f median %.3f p95 %.3f max %.3f over %zu frames\n",
                     1000.0 / mean, 1.0 / machine->frame_seconds(), mean, sorted[sorted.size() / 2],
                     sorted[std::min(sorted.size() - 1, sorted.size() * 95 / 100)], sorted.back(), times.size());
+        // The frames the app would run flat out (X86Machine::loading).
+        std::printf("loading %ld frames, the last at frame %ld\n", loading, last_loading);
         // The lock keys' lamps at the end: bit 0 Caps Lock, 1 Num Lock, 2 Scroll Lock.
         std::printf("locks %d\n", machine->locks());
         machine->close();

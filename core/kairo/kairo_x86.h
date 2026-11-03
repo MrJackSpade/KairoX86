@@ -86,6 +86,10 @@ struct KairoX86Api {
 	void (*joystick_button)(int button, bool down);
 	/* The lock keys' lamps (KAIRO_X86_*_LOCK). */
 	int (*locks)(void);
+	/* Whether the last frame was loading from a floppy disk (a drive worked in it, KairoX86#41):
+	 * the host runs such frames flat out. Hard disks and CDs do not count: a game reads them as
+	 * it plays. */
+	bool (*loading)(void);
 
 	/* Resets the machine: a hard reset, as switching it off and on does. */
 	void (*reset)(void);

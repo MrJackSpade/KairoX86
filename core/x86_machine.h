@@ -54,6 +54,8 @@ public:
     void joystick_button(int button, bool down);
     // The lock keys' lamps: bit 0 Caps Lock, 1 Num Lock, 2 Scroll Lock.
     int locks() const;
+    // Whether the last frame was loading from a floppy disk (kairo_x86.h): the host runs it flat out.
+    bool loading() const;
 
     // A hard reset, as switching the PC off and on does.
     void reset();

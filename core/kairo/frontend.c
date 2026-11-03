@@ -384,8 +384,25 @@ ui_confirm_unsupported_hardware(UNUSED(const ui_unsupported_hardware_t *items), 
 }
 
 void ui_sb_update_icon_state(UNUSED(int tag), UNUSED(int state)) { }
-void ui_sb_update_icon(UNUSED(int tag), UNUSED(int active)) { }
-void ui_sb_update_icon_write(UNUSED(int tag), UNUSED(int active)) { }
+/* The floppy drives' activity lamps (KairoX86#41): a bit per drive while it works, and how often
+   a lamp changed, so a frame in which a drive worked at all counts as loading. Called on the
+   emulation thread, by the floppy controller. */
+static unsigned floppy_busy;
+static unsigned floppy_changes;
+static bool     loading_frame;
+
+static void
+floppy_lamp(int tag, int active)
+{
+    if ((tag & 0xf0) != SB_FLOPPY)
+        return;
+    const unsigned bit = 1u << (tag & 0x0f);
+    floppy_busy        = active ? (floppy_busy | bit) : (floppy_busy & ~bit);
+    floppy_changes++;
+}
+
+void ui_sb_update_icon(int tag, int active) { floppy_lamp(tag, active); }
+void ui_sb_update_icon_write(int tag, int active) { floppy_lamp(tag, active); }
 void ui_sb_update_icon_wp(UNUSED(int tag), UNUSED(int state)) { }
 void ui_sb_update_tip(UNUSED(int arg)) { }
 void ui_sb_update_panes(void) { }
@@ -496,6 +513,12 @@ api_joystick_button(int button, bool down)
     input_buttons[button] = down ? 128 : 0;
 }
 
+static bool
+api_loading(void)
+{
+    return loading_frame;
+}
+
 static int
 api_locks(void)
 {
@@ -568,8 +591,9 @@ api_run_frame(void)
         return false;
     }
     running = true;
-    const uint64_t frames = monitors[0].mon_renderedframes;
-    frame_ms              = 0;
+    const uint64_t frames  = monitors[0].mon_renderedframes;
+    const unsigned changes = floppy_changes;
+    frame_ms               = 0;
     while ((monitors[0].mon_renderedframes == frames) && (frame_ms < KAIRO_X86_MAX_FRAME_MS)) {
         pc_run();
         frame_ms++;
@@ -589,6 +613,7 @@ api_run_frame(void)
     }
     /* The blit thread copies the frame: wait until it has, so screen() reads it whole. */
     video_wait_for_blit_monitor(0);
+    loading_frame = (floppy_busy != 0) || (floppy_changes != changes);
     if (halted_with_interrupts_off()) {
         halted_ms += frame_ms;
         if (halted_ms >= HALT_STOP_MS)
@@ -653,6 +678,7 @@ static const struct KairoX86Api api = {
     .joystick_axis   = api_joystick_axis,
     .joystick_button = api_joystick_button,
     .locks           = api_locks,
+    .loading         = api_loading,
     .reset           = api_reset,
     .stop            = api_stop,
 };

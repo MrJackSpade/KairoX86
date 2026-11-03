@@ -36,6 +36,8 @@ public:
     uint32_t read_audio(int16_t *stereo, uint32_t max_frames) override { return machine_->read_audio(stereo, max_frames); }
     // Bit 0 Caps Lock, 1 Num Lock, 2 Scroll Lock, as NativeMachine lists them (MainActivity).
     int locks() override { return machine_->locks(); }
+    // A frame a floppy drive worked in: the frame host runs it flat out (KairoX86#41).
+    bool loading() override { return machine_->loading(); }
 
     void release_inputs() override {
         for (int code = 1; code < kKeyCodes; ++code)
