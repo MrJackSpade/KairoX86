@@ -35,5 +35,10 @@
     <!-- %1$s is the file's name. -->
     <string name="machine_not_disk">%1$s is no floppy or CD image</string>
     <string name="machine_disk_no_machine">A disk goes in a running machine</string>
+    <!-- A machine setting (86box.cfg time_sync): the clock the guest reads. -->
+    <string name="setting_clock">Clock</string>
+    <string name="setting_clock_local">Local time</string>
+    <string name="setting_clock_utc">UTC</string>
+    <string name="setting_clock_own">The machine\'s own</string>
     <string name="direct_touch_explanation">Direct tap puts the pointer at your finger in DOS games. Elsewhere it moves the pointer there from the screen\'s top-left corner, which some programs do not follow.</string>
 </resources>

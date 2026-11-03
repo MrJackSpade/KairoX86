@@ -12,6 +12,8 @@ import com.mrjackspade.kairo.frontend.LibraryStrings
 import com.mrjackspade.kairo.frontend.MachineActivity
 import com.mrjackspade.kairo.frontend.MachineFirstRun
 import com.mrjackspade.kairo.frontend.MachineLibrary
+import com.mrjackspade.kairo.frontend.MachineOption
+import com.mrjackspade.kairo.frontend.GameMachineStore
 import com.mrjackspade.kairo.frontend.StartupCommands
 import com.mrjackspade.kairox86.X86Library.DiskKind
 import com.mrjackspade.kairo.frontend.NativeMachine
@@ -40,6 +42,25 @@ class MainActivity : MachineActivity<X86Entry>() {
     override val directTouchExplanation = UiText.res(R.string.direct_touch_explanation)
     // 86Box keeps no save states the frontend can take yet: the machine's own disks and CMOS keep its saves.
     override val saveStates = false
+
+    /**
+     * A machine's settings live in its folder's 86box.cfg (Kairo#142, X86Settings); one changed while
+     * the machine runs goes over what 86Box saves as it ends.
+     */
+    override val machineStore = object : GameMachineStore<X86Entry> {
+        override fun read(entry: X86Entry, option: MachineOption): String? {
+            val setting = X86Settings.of(option)
+            return machines.setting(entry, libraryTree(), setting.section, setting.key)
+        }
+
+        override fun write(entry: X86Entry, option: MachineOption, value: String?) {
+            val setting = X86Settings.of(option)
+            machines.setSetting(entry, libraryTree(), setting.section, setting.key, value)
+            session?.takeIf { it.entryId == entry.id }?.edit(setting.section, setting.key, value)
+        }
+    }
+
+    private fun libraryTree() = checkNotNull(tree) { getString(FrontendR.string.kairo_library_choose_in_manage) }
     override val bridge by lazy { NativeMachine("kairox86", X86Keys.locks) }
     override val keyboard = X86Keys.layout
     override val maxKeyCode = X86Keys.MAX_CODE

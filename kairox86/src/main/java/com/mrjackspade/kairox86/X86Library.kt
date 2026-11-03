@@ -101,7 +101,7 @@ class X86Library(private val context: Context) {
         check(dir.mkdirs()) { "Could not create the session folder" }
         val media = File(context.filesDir, "session-media/${dir.name}")
         check(!media.exists() || media.deleteRecursively()) { "Could not clear the session's media folder" }
-        val session = Session(tree, folder, dir, media)
+        val session = Session(entry.id, tree, folder, dir, media)
         try {
             session.fill(folder, dir, "", cancelled)
             check(File(dir, CONFIG).isFile) { context.getString(R.string.machine_config_missing, entry.displayName) }
@@ -138,9 +138,16 @@ class X86Library(private val context: Context) {
      * A machine's session: its folder in the games folder ([folder]), the session folder 86Box runs
      * ([dir]), and the files of the folder held open for it.
      */
-    inner class Session(private val tree: Uri, private val folder: String, val dir: File, private val media: File) :
-        AutoCloseable {
+    inner class Session(val entryId: String, private val tree: Uri, private val folder: String, val dir: File,
+                        private val media: File) : AutoCloseable {
         private val open = ArrayList<ParcelFileDescriptor>()
+        /** Settings changed while the machine runs (Kairo#142), put back over what 86Box saves as it ends. */
+        private val edits = LinkedHashMap<Pair<String, String>, String?>()
+
+        /** A setting the player changed while this machine runs: 86Box saves its own when it ends, then this goes over it. */
+        @Synchronized fun edit(section: String, key: String, value: String?) {
+            edits[section to key] = value
+        }
 
         /**
          * The disk images of the machine's folder (the Disks page's own disks), each by its file in
@@ -199,7 +206,15 @@ class X86Library(private val context: Context) {
 
         /** Returns 86box.cfg and nvr/ to the machine's folder, as 86Box left them. */
         fun writeBack() {
-            writeFile(folder, File(dir, CONFIG), CONFIG)
+            val config = File(dir, CONFIG)
+            synchronized(this) {
+                if (edits.isNotEmpty() && config.isFile) {
+                    val text = IniText(config.readText())
+                    for ((at, value) in edits) text[at.first, at.second] = value
+                    config.writeText(text.toString())
+                }
+            }
+            writeFile(folder, config, CONFIG)
             val nvr = File(dir, NVR)
             if (!nvr.isDirectory) return
             val nvrFolder = children(tree, folder).firstOrNull { it.name == NVR && it.folder }?.id
@@ -226,6 +241,33 @@ class X86Library(private val context: Context) {
             media.deleteRecursively()
         }
     }
+
+    /**
+     * The machine's own setting [key] in [section] of its folder's 86box.cfg (Kairo#142), or null when
+     * the file names none, so 86Box takes its default.
+     */
+    fun setting(entry: X86Entry, tree: Uri, section: String, key: String): String? =
+        IniText(readConfig(tree, entry))[section, key]
+
+    /** Sets the machine's [key] in [section] of its folder's 86box.cfg to [value]; null removes it. */
+    fun setSetting(entry: X86Entry, tree: Uri, section: String, key: String, value: String?) {
+        val text = IniText(readConfig(tree, entry))
+        text[section, key] = value
+        val uri = configUri(tree, entry)
+        checkNotNull(context.contentResolver.openOutputStream(uri, "wt")) { "Could not write ${entry.path}/$CONFIG" }
+            .use { it.write(text.toString().toByteArray(Charsets.UTF_8)) }
+    }
+
+    private fun configUri(tree: Uri, entry: X86Entry): Uri {
+        val folder = findFolder(tree, entry.path)
+        val config = children(tree, folder).firstOrNull { !it.folder && it.name.equals(CONFIG, ignoreCase = true) }
+            ?: error(context.getString(R.string.machine_config_missing, entry.displayName))
+        return DocumentsContract.buildDocumentUriUsingTree(tree, config.id)
+    }
+
+    private fun readConfig(tree: Uri, entry: X86Entry): String =
+        checkNotNull(context.contentResolver.openInputStream(configUri(tree, entry))) { "Unable to open ${entry.path}/$CONFIG" }
+            .use { it.readBytes().toString(Charsets.UTF_8) }
 
     /** A disk image picked on the device (MachineLibrary.inspectExternal), for a drive. */
     fun pickedDisk(uri: Uri, name: String, size: Long, modified: Long): X86Entry {

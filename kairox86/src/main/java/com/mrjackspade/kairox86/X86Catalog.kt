@@ -31,7 +31,8 @@ object X86Catalog : LayeredGameCatalog.Schema {
     val startupCommands = CatalogSetting.Lines(LAUNCH, COMMANDS, UiText.res(FrontendR.string.kairo_startup_commands),
         UiText.res(FrontendR.string.kairo_startup_commands_hint), Regex("[ -~]{1,120}"), 8) { _, _ -> emptyList() }
 
-    override val settings: List<CatalogSetting> = listOf(startupCommands)
+    /** The startup commands, then the machine's settings, which live in its own 86box.cfg (Kairo#142, X86Settings). */
+    override val settings: List<CatalogSetting> = listOf(startupCommands) + X86Settings.all.map { CatalogSetting.Choice(it.option) }
     override val fields = CatalogSetting.fields(settings)
 
     override fun validMedia(role: String, contentId: String) = false
