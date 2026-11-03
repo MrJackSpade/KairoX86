@@ -3,6 +3,18 @@ package com.mrjackspade.kairox86.uitest
 import com.mrjackspade.kairo.frontend.PcKey
 import com.mrjackspade.kairo.uitest.AppUnderTest
 import com.mrjackspade.kairo.uitest.AppUnderTest.MediaSwap
+import com.mrjackspade.kairo.uitest.suites.ControllerTests
+import com.mrjackspade.kairo.uitest.suites.FirstRunTests
+import com.mrjackspade.kairo.uitest.suites.GameTests
+import com.mrjackspade.kairo.uitest.suites.LaunchTests
+import com.mrjackspade.kairo.uitest.suites.LibraryTests
+import com.mrjackspade.kairo.uitest.suites.LibraryManagementTests
+import com.mrjackspade.kairo.uitest.suites.MediaTests
+import com.mrjackspade.kairo.uitest.suites.MenuTests
+import com.mrjackspade.kairo.uitest.suites.SearchTests
+import com.mrjackspade.kairo.uitest.suites.SettingsTests
+import com.mrjackspade.kairo.uitest.suites.TouchTests
+import com.mrjackspade.kairo.uitest.suites.WordingTests
 
 /**
  * KairoX86 as the shared UI tests see it (KairoX86#86). Its library entries are 86Box machine
@@ -30,3 +42,17 @@ object KairoX86App : AppUnderTest() {
     // The disks of the machine's own folder are the Disks page's choices (MainActivity.ownDisks).
     override val mediaSwap = MediaSwap("dos486", "Floppy A", "freedos", filler = "img")
 }
+
+// Every shared suite (KairoX86#87); no StateTests: 86Box saves no machine state (#187).
+class KairoX86FirstRunTests : FirstRunTests() { override val app = KairoX86App }
+class KairoX86LibraryTests : LibraryTests() { override val app = KairoX86App }
+class KairoX86SearchTests : SearchTests() { override val app = KairoX86App }
+class KairoX86GameTests : GameTests() { override val app = KairoX86App }
+class KairoX86WordingTests : WordingTests() { override val app = KairoX86App }
+class KairoX86MediaTests : MediaTests() { override val app = KairoX86App }
+class KairoX86MenuTests : MenuTests() { override val app = KairoX86App }
+class KairoX86ControllerTests : ControllerTests() { override val app = KairoX86App }
+class KairoX86TouchTests : TouchTests() { override val app = KairoX86App }
+class KairoX86LaunchTests : LaunchTests() { override val app = KairoX86App }
+class KairoX86LibraryManagementTests : LibraryManagementTests() { override val app = KairoX86App }
+class KairoX86SettingsTests : SettingsTests() { override val app = KairoX86App }
