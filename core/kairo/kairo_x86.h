@@ -122,6 +122,10 @@ struct KairoX86Api {
 	 * names them, "83" (XT), "84" (AT), "101" (ANSI), "102" (ISO), "106" (JIS), "103" (KSC) or
 	 * "104" (ABNT2), or "internal" for a machine's own keyboard. Valid once the machine started. */
 	const char *(*keyboard_model)(void);
+	/* What 86Box started the machine with, from its own state, as "name=value" pairs separated by ';':
+	 * machine (its internal name), memory (KB), video and sound (the first card's internal name), for
+	 * the UI tests to see a setting reach the machine (KairoX86#88). Valid once the machine started. */
+	const char *(*started)(void);
 	/* Whether the last frame was loading from a floppy disk (a drive worked in it, KairoX86#41):
 	 * the host runs such frames flat out. Hard disks and CDs do not count: a game reads them as
 	 * it plays. */

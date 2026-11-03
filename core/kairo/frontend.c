@@ -1231,6 +1231,15 @@ api_locks(void)
         | (kana ? KAIRO_X86_KANA_LOCK : 0);
 }
 
+/* What 86Box started the machine with (kairo_x86.h started, KairoX86#88). */
+static char started_text[512];
+
+static const char *
+api_started(void)
+{
+    return started_text;
+}
+
 /* The keyboard's model (kairo_x86.h, KairoX86#65): the "keys" its 86box.cfg section sets for a
    keyboard that has the choice, else the keys 86Box builds the keyboard with (the AX and PS/55
    keyboards are JIS). */
@@ -1310,6 +1319,8 @@ api_start(const char *vm_folder, const char *rom_folder, const struct KairoX86Ho
     is_cpu_thread = 1;
     is_quit       = 0;
     running       = false;
+    snprintf(started_text, sizeof(started_text), "machine=%s;memory=%u;video=%s;sound=%s", machine_get_internal_name(),
+             (unsigned) mem_size, video_get_internal_name(gfxcard[0]), sound_card_get_internal_name(sound_card_current[0]));
     return true;
 }
 
@@ -1429,6 +1440,7 @@ static const struct KairoX86Api api = {
     .joystick_button = api_joystick_button,
     .locks           = api_locks,
     .keyboard_model  = api_keyboard_model,
+    .started         = api_started,
     .loading         = api_loading,
     .guest_input     = api_guest_input,
     .media           = api_media,

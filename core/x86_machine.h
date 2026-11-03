@@ -70,6 +70,8 @@ public:
     int locks() const;
     // The keyboard the machine runs with (kairo_x86.h keyboard_model), such as "101" or "106".
     std::string keyboard_model() const;
+    // What 86Box started with, as "name=value;..." (kairo_x86.h started).
+    std::string started() const;
     // Whether the last frame was loading from a floppy disk (kairo_x86.h): the host runs it flat out.
     bool loading() const;
     // How the guest reads its input since the machine started (kairo_x86.h), for the Auto touch mode.
