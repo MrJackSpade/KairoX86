@@ -39,6 +39,8 @@
 #include <86box/fdd.h>
 #include <86box/cdrom.h>
 #include <86box/mem.h>
+#include <86box/device.h>
+#include <86box/machine.h>
 #include <86box/ini.h>
 #include <86box/config.h>
 #include "cpu.h"
@@ -1208,6 +1210,10 @@ api_start(const char *vm_folder, const char *rom_folder, const struct KairoX86Ho
         running = false;
         return false;
     }
+    /* A machine whose 86box.cfg names no memory gets KairoX86's default for it, never 86Box's 64 KB
+       (KairoX86#62); 86Box writes it into the configuration when it saves. */
+    if (config_get_int("Machine", "mem_size", -1) < 0)
+        mem_size = hardware_default_ram(machine);
     if (!pc_init_roms()) {
         machine_over("86Box found no firmware");
         running = false;

@@ -74,8 +74,8 @@ object X86Settings {
             generateSequence(takes.ramMin) { size -> (size + step).takeIf { step > 0 && it <= takes.ramMax } }
                 .map { size -> ChoiceOption(size.toString(), UiText.fixed(memoryLabel(size))) }.toList()
         },
-        // No mem_size in 86box.cfg: 86Box takes 64 KB, at most the machine's most, whatever its least.
-        defaultWith = { values -> minOf(64, takes(values).ramMax).toString() },
+        // No mem_size in 86box.cfg: KairoX86's default for the machine (core/kairo/hardware.c, KairoX86#62).
+        defaultWith = { values -> takes(values).ramDefault.toString() },
         labelOf = { memoryLabel(it.toInt()) }), MACHINE, "mem_size")
 
     /** A card of [kind] the machine takes: 86Box's default without the key is its onboard one, else none. */

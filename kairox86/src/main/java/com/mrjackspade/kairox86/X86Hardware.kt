@@ -15,7 +15,7 @@ object X86Hardware {
     class Speed(val speed: Long, val multi: String, val name: String)
     class Family(val id: String, val name: String, val speeds: List<Speed>)
     class Card(val id: String, val name: String, val available: Boolean)
-    class Takes(val cpus: List<Family>, val ramMin: Int, val ramMax: Int, val ramStep: Int, val cards: Map<String, List<Card>>)
+    class Takes(val cpus: List<Family>, val ramMin: Int, val ramMax: Int, val ramStep: Int, val ramDefault: Int, val cards: Map<String, List<Card>>)
 
     /** The card kinds a machine takes, as the core names them. */
     const val VIDEO = "video"
@@ -55,7 +55,7 @@ object X86Hardware {
             (0 until list.length()).map { list.getJSONObject(it) }
                 .map { Card(it.getString("id"), it.getString("name"), it.getBoolean("available")) }
         }
-        Takes(cpus, ram.getInt("min"), ram.getInt("max"), ram.getInt("step"), cards)
+        Takes(cpus, ram.getInt("min"), ram.getInt("max"), ram.getInt("step"), ram.getInt("default"), cards)
     }
 
     /** A processor multiplier as one text for each value, whether 86Box wrote "2" or "2.000000". */

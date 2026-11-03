@@ -186,8 +186,32 @@ put_machines(void)
     put("]");
 }
 
+/* The memory a machine has when its 86box.cfg names none (KairoX86#62): the most it takes up to a
+   cap. Up to the 486 boards the cap is 16 MB, as on DOSBox: software in 286 protected mode (Windows
+   3.0's standard mode, 16-bit DOS extenders) can crash with more than 15 MB of extended memory. From
+   the Pentium boards (Socket 4) on, it is 64 MB, for the Windows 9x games they run. A machine
+   whose least is above the cap keeps its least. */
+#define DOS_RAM_CAP     (16 * 1024)
+#define WINDOWS_RAM_CAP (64 * 1024)
+
+uint32_t
+hardware_default_ram(int m)
+{
+    const machine_memory_t *ram = &machines[m].ram;
+    const uint32_t          cap = ((machines[m].type >= MACHINE_TYPE_SOCKET4) && (machines[m].type < MACHINE_TYPE_MISC))
+        ? WINDOWS_RAM_CAP : DOS_RAM_CAP;
+    /* The sizes 86Box offers: from the least by the step to the most (a step of 0: the two ends). */
+    const uint32_t step = (ram->step > 0) ? (uint32_t) ram->step : (ram->max - ram->min);
+    uint32_t       size = ram->min;
+
+    while ((step > 0) && ((size + step) <= ram->max) && ((size + step) <= cap))
+        size += step;
+    return size;
+}
+
 /* What machine [m] takes: its processors (each family's eligible speeds, by 86Box's cpu_speed and
-   cpu_multi), its memory range in KB, and its cards of every kind. */
+   cpu_multi), its memory range in KB with its default (hardware_default_ram), and its cards of every
+   kind. */
 static void
 put_machine(int m)
 {
@@ -217,7 +241,8 @@ put_machine(int m)
         }
         put("]}");
     }
-    put("],\"ram\":{\"min\":%u,\"max\":%u,\"step\":%d}", machines[m].ram.min, machines[m].ram.max, machines[m].ram.step);
+    put("],\"ram\":{\"min\":%u,\"max\":%u,\"step\":%d,\"default\":%u}", machines[m].ram.min, machines[m].ram.max,
+        machines[m].ram.step, hardware_default_ram(m));
     for (size_t k = 0; k < sizeof(kinds) / sizeof(kinds[0]); k++) {
         put(",");
         put_string(kinds[k].name);
