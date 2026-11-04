@@ -24,6 +24,7 @@ import com.mrjackspade.kairox86.X86Library.DiskKind
 import com.mrjackspade.kairo.frontend.NativeMachine
 import com.mrjackspade.kairo.frontend.ScanDepth
 import com.mrjackspade.kairo.frontend.ShippedAssets
+import com.mrjackspade.kairo.frontend.SettingsRow
 import com.mrjackspade.kairo.frontend.UiText
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
@@ -153,6 +154,12 @@ class MainActivity : MachineActivity<X86Entry>() {
         MediaSlot(UiText.res(FrontendR.string.kairo_cd_rom)) { it.disk && X86Library.diskKind(it.path) == DiskKind.CD })
 
     /** A machine's own disks are the images of its folder, and what its drives hold. */
+    /**
+     * No set-disks row: a machine's disks are the files of its folder, chosen for its drives on the
+     * running machine's Disks page, not library entries grouped into a set (KairoX86#215).
+     */
+    override fun gameDisksRow(entry: X86Entry, enabled: () -> Boolean, disabledReason: () -> String): SettingsRow? = null
+
     override fun ownDisks(current: X86Entry, takes: (X86Entry) -> Boolean): List<X86Entry> =
         ((session?.disks() ?: emptyList()) + mountedMedia().filterNotNull()).distinctBy { it.id }.filter(takes)
 
