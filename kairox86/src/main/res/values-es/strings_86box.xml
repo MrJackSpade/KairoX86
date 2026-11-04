@@ -1,0 +1,376 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Spanish (es): the translation of values/strings_86box.xml. Each EN comment is the English a string translates; update it with the translation. Check with shared/tools/translations.py check. -->
+<resources>
+    <!-- EN: 128 KB -->
+    <string name="d86_128_kb_bb8543">128 KB</string>
+    <!-- EN: 12 MB -->
+    <string name="d86_12_mb_6674e6">12 MB</string>
+    <!-- EN: 16-bit (bottom pins closed - AT-class 16-bit slots only) -->
+    <string name="d86_16_bit_bottom_pins_closed_at_class_16_bi_85eac9">16 bits (contactos inferiores cerrados: solo ranuras AT de 16 bits)</string>
+    <!-- EN: 16-bit -->
+    <string name="d86_16_bit_dc4083">16 bits</string>
+    <!-- EN: 16 KB -->
+    <string name="d86_16_kb_855689">16 KB</string>
+    <!-- EN: 16 MB -->
+    <string name="d86_16_mb_77a260">16 MB</string>
+    <!-- EN: 1990 BIOS -->
+    <string name="d86_1990_bios_768ec7">BIOS de 1990</string>
+    <!-- EN: 1991 BIOS (>1GB) -->
+    <string name="d86_1991_bios_1gb_13dab4">BIOS de 1991 (&gt;1 GB)</string>
+    <!-- EN: 1 MB -->
+    <string name="d86_1_mb_9b2252">1 MB</string>
+    <!-- EN: 2048 MB -->
+    <string name="d86_2048_mb_b361b6">2048 MB</string>
+    <!-- EN: 20 MB -->
+    <string name="d86_20_mb_132890">20 MB</string>
+    <!-- EN: 24 MB -->
+    <string name="d86_24_mb_233194">24 MB</string>
+    <!-- EN: 256 KB -->
+    <string name="d86_256_kb_122ab2">256 KB</string>
+    <!-- EN: 28 MB -->
+    <string name="d86_28_mb_dcf730">28 MB</string>
+    <!-- EN: 2 MB -->
+    <string name="d86_2_mb_63f273">2 MB</string>
+    <!-- EN: 30 Hz (JMP2 = 1) -->
+    <string name="d86_30_hz_jmp2_1_7afe29">30 Hz (JMP2 = 1)</string>
+    <!-- EN: 32 KB -->
+    <string name="d86_32_kb_895b11">32 KB</string>
+    <!-- EN: 32 MB -->
+    <string name="d86_32_mb_eac42f">32 MB</string>
+    <!-- EN: 45 Hz (JMP2 not populated) -->
+    <string name="d86_45_hz_jmp2_not_populated_73ddb5">45 Hz (JMP2 no poblado)</string>
+    <!-- EN: 4-bit -->
+    <string name="d86_4_bit_41a020">4 bits</string>
+    <!-- EN: 4 MB -->
+    <string name="d86_4_mb_b6de6b">4 MB</string>
+    <!-- EN: 512 KB -->
+    <string name="d86_512_kb_406c35">512 KB</string>
+    <!-- EN: 60 Hz (JMP2 = 2) -->
+    <string name="d86_60_hz_jmp2_2_ad41bf">60 Hz (JMP2 = 2)</string>
+    <!-- EN: 64 KB -->
+    <string name="d86_64_kb_91ab95">64 KB</string>
+    <!-- EN: 64 MB -->
+    <string name="d86_64_mb_a2319f">64 MB</string>
+    <!-- EN: 6CH variant (6-channel) -->
+    <string name="d86_6ch_variant_6_channel_6e13eb">Variante 6CH (6 canales)</string>
+    <!-- EN: 80-conductor cable -->
+    <string name="d86_80_conductor_cable_181d75">Cable de 80 conductores</string>
+    <!-- EN: 8-bit -->
+    <string name="d86_8_bit_a35efa">8 bits</string>
+    <!-- EN: 8-bit (top pins closed - required for XT-class 8-bit slots) -->
+    <string name="d86_8_bit_top_pins_closed_required_for_xt_cl_d879cd">8 bits (contactos superiores cerrados: necesario para ranuras XT de 8 bits)</string>
+    <!-- EN: 8 KB -->
+    <string name="d86_8_kb_757334">8 KB</string>
+    <!-- EN: 8 MB -->
+    <string name="d86_8_mb_decd79">8 MB</string>
+    <!-- EN: A00 (Japanese) -->
+    <string name="d86_a00_japanese_e0b607">A00 (japonés)</string>
+    <!-- EN: A02 (European) -->
+    <string name="d86_a02_european_e681a6">A02 (europeo)</string>
+    <!-- EN: Address -->
+    <string name="d86_address_d70f93">Dirección</string>
+    <!-- EN: Adlib Address -->
+    <string name="d86_adlib_address_18ccef">Dirección del Adlib</string>
+    <!-- EN: Alternate monochrome contrast -->
+    <string name="d86_alternate_monochrome_contrast_3eec4d">Contraste monocromo alternativo</string>
+    <!-- EN: Amber -->
+    <string name="d86_amber_27a01d">Ámbar</string>
+    <!-- EN: Amber Monochrome -->
+    <string name="d86_amber_monochrome_98d59d">Monocromo ámbar</string>
+    <!-- EN: Baud Rate -->
+    <string name="d86_baud_rate_78c95d">Tasa de baudios</string>
+    <!-- EN: Bilinear filtering -->
+    <string name="d86_bilinear_filtering_baf47f">Filtrado bilineal</string>
+    <!-- EN: BIOS address -->
+    <string name="d86_bios_address_210bbe">Dirección de BIOS</string>
+    <!-- EN: BIOS Address -->
+    <string name="d86_bios_address_b33cb5">Dirección de la BIOS</string>
+    <!-- EN: BIOS Revision -->
+    <string name="d86_bios_revision_391463">Revisión de BIOS</string>
+    <!-- EN: Blend -->
+    <string name="d86_blend_7a358c">Mezclar</string>
+    <!-- EN: Blue -->
+    <string name="d86_blue_7d44bc">Azul</string>
+    <!-- EN: Bochs latest -->
+    <string name="d86_bochs_latest_a50f8d">Bochs más nuevo</string>
+    <!-- EN: Bus width -->
+    <string name="d86_bus_width_de70d9">Ancho de bus</string>
+    <!-- EN: Buttons -->
+    <string name="d86_buttons_503d46">Botones</string>
+    <!-- EN: Character set -->
+    <string name="d86_character_set_ab0956">Conjunto de caracteres</string>
+    <!-- EN: Codec -->
+    <string name="d86_codec_a33676">Códec</string>
+    <!-- EN: Color -->
+    <string name="d86_color_1d0c83">Color</string>
+    <!-- EN: Color 40x25 (5153/CGA) -->
+    <string name="d86_color_40x25_5153_cga_386512">Color 40x25 (5153/CGA)</string>
+    <!-- EN: Color 80x25 (5153/CGA) -->
+    <string name="d86_color_80x25_5153_cga_c28450">Color 80x25 (5153/CGA)</string>
+    <!-- EN: Color (generic) -->
+    <string name="d86_color_generic_cef0e9">Color (genérico)</string>
+    <!-- EN: Color (IBM 5153) -->
+    <string name="d86_color_ibm_5153_1c9d0b">Color (IBM 5153)</string>
+    <!-- EN: Color Interlaced -->
+    <string name="d86_color_interlaced_f7f834">Color entrelazado</string>
+    <!-- EN: Color (no brown) -->
+    <string name="d86_color_no_brown_0c2273">Color (sin marrón)</string>
+    <!-- EN: Color Non-Interlaced -->
+    <string name="d86_color_non_interlaced_bc43a2">Color no entrelazado</string>
+    <!-- EN: Columns -->
+    <string name="d86_columns_cf723c">Columnas</string>
+    <!-- EN: Composite -->
+    <string name="d86_composite_b9ec0f">Compósito</string>
+    <!-- EN: Composite type -->
+    <string name="d86_composite_type_52d9f9">Tipo de pantalla compósita</string>
+    <!-- EN: Control MIDI volume -->
+    <string name="d86_control_midi_volume_12a56e">Controlar el volumen MIDI</string>
+    <!-- EN: Control PC speaker -->
+    <string name="d86_control_pc_speaker_4f6f3e">Controlar el altavoz del PC</string>
+    <!-- EN: Coprocessor bus I/O width (JU1) -->
+    <string name="d86_coprocessor_bus_i_o_width_ju1_bd1fd9">Ancho de E/S del bus del coprocesador (JU1)</string>
+    <!-- EN: Czech Kamenicky (CP 895) #1 -->
+    <string name="d86_czech_kamenicky_cp_895_1_9946c7">Checa Kamenicky (CP 895) n.º 1</string>
+    <!-- EN: Czech Kamenicky (CP 895) #2 -->
+    <string name="d86_czech_kamenicky_cp_895_2_2d1c10">Checa Kamenicky (CP 895) n.º 2</string>
+    <!-- EN: Default -->
+    <string name="d86_default_808d7d">Por defecto</string>
+    <!-- EN: Default Baud rate -->
+    <string name="d86_default_baud_rate_c3a750">Velocidad de transmisión pretederminada</string>
+    <!-- EN: Disable BIOS -->
+    <string name="d86_disable_bios_0b91b5">Deshabilitar BIOS</string>
+    <!-- EN: Disabled -->
+    <string name="d86_disabled_f4f447">Desactivado</string>
+    <!-- EN: Display type -->
+    <string name="d86_display_type_99c8dd">Tipo de pantalla</string>
+    <!-- EN: Dither subtraction -->
+    <string name="d86_dither_subtraction_6f6adf">Sustracción de dither</string>
+    <!-- EN: Dithering -->
+    <string name="d86_dithering_67c0f2">Tramado</string>
+    <!-- EN: DMA -->
+    <string name="d86_dma_1ba799">DMA</string>
+    <!-- EN: Dot spacing -->
+    <string name="d86_dot_spacing_23d5da">Separación de puntos</string>
+    <!-- EN: DSP Version -->
+    <string name="d86_dsp_version_95259a">Versión de DSP</string>
+    <!-- EN: Dynamic recompiler -->
+    <string name="d86_dynamic_recompiler_6a0912">Recompilador dinámico</string>
+    <!-- EN: EISA slot -->
+    <string name="d86_eisa_slot_088719">Ranura EISA</string>
+    <!-- EN: EMU8000 Address -->
+    <string name="d86_emu8000_address_481671">Dirección de EMU8000</string>
+    <!-- EN: Enable Adlib ports -->
+    <string name="d86_enable_adlib_ports_da39e8">Habilitar puertos Adlib</string>
+    <!-- EN: Enable BIOS -->
+    <string name="d86_enable_bios_a875b3">Habilitar BIOS</string>
+    <!-- EN: Enable BIOS extension ROM Writes -->
+    <string name="d86_enable_bios_extension_rom_writes_4c4df4">Habilitar escrituras para el ROM de extensión de BIOS</string>
+    <!-- EN: Enable CMS -->
+    <string name="d86_enable_cms_155210">Habilitar CMS</string>
+    <!-- EN: Enable Game port -->
+    <string name="d86_enable_game_port_6a1adc">Habilitar puerto de juegos</string>
+    <!-- EN: Enable IDE (Secondary Channel) -->
+    <string name="d86_enable_ide_secondary_channel_439297">Activar IDE (canal secundario)</string>
+    <!-- EN: Enable MPU-401 -->
+    <string name="d86_enable_mpu_401_d4f5e8">Activar MPU-401</string>
+    <!-- EN: Enable NMI for CGA emulation -->
+    <string name="d86_enable_nmi_for_cga_emulation_8311f2">Habilitar NMI para emulación CGA</string>
+    <!-- EN: Enable OPL -->
+    <string name="d86_enable_opl_dea1b7">Habilitar OPL</string>
+    <!-- EN: Enable Secondary Controller -->
+    <string name="d86_enable_secondary_controller_e03b43">Activar el controlador secundario</string>
+    <!-- EN: English (US) -->
+    <string name="d86_english_us_f20315">Inglés (EE.UU.)</string>
+    <!-- EN: Enhanced Color - Enhanced Mode (5154/ECD) -->
+    <string name="d86_enhanced_color_enhanced_mode_5154_ecd_b6f9dd">Color mejorado - modo mejorado (5154/ECD)</string>
+    <!-- EN: Enhanced Color - Normal Mode (5154/ECD) -->
+    <string name="d86_enhanced_color_normal_mode_5154_ecd_2c9e94">Color mejorado - modo normal (5154/ECD)</string>
+    <!-- EN: FDC Address -->
+    <string name="d86_fdc_address_e727be">Dirección del FDC</string>
+    <!-- EN: Five + 2 Wheels -->
+    <string name="d86_five_2_wheels_0c6876">Cinco + 2 ruedas</string>
+    <!-- EN: Five + Wheel -->
+    <string name="d86_five_wheel_f64cf0">Cinco + rueda</string>
+    <!-- EN: Floppy controller enabled (jumper) -->
+    <string name="d86_floppy_controller_enabled_jumper_9500ca">Controlador de disquete activado (puente)</string>
+    <!-- EN: Font -->
+    <string name="d86_font_b97c4d">Fuente</string>
+    <!-- EN: Generic -->
+    <string name="d86_generic_ff7613">Genérico</string>
+    <!-- EN: Generic RGBI color monitor -->
+    <string name="d86_generic_rgbi_color_monitor_feb047">Monitor a colores RGBI genérico</string>
+    <!-- EN: GPU raster backend (uses 1 render thread) -->
+    <string name="d86_gpu_raster_backend_uses_1_render_thread_052f52">Rasterizado por GPU (usa 1 hilo de render)</string>
+    <!-- EN: Gray -->
+    <string name="d86_gray_4f9bef">Gris</string>
+    <!-- EN: Gray Monochrome -->
+    <string name="d86_gray_monochrome_568de2">Monocromo gris</string>
+    <!-- EN: Green -->
+    <string name="d86_green_933bf2">Verde</string>
+    <!-- EN: Green Monochrome -->
+    <string name="d86_green_monochrome_48ca7b">Monocromo verde</string>
+    <!-- EN: Has Quadcolor II daughter board -->
+    <string name="d86_has_quadcolor_ii_daughter_board_263f78">Tiene placa hija Quadcolor II</string>
+    <!-- EN: Has secondary 8x8 character set -->
+    <string name="d86_has_secondary_8x8_character_set_35368f">Tiene conjunto de carácteres 8x8 secundário</string>
+    <!-- EN: High DMA -->
+    <string name="d86_high_dma_e34410">DMA alto</string>
+    <!-- EN: Host ID -->
+    <string name="d86_host_id_7e7bac">ID de anfitrión</string>
+    <!-- EN: Hz -->
+    <string name="d86_hz_97aaf5">Hz</string>
+    <!-- EN: IBM Nordic (CP 437-Nordic) -->
+    <string name="d86_ibm_nordic_cp_437_nordic_9a7c8a">IBM Nórdico (CP 437-Nordic)</string>
+    <!-- EN: IDE Controller -->
+    <string name="d86_ide_controller_ebb99e">Controlador IDE</string>
+    <!-- EN: Initial RAM size -->
+    <string name="d86_initial_ram_size_7018b9">Tamaño inicial de RAM</string>
+    <!-- EN: IRQ -->
+    <string name="d86_irq_6dcf08">IRQ</string>
+    <!-- EN: Korean (Kasan Hangulmadang-16 VGA) -->
+    <string name="d86_korean_kasan_hangulmadang_16_vga_2b3a56">Coreano (Kasan Hangulmadang-16 VGA)</string>
+    <!-- EN: Korean (TriGem 286M) -->
+    <string name="d86_korean_trigem_286m_11e0b1">Coreano (TriGem 286M)</string>
+    <!-- EN: Korean (TriGem) -->
+    <string name="d86_korean_trigem_f18876">Coreano (TriGem)</string>
+    <!-- EN: Line doubling type -->
+    <string name="d86_line_doubling_type_0aaddf">Tipo de duplicación de línea</string>
+    <!-- EN: Linear framebuffer base -->
+    <string name="d86_linear_framebuffer_base_e0be35">Base del búfer de trama lineal</string>
+    <!-- EN: Linear interpolation -->
+    <string name="d86_linear_interpolation_353a3b">Interpolación lineal</string>
+    <!-- EN: Low DMA -->
+    <string name="d86_low_dma_4f9f60">DMA bajo</string>
+    <!-- EN: Memory size -->
+    <string name="d86_memory_size_9e722d">Tamaño de memoria</string>
+    <!-- EN: Mixer -->
+    <string name="d86_mixer_7f45fc">Mezclador</string>
+    <!-- EN: Model -->
+    <string name="d86_model_68c2cc">Modelo</string>
+    <!-- EN: Monitor type -->
+    <string name="d86_monitor_type_4ef0b1">Tipo de monitor</string>
+    <!-- EN: Mono Interlaced -->
+    <string name="d86_mono_interlaced_c51036">Monocromo entrelazado</string>
+    <!-- EN: Mono Non-Interlaced -->
+    <string name="d86_mono_non_interlaced_081876">Monocromo no entrelazado</string>
+    <!-- EN: Monochrome (5151/MDA) (amber) -->
+    <string name="d86_monochrome_5151_mda_amber_e6b8bb">Monocromo (5151/MDA) (ámbar)</string>
+    <!-- EN: Monochrome (5151/MDA) (green) -->
+    <string name="d86_monochrome_5151_mda_green_f7515c">Monocromo (5151/MDA) (verde)</string>
+    <!-- EN: Monochrome (5151/MDA) (white) -->
+    <string name="d86_monochrome_5151_mda_white_b5a462">Monocromo (5151/MDA) (blanco)</string>
+    <!-- EN: MPU-401 Address -->
+    <string name="d86_mpu_401_address_6545ce">Dirección del MPU-401</string>
+    <!-- EN: New -->
+    <string name="d86_new_6403f2">Nuevo</string>
+    <!-- EN: Non-timed (original) -->
+    <string name="d86_non_timed_original_ce4a53">No cronometrado (original)</string>
+    <!-- EN: None -->
+    <string name="d86_none_6eef66">Ninguno</string>
+    <!-- EN: Off (CPU renderer) -->
+    <string name="d86_off_cpu_renderer_fade21">Desactivado (render por CPU)</string>
+    <!-- EN: Off -->
+    <string name="d86_off_e3de5a">Deshabilitado</string>
+    <!-- EN: Old -->
+    <string name="d86_old_fbb3c3">Viejo</string>
+    <!-- EN: On -->
+    <string name="d86_on_e0049a">Activado</string>
+    <!-- EN: Other languages -->
+    <string name="d86_other_languages_80d5c6">Otros idiomas</string>
+    <!-- EN: Parallel Port -->
+    <string name="d86_parallel_port_019607">Puerto paralelo</string>
+    <!-- EN: Plug and Play -->
+    <string name="d86_plug_and_play_93ffca">Plug and Play</string>
+    <!-- EN: RAM Address -->
+    <string name="d86_ram_address_036c00">Dirección de RAM</string>
+    <!-- EN: RAM size -->
+    <string name="d86_ram_size_32b200">Tamaño de RAM</string>
+    <!-- EN: RAMDAC type -->
+    <string name="d86_ramdac_type_a8933c">Tipo de RAMDAC</string>
+    <!-- EN: Receive MIDI input -->
+    <string name="d86_receive_midi_input_ddf6a2">Recebir entrada MIDI</string>
+    <!-- EN: Receive MIDI input (MPU-401) -->
+    <string name="d86_receive_midi_input_mpu_401_c61b40">Recebir entrada MIDI (MPU-401)</string>
+    <!-- EN: Regular AT -->
+    <string name="d86_regular_at_7bcc97">AT normal</string>
+    <!-- EN: Regular XT -->
+    <string name="d86_regular_xt_58ce5d">XT normal</string>
+    <!-- EN: Render threads -->
+    <string name="d86_render_threads_87d848">Hilos de renderización</string>
+    <!-- EN: Rev. D (Generic) -->
+    <string name="d86_rev_d_generic_6837ae">Rev. D (genérica)</string>
+    <!-- EN: Revision -->
+    <string name="d86_revision_3beb9a">Revisión</string>
+    <!-- EN: RGB type -->
+    <string name="d86_rgb_type_de4a07">Tipo de pantalla RGB</string>
+    <!-- EN: Rows -->
+    <string name="d86_rows_52d0b3">Filas</string>
+    <!-- EN: RTS toggle -->
+    <string name="d86_rts_toggle_637b5b">Conmutación RTS</string>
+    <!-- EN: SB Address -->
+    <string name="d86_sb_address_34b00f">Dirección del SB</string>
+    <!-- EN: Scandinavian -->
+    <string name="d86_scandinavian_ef3767">Escandinavo</string>
+    <!-- EN: Screen Filter -->
+    <string name="d86_screen_filter_8dc856">Filtro de pantalla</string>
+    <!-- EN: Secondary Controller DMA -->
+    <string name="d86_secondary_controller_dma_140a65">DMA del controlador secundario</string>
+    <!-- EN: Secondary Controller IRQ -->
+    <string name="d86_secondary_controller_irq_f32a1d">IRQ del controlador secundario</string>
+    <!-- EN: Serial Port -->
+    <string name="d86_serial_port_373371">Puerto serie</string>
+    <!-- EN: SID Model -->
+    <string name="d86_sid_model_272a97">Modelo de SID</string>
+    <!-- EN: SigmaTel STAC9721T (stereo) -->
+    <string name="d86_sigmatel_stac9721t_stereo_550e42">SigmaTel STAC9721T (estéreo)</string>
+    <!-- EN: Simple doubling -->
+    <string name="d86_simple_doubling_717ccb">Duplicación simple</string>
+    <!-- EN: Slot 1 -->
+    <string name="d86_slot_1_56d27a">Ranura 1</string>
+    <!-- EN: Slot 2 -->
+    <string name="d86_slot_2_9f47b6">Ranura 2</string>
+    <!-- EN: Slot 3 -->
+    <string name="d86_slot_3_ce2450">Ranura 3</string>
+    <!-- EN: Slot 4 -->
+    <string name="d86_slot_4_93cc82">Ranura 4</string>
+    <!-- EN: Snow emulation -->
+    <string name="d86_snow_emulation_eb5fff">Emulación de nieve</string>
+    <!-- EN: sRGB interpolation -->
+    <string name="d86_srgb_interpolation_2c99e6">Interpolación sRGB</string>
+    <!-- EN: Surround module -->
+    <string name="d86_surround_module_f25142">Módulo Surround</string>
+    <!-- EN: TCP/IP listening port -->
+    <string name="d86_tcp_ip_listening_port_452cef">Puerto de escucha TCP/IP</string>
+    <!-- EN: Telnet emulation -->
+    <string name="d86_telnet_emulation_5743a4">Emulación Telnet</string>
+    <!-- EN: Three -->
+    <string name="d86_three_f3cd46">Tres</string>
+    <!-- EN: Translate 26 -> 17 -->
+    <string name="d86_translate_26_17_05ab4b">Traducir 26 -&gt; 17</string>
+    <!-- EN: True color -->
+    <string name="d86_true_color_014864">Verdadero color</string>
+    <!-- EN: Two -->
+    <string name="d86_two_16e018">Dos</string>
+    <!-- EN: US (CP 437) -->
+    <string name="d86_us_cp_437_7ff915">EE.UU. (CP 437)</string>
+    <!-- EN: Use EEPROM setting -->
+    <string name="d86_use_eeprom_setting_da4ffc">Uitilizar la configuración del EEPROM</string>
+    <!-- EN: Variant -->
+    <string name="d86_variant_cc91b1">Variante</string>
+    <!-- EN: Version 1.02 (English) -->
+    <string name="d86_version_1_02_english_bd0acb">Versión 1.02 (inglés)</string>
+    <!-- EN: Version 1.02 (German) -->
+    <string name="d86_version_1_02_german_0ee00e">Versión 1.02 (alemán)</string>
+    <!-- EN: Version 1.03 (English) -->
+    <string name="d86_version_1_03_english_9b8828">Versión 1.03 (inglés)</string>
+    <!-- EN: Video chroma-keying -->
+    <string name="d86_video_chroma_keying_6d57ed">Clave cromática para vídeo</string>
+    <!-- EN: Wheel -->
+    <string name="d86_wheel_0d972a">Rueda</string>
+    <!-- EN: Wiring -->
+    <string name="d86_wiring_233c1d">Cableado</string>
+    <!-- EN: XGA type -->
+    <string name="d86_xga_type_824696">Tipo de XGA</string>
+    <!-- EN: Zero wait state -->
+    <string name="d86_zero_wait_state_c7b39c">Sin estados de espera</string>
+</resources>

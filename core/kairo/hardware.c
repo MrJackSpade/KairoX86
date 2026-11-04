@@ -286,6 +286,28 @@ put_card_options(const char *kind_name, const char *id)
     return false;
 }
 
+/* Every card of every kind with its options, as "options" gives each (KairoX86#207): the text the
+   card groups can show, for tools/device_strings.py to translate. */
+static void
+put_all_options(void)
+{
+    put("[");
+    bool first = true;
+    for (size_t k = 0; k < sizeof(kinds) / sizeof(kinds[0]); k++) {
+        for (int card = 0; kinds[k].internal_name(card) && kinds[k].internal_name(card)[0]; card++) {
+            put(first ? "{\"kind\":" : ",{\"kind\":");
+            first = false;
+            put_string(kinds[k].name);
+            put(",\"id\":");
+            put_string(kinds[k].internal_name(card));
+            put(",\"options\":");
+            put_options(kinds[k].device(card));
+            put("}");
+        }
+    }
+    put("]");
+}
+
 /* Every machine: its internal name, name, type and whether its firmware is there. */
 static void
 put_machines(void)
@@ -409,7 +431,9 @@ hardware_query(const char *rom_folder, const char *query)
         snprintf(kind_name, sizeof(kind_name), "%.*s", (int) (id - kind), kind);
         if (!put_card_options(kind_name, id + 1))
             return NULL;
-    } else
+    } else if (!strcmp(query, "all options"))
+        put_all_options();
+    else
         return NULL;
     return text;
 }

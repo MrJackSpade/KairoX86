@@ -1,0 +1,376 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Japanese (ja): the translation of values/strings_86box.xml. Each EN comment is the English a string translates; update it with the translation. Check with shared/tools/translations.py check. -->
+<resources>
+    <!-- EN: 128 KB -->
+    <string name="d86_128_kb_bb8543">128 KB</string>
+    <!-- EN: 12 MB -->
+    <string name="d86_12_mb_6674e6">12 MB</string>
+    <!-- EN: 16-bit (bottom pins closed - AT-class 16-bit slots only) -->
+    <string name="d86_16_bit_bottom_pins_closed_at_class_16_bi_85eac9">16 ビット(下側のピンを閉じる、AT の 16 ビットスロットのみ)</string>
+    <!-- EN: 16-bit -->
+    <string name="d86_16_bit_dc4083">16ビット</string>
+    <!-- EN: 16 KB -->
+    <string name="d86_16_kb_855689">16 KB</string>
+    <!-- EN: 16 MB -->
+    <string name="d86_16_mb_77a260">16 MB</string>
+    <!-- EN: 1990 BIOS -->
+    <string name="d86_1990_bios_768ec7">1990 年の BIOS</string>
+    <!-- EN: 1991 BIOS (>1GB) -->
+    <string name="d86_1991_bios_1gb_13dab4">1991 年の BIOS(1 GB 超)</string>
+    <!-- EN: 1 MB -->
+    <string name="d86_1_mb_9b2252">1 MB</string>
+    <!-- EN: 2048 MB -->
+    <string name="d86_2048_mb_b361b6">2048 MB</string>
+    <!-- EN: 20 MB -->
+    <string name="d86_20_mb_132890">20 MB</string>
+    <!-- EN: 24 MB -->
+    <string name="d86_24_mb_233194">24 MB</string>
+    <!-- EN: 256 KB -->
+    <string name="d86_256_kb_122ab2">256 KB</string>
+    <!-- EN: 28 MB -->
+    <string name="d86_28_mb_dcf730">28 MB</string>
+    <!-- EN: 2 MB -->
+    <string name="d86_2_mb_63f273">2 MB</string>
+    <!-- EN: 30 Hz (JMP2 = 1) -->
+    <string name="d86_30_hz_jmp2_1_7afe29">30 Hz(JMP2 = 1)</string>
+    <!-- EN: 32 KB -->
+    <string name="d86_32_kb_895b11">32 KB</string>
+    <!-- EN: 32 MB -->
+    <string name="d86_32_mb_eac42f">32 MB</string>
+    <!-- EN: 45 Hz (JMP2 not populated) -->
+    <string name="d86_45_hz_jmp2_not_populated_73ddb5">45 Hz（JMP2にジャンパーなし）</string>
+    <!-- EN: 4-bit -->
+    <string name="d86_4_bit_41a020">4 ビット</string>
+    <!-- EN: 4 MB -->
+    <string name="d86_4_mb_b6de6b">4 MB</string>
+    <!-- EN: 512 KB -->
+    <string name="d86_512_kb_406c35">512 KB</string>
+    <!-- EN: 60 Hz (JMP2 = 2) -->
+    <string name="d86_60_hz_jmp2_2_ad41bf">60 Hz(JMP2 = 2)</string>
+    <!-- EN: 64 KB -->
+    <string name="d86_64_kb_91ab95">64 KB</string>
+    <!-- EN: 64 MB -->
+    <string name="d86_64_mb_a2319f">64 MB</string>
+    <!-- EN: 6CH variant (6-channel) -->
+    <string name="d86_6ch_variant_6_channel_6e13eb">6CHバリアント（6チャンネル）</string>
+    <!-- EN: 80-conductor cable -->
+    <string name="d86_80_conductor_cable_181d75">80 芯ケーブル</string>
+    <!-- EN: 8-bit -->
+    <string name="d86_8_bit_a35efa">8ビット</string>
+    <!-- EN: 8-bit (top pins closed - required for XT-class 8-bit slots) -->
+    <string name="d86_8_bit_top_pins_closed_required_for_xt_cl_d879cd">8 ビット(上側のピンを閉じる、XT の 8 ビットスロットに必要)</string>
+    <!-- EN: 8 KB -->
+    <string name="d86_8_kb_757334">8 KB</string>
+    <!-- EN: 8 MB -->
+    <string name="d86_8_mb_decd79">8 MB</string>
+    <!-- EN: A00 (Japanese) -->
+    <string name="d86_a00_japanese_e0b607">A00(日本向け)</string>
+    <!-- EN: A02 (European) -->
+    <string name="d86_a02_european_e681a6">A02(欧州向け)</string>
+    <!-- EN: Address -->
+    <string name="d86_address_d70f93">アドレス</string>
+    <!-- EN: Adlib Address -->
+    <string name="d86_adlib_address_18ccef">Adlibアドレス</string>
+    <!-- EN: Alternate monochrome contrast -->
+    <string name="d86_alternate_monochrome_contrast_3eec4d">代替モノクロームコントラスト</string>
+    <!-- EN: Amber -->
+    <string name="d86_amber_27a01d">鼈甲色</string>
+    <!-- EN: Amber Monochrome -->
+    <string name="d86_amber_monochrome_98d59d">鼈甲色のモノクローム</string>
+    <!-- EN: Baud Rate -->
+    <string name="d86_baud_rate_78c95d">ボーレート</string>
+    <!-- EN: Bilinear filtering -->
+    <string name="d86_bilinear_filtering_baf47f">バイリニアフィルタリング</string>
+    <!-- EN: BIOS address -->
+    <string name="d86_bios_address_210bbe">BIOSアドレス</string>
+    <!-- EN: BIOS Address -->
+    <string name="d86_bios_address_b33cb5">BIOS アドレス</string>
+    <!-- EN: BIOS Revision -->
+    <string name="d86_bios_revision_391463">BIOSリビジョン</string>
+    <!-- EN: Blend -->
+    <string name="d86_blend_7a358c">ブレンド</string>
+    <!-- EN: Blue -->
+    <string name="d86_blue_7d44bc">青</string>
+    <!-- EN: Bochs latest -->
+    <string name="d86_bochs_latest_a50f8d">Bochs 最新版</string>
+    <!-- EN: Bus width -->
+    <string name="d86_bus_width_de70d9">バス幅</string>
+    <!-- EN: Buttons -->
+    <string name="d86_buttons_503d46">ボタン</string>
+    <!-- EN: Character set -->
+    <string name="d86_character_set_ab0956">文字セット</string>
+    <!-- EN: Codec -->
+    <string name="d86_codec_a33676">コーデック</string>
+    <!-- EN: Color -->
+    <string name="d86_color_1d0c83">カラー</string>
+    <!-- EN: Color 40x25 (5153/CGA) -->
+    <string name="d86_color_40x25_5153_cga_386512">カラー40x25（5153/CGA）</string>
+    <!-- EN: Color 80x25 (5153/CGA) -->
+    <string name="d86_color_80x25_5153_cga_c28450">カラー80x25（5153/CGA）</string>
+    <!-- EN: Color (generic) -->
+    <string name="d86_color_generic_cef0e9">カラー（ジェネリック）</string>
+    <!-- EN: Color (IBM 5153) -->
+    <string name="d86_color_ibm_5153_1c9d0b">カラー（IBM 5153）</string>
+    <!-- EN: Color Interlaced -->
+    <string name="d86_color_interlaced_f7f834">カラーインターレース</string>
+    <!-- EN: Color (no brown) -->
+    <string name="d86_color_no_brown_0c2273">カラー（ブラウンなし）</string>
+    <!-- EN: Color Non-Interlaced -->
+    <string name="d86_color_non_interlaced_bc43a2">カラーノンインターレース</string>
+    <!-- EN: Columns -->
+    <string name="d86_columns_cf723c">列数</string>
+    <!-- EN: Composite -->
+    <string name="d86_composite_b9ec0f">コンポジット</string>
+    <!-- EN: Composite type -->
+    <string name="d86_composite_type_52d9f9">コンポジットタイプ</string>
+    <!-- EN: Control MIDI volume -->
+    <string name="d86_control_midi_volume_12a56e">MIDI音量を制御する</string>
+    <!-- EN: Control PC speaker -->
+    <string name="d86_control_pc_speaker_4f6f3e">コントロールPCスピーカー</string>
+    <!-- EN: Coprocessor bus I/O width (JU1) -->
+    <string name="d86_coprocessor_bus_i_o_width_ju1_bd1fd9">コプロセッサバスの I/O 幅(JU1)</string>
+    <!-- EN: Czech Kamenicky (CP 895) #1 -->
+    <string name="d86_czech_kamenicky_cp_895_1_9946c7">チェコのカメニツキー (CP 895) 1</string>
+    <!-- EN: Czech Kamenicky (CP 895) #2 -->
+    <string name="d86_czech_kamenicky_cp_895_2_2d1c10">チェコのカメニツキー (CP 895) 2</string>
+    <!-- EN: Default -->
+    <string name="d86_default_808d7d">既定値</string>
+    <!-- EN: Default Baud rate -->
+    <string name="d86_default_baud_rate_c3a750">デフォルトのボーレート</string>
+    <!-- EN: Disable BIOS -->
+    <string name="d86_disable_bios_0b91b5">BIOSを無効にする</string>
+    <!-- EN: Disabled -->
+    <string name="d86_disabled_f4f447">無効</string>
+    <!-- EN: Display type -->
+    <string name="d86_display_type_99c8dd">表示タイプ</string>
+    <!-- EN: Dither subtraction -->
+    <string name="d86_dither_subtraction_6f6adf">ディザ減算</string>
+    <!-- EN: Dithering -->
+    <string name="d86_dithering_67c0f2">ディザリング</string>
+    <!-- EN: DMA -->
+    <string name="d86_dma_1ba799">DMA</string>
+    <!-- EN: Dot spacing -->
+    <string name="d86_dot_spacing_23d5da">ドット間隔</string>
+    <!-- EN: DSP Version -->
+    <string name="d86_dsp_version_95259a">DSP バージョン</string>
+    <!-- EN: Dynamic recompiler -->
+    <string name="d86_dynamic_recompiler_6a0912">動的再コンパイル</string>
+    <!-- EN: EISA slot -->
+    <string name="d86_eisa_slot_088719">EISA スロット</string>
+    <!-- EN: EMU8000 Address -->
+    <string name="d86_emu8000_address_481671">EMU8000 アドレス</string>
+    <!-- EN: Enable Adlib ports -->
+    <string name="d86_enable_adlib_ports_da39e8">Adlibポートを有効にする</string>
+    <!-- EN: Enable BIOS -->
+    <string name="d86_enable_bios_a875b3">BIOSを有効にする</string>
+    <!-- EN: Enable BIOS extension ROM Writes -->
+    <string name="d86_enable_bios_extension_rom_writes_4c4df4">BIOS拡張ROM書き込みを有効にする</string>
+    <!-- EN: Enable CMS -->
+    <string name="d86_enable_cms_155210">CMSを有効にする</string>
+    <!-- EN: Enable Game port -->
+    <string name="d86_enable_game_port_6a1adc">ゲームポートを有効にする</string>
+    <!-- EN: Enable IDE (Secondary Channel) -->
+    <string name="d86_enable_ide_secondary_channel_439297">IDE を有効にする(セカンダリチャンネル)</string>
+    <!-- EN: Enable MPU-401 -->
+    <string name="d86_enable_mpu_401_d4f5e8">MPU-401 を有効にする</string>
+    <!-- EN: Enable NMI for CGA emulation -->
+    <string name="d86_enable_nmi_for_cga_emulation_8311f2">CGAエミュレーションのNMIを有効にする</string>
+    <!-- EN: Enable OPL -->
+    <string name="d86_enable_opl_dea1b7">OPLを有効にする</string>
+    <!-- EN: Enable Secondary Controller -->
+    <string name="d86_enable_secondary_controller_e03b43">セカンダリコントローラーを有効にする</string>
+    <!-- EN: English (US) -->
+    <string name="d86_english_us_f20315">英語 (米国)</string>
+    <!-- EN: Enhanced Color - Enhanced Mode (5154/ECD) -->
+    <string name="d86_enhanced_color_enhanced_mode_5154_ecd_b6f9dd">エンハンスト・カラー - エンハンスト・モード（5154/ECD）</string>
+    <!-- EN: Enhanced Color - Normal Mode (5154/ECD) -->
+    <string name="d86_enhanced_color_normal_mode_5154_ecd_2c9e94">エンハンスト・カラー - ノーマルモード（5154/ECD）</string>
+    <!-- EN: FDC Address -->
+    <string name="d86_fdc_address_e727be">FDCアドレス</string>
+    <!-- EN: Five + 2 Wheels -->
+    <string name="d86_five_2_wheels_0c6876">五つ＋2輪のホイール</string>
+    <!-- EN: Five + Wheel -->
+    <string name="d86_five_wheel_f64cf0">五つ＋ホイール</string>
+    <!-- EN: Floppy controller enabled (jumper) -->
+    <string name="d86_floppy_controller_enabled_jumper_9500ca">フロッピーコントローラー有効(ジャンパー)</string>
+    <!-- EN: Font -->
+    <string name="d86_font_b97c4d">フォント</string>
+    <!-- EN: Generic -->
+    <string name="d86_generic_ff7613">汎用</string>
+    <!-- EN: Generic RGBI color monitor -->
+    <string name="d86_generic_rgbi_color_monitor_feb047">汎用RGBIカラーモニター</string>
+    <!-- EN: GPU raster backend (uses 1 render thread) -->
+    <string name="d86_gpu_raster_backend_uses_1_render_thread_052f52">GPU ラスタライズ(描画スレッド 1 本)</string>
+    <!-- EN: Gray -->
+    <string name="d86_gray_4f9bef">ねずみ色</string>
+    <!-- EN: Gray Monochrome -->
+    <string name="d86_gray_monochrome_568de2">ねずみ色のモノクローム</string>
+    <!-- EN: Green -->
+    <string name="d86_green_933bf2">みどり</string>
+    <!-- EN: Green Monochrome -->
+    <string name="d86_green_monochrome_48ca7b">みどりのモノクローム</string>
+    <!-- EN: Has Quadcolor II daughter board -->
+    <string name="d86_has_quadcolor_ii_daughter_board_263f78">Quadcolor IIの拡張ボード</string>
+    <!-- EN: Has secondary 8x8 character set -->
+    <string name="d86_has_secondary_8x8_character_set_35368f">8×8のセカンダリ文字セット</string>
+    <!-- EN: High DMA -->
+    <string name="d86_high_dma_e34410">ハイDMA</string>
+    <!-- EN: Host ID -->
+    <string name="d86_host_id_7e7bac">ホストID</string>
+    <!-- EN: Hz -->
+    <string name="d86_hz_97aaf5">ヘルツ</string>
+    <!-- EN: IBM Nordic (CP 437-Nordic) -->
+    <string name="d86_ibm_nordic_cp_437_nordic_9a7c8a">IBM ノルディック (CP 437-Nordic)</string>
+    <!-- EN: IDE Controller -->
+    <string name="d86_ide_controller_ebb99e">IDEコントローラ</string>
+    <!-- EN: Initial RAM size -->
+    <string name="d86_initial_ram_size_7018b9">初期RAMサイズ</string>
+    <!-- EN: IRQ -->
+    <string name="d86_irq_6dcf08">割り込み要求</string>
+    <!-- EN: Korean (Kasan Hangulmadang-16 VGA) -->
+    <string name="d86_korean_kasan_hangulmadang_16_vga_2b3a56">韓国語(Kasan Hangulmadang-16 VGA)</string>
+    <!-- EN: Korean (TriGem 286M) -->
+    <string name="d86_korean_trigem_286m_11e0b1">韓国語(TriGem 286M)</string>
+    <!-- EN: Korean (TriGem) -->
+    <string name="d86_korean_trigem_f18876">韓国語(TriGem)</string>
+    <!-- EN: Line doubling type -->
+    <string name="d86_line_doubling_type_0aaddf">ライン倍増タイプ</string>
+    <!-- EN: Linear framebuffer base -->
+    <string name="d86_linear_framebuffer_base_e0be35">線形フレームバッファのベースアドレス</string>
+    <!-- EN: Linear interpolation -->
+    <string name="d86_linear_interpolation_353a3b">線形補間</string>
+    <!-- EN: Low DMA -->
+    <string name="d86_low_dma_4f9f60">低DMA</string>
+    <!-- EN: Memory size -->
+    <string name="d86_memory_size_9e722d">メモリーサイズ</string>
+    <!-- EN: Mixer -->
+    <string name="d86_mixer_7f45fc">ミキサー</string>
+    <!-- EN: Model -->
+    <string name="d86_model_68c2cc">モデル</string>
+    <!-- EN: Monitor type -->
+    <string name="d86_monitor_type_4ef0b1">モニタータイプ</string>
+    <!-- EN: Mono Interlaced -->
+    <string name="d86_mono_interlaced_c51036">モノラルインターレース</string>
+    <!-- EN: Mono Non-Interlaced -->
+    <string name="d86_mono_non_interlaced_081876">モノラルノンインターレース</string>
+    <!-- EN: Monochrome (5151/MDA) (amber) -->
+    <string name="d86_monochrome_5151_mda_amber_e6b8bb">モノクローム（5151/MDA）（鼈甲色）</string>
+    <!-- EN: Monochrome (5151/MDA) (green) -->
+    <string name="d86_monochrome_5151_mda_green_f7515c">モノクローム（5151/MDA）（みどり）</string>
+    <!-- EN: Monochrome (5151/MDA) (white) -->
+    <string name="d86_monochrome_5151_mda_white_b5a462">モノクローム（5151/MDA）（白い）</string>
+    <!-- EN: MPU-401 Address -->
+    <string name="d86_mpu_401_address_6545ce">MPU-401 アドレス</string>
+    <!-- EN: New -->
+    <string name="d86_new_6403f2">新しい</string>
+    <!-- EN: Non-timed (original) -->
+    <string name="d86_non_timed_original_ce4a53">タイマーなし（オリジナル）</string>
+    <!-- EN: None -->
+    <string name="d86_none_6eef66">なし</string>
+    <!-- EN: Off (CPU renderer) -->
+    <string name="d86_off_cpu_renderer_fade21">オフ(CPU 描画)</string>
+    <!-- EN: Off -->
+    <string name="d86_off_e3de5a">オフ</string>
+    <!-- EN: Old -->
+    <string name="d86_old_fbb3c3">古い</string>
+    <!-- EN: On -->
+    <string name="d86_on_e0049a">オン</string>
+    <!-- EN: Other languages -->
+    <string name="d86_other_languages_80d5c6">その他の言語</string>
+    <!-- EN: Parallel Port -->
+    <string name="d86_parallel_port_019607">パラレルポート</string>
+    <!-- EN: Plug and Play -->
+    <string name="d86_plug_and_play_93ffca">プラグアンドプレイ</string>
+    <!-- EN: RAM Address -->
+    <string name="d86_ram_address_036c00">RAMアドレス</string>
+    <!-- EN: RAM size -->
+    <string name="d86_ram_size_32b200">RAMサイズ</string>
+    <!-- EN: RAMDAC type -->
+    <string name="d86_ramdac_type_a8933c">RAMDACタイプ</string>
+    <!-- EN: Receive MIDI input -->
+    <string name="d86_receive_midi_input_ddf6a2">MIDI入力を受信する</string>
+    <!-- EN: Receive MIDI input (MPU-401) -->
+    <string name="d86_receive_midi_input_mpu_401_c61b40">MIDI入力を受信する（MPU-401）</string>
+    <!-- EN: Regular AT -->
+    <string name="d86_regular_at_7bcc97">標準 AT</string>
+    <!-- EN: Regular XT -->
+    <string name="d86_regular_xt_58ce5d">標準 XT</string>
+    <!-- EN: Render threads -->
+    <string name="d86_render_threads_87d848">レンダリングスレッド</string>
+    <!-- EN: Rev. D (Generic) -->
+    <string name="d86_rev_d_generic_6837ae">Rev. D(汎用)</string>
+    <!-- EN: Revision -->
+    <string name="d86_revision_3beb9a">改訂</string>
+    <!-- EN: RGB type -->
+    <string name="d86_rgb_type_de4a07">RGBタイプ</string>
+    <!-- EN: Rows -->
+    <string name="d86_rows_52d0b3">行数</string>
+    <!-- EN: RTS toggle -->
+    <string name="d86_rts_toggle_637b5b">RTSトグル</string>
+    <!-- EN: SB Address -->
+    <string name="d86_sb_address_34b00f">SBアドレス</string>
+    <!-- EN: Scandinavian -->
+    <string name="d86_scandinavian_ef3767">スカンジナビア</string>
+    <!-- EN: Screen Filter -->
+    <string name="d86_screen_filter_8dc856">スクリーンフィルター</string>
+    <!-- EN: Secondary Controller DMA -->
+    <string name="d86_secondary_controller_dma_140a65">セカンダリコントローラーの DMA</string>
+    <!-- EN: Secondary Controller IRQ -->
+    <string name="d86_secondary_controller_irq_f32a1d">セカンダリコントローラーの IRQ</string>
+    <!-- EN: Serial Port -->
+    <string name="d86_serial_port_373371">シリアルポート</string>
+    <!-- EN: SID Model -->
+    <string name="d86_sid_model_272a97">SIDモデル</string>
+    <!-- EN: SigmaTel STAC9721T (stereo) -->
+    <string name="d86_sigmatel_stac9721t_stereo_550e42">シグマテル STAC9721T（ステレオ）</string>
+    <!-- EN: Simple doubling -->
+    <string name="d86_simple_doubling_717ccb">単純な倍加</string>
+    <!-- EN: Slot 1 -->
+    <string name="d86_slot_1_56d27a">スロット 1</string>
+    <!-- EN: Slot 2 -->
+    <string name="d86_slot_2_9f47b6">スロット 2</string>
+    <!-- EN: Slot 3 -->
+    <string name="d86_slot_3_ce2450">スロット 3</string>
+    <!-- EN: Slot 4 -->
+    <string name="d86_slot_4_93cc82">スロット 4</string>
+    <!-- EN: Snow emulation -->
+    <string name="d86_snow_emulation_eb5fff">スノーエミュレーション</string>
+    <!-- EN: sRGB interpolation -->
+    <string name="d86_srgb_interpolation_2c99e6">sRGB補間</string>
+    <!-- EN: Surround module -->
+    <string name="d86_surround_module_f25142">サラウンドモジュール</string>
+    <!-- EN: TCP/IP listening port -->
+    <string name="d86_tcp_ip_listening_port_452cef">TCP/IPリスニングポート</string>
+    <!-- EN: Telnet emulation -->
+    <string name="d86_telnet_emulation_5743a4">Telnetエミュレーション</string>
+    <!-- EN: Three -->
+    <string name="d86_three_f3cd46">三つ</string>
+    <!-- EN: Translate 26 -> 17 -->
+    <string name="d86_translate_26_17_05ab4b">26→17を翻訳</string>
+    <!-- EN: True color -->
+    <string name="d86_true_color_014864">真の色</string>
+    <!-- EN: Two -->
+    <string name="d86_two_16e018">二つ</string>
+    <!-- EN: US (CP 437) -->
+    <string name="d86_us_cp_437_7ff915">米国 (CP 437)</string>
+    <!-- EN: Use EEPROM setting -->
+    <string name="d86_use_eeprom_setting_da4ffc">EEPROMの設定を使用する</string>
+    <!-- EN: Variant -->
+    <string name="d86_variant_cc91b1">バリアント</string>
+    <!-- EN: Version 1.02 (English) -->
+    <string name="d86_version_1_02_english_bd0acb">バージョン 1.02(英語)</string>
+    <!-- EN: Version 1.02 (German) -->
+    <string name="d86_version_1_02_german_0ee00e">バージョン 1.02(ドイツ語)</string>
+    <!-- EN: Version 1.03 (English) -->
+    <string name="d86_version_1_03_english_9b8828">バージョン 1.03(英語)</string>
+    <!-- EN: Video chroma-keying -->
+    <string name="d86_video_chroma_keying_6d57ed">ビデオのクロマキー処理</string>
+    <!-- EN: Wheel -->
+    <string name="d86_wheel_0d972a">ホイール</string>
+    <!-- EN: Wiring -->
+    <string name="d86_wiring_233c1d">配線</string>
+    <!-- EN: XGA type -->
+    <string name="d86_xga_type_824696">XGAタイプ</string>
+    <!-- EN: Zero wait state -->
+    <string name="d86_zero_wait_state_c7b39c">ノーウェイト</string>
+</resources>

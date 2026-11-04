@@ -1,0 +1,46 @@
+# The card options' texts (KairoX86#207) that are words to translate though 86Box's own translation
+# template (src/qt/languages/86box.pot) leaves them out: tools/device_strings.py translates these
+# and the template's. Every other text a card option shows is a name or a value (a product, a chip,
+# an address, a version) and reads the same in every language. One text a line, as 86Box writes it.
+16-bit (bottom pins closed - AT-class 16-bit slots only)
+1990 BIOS
+1991 BIOS (>1GB)
+4-bit
+8-bit (top pins closed - required for XT-class 8-bit slots)
+80-conductor cable
+A00 (Japanese)
+A02 (European)
+BIOS Address
+Blue
+Bus width
+Columns
+Coprocessor bus I/O width (JU1)
+Disabled
+Dot spacing
+EISA slot
+Enable IDE (Secondary Channel)
+Enable MPU-401
+Enable Secondary Controller
+Floppy controller enabled (jumper)
+GPU raster backend (uses 1 render thread)
+Generic
+Korean (Kasan Hangulmadang-16 VGA)
+Korean (TriGem 286M)
+Korean (TriGem)
+Off (CPU renderer)
+Plug and Play
+Regular AT
+Regular XT
+Rev. D (Generic)
+Rows
+Secondary Controller DMA
+Secondary Controller IRQ
+Slot 1
+Slot 2
+Slot 3
+Slot 4
+Version 1.02 (English)
+Version 1.02 (German)
+Version 1.03 (English)
+Wiring
+Zero wait state

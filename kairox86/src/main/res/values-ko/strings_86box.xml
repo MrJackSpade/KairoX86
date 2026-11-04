@@ -1,0 +1,376 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Korean (ko): the translation of values/strings_86box.xml. Each EN comment is the English a string translates; update it with the translation. Check with shared/tools/translations.py check. -->
+<resources>
+    <!-- EN: 128 KB -->
+    <string name="d86_128_kb_bb8543">128 KB</string>
+    <!-- EN: 12 MB -->
+    <string name="d86_12_mb_6674e6">12 MB</string>
+    <!-- EN: 16-bit (bottom pins closed - AT-class 16-bit slots only) -->
+    <string name="d86_16_bit_bottom_pins_closed_at_class_16_bi_85eac9">16비트(아래쪽 핀 닫힘, AT 16비트 슬롯 전용)</string>
+    <!-- EN: 16-bit -->
+    <string name="d86_16_bit_dc4083">16비트</string>
+    <!-- EN: 16 KB -->
+    <string name="d86_16_kb_855689">16 KB</string>
+    <!-- EN: 16 MB -->
+    <string name="d86_16_mb_77a260">16MB</string>
+    <!-- EN: 1990 BIOS -->
+    <string name="d86_1990_bios_768ec7">1990년 BIOS</string>
+    <!-- EN: 1991 BIOS (>1GB) -->
+    <string name="d86_1991_bios_1gb_13dab4">1991년 BIOS(1GB 초과)</string>
+    <!-- EN: 1 MB -->
+    <string name="d86_1_mb_9b2252">1MB</string>
+    <!-- EN: 2048 MB -->
+    <string name="d86_2048_mb_b361b6">2048 MB</string>
+    <!-- EN: 20 MB -->
+    <string name="d86_20_mb_132890">20MB</string>
+    <!-- EN: 24 MB -->
+    <string name="d86_24_mb_233194">24MB</string>
+    <!-- EN: 256 KB -->
+    <string name="d86_256_kb_122ab2">256 KB</string>
+    <!-- EN: 28 MB -->
+    <string name="d86_28_mb_dcf730">28MB</string>
+    <!-- EN: 2 MB -->
+    <string name="d86_2_mb_63f273">2MB</string>
+    <!-- EN: 30 Hz (JMP2 = 1) -->
+    <string name="d86_30_hz_jmp2_1_7afe29">30 ㎐ (JMP2 = 1)</string>
+    <!-- EN: 32 KB -->
+    <string name="d86_32_kb_895b11">32 KB</string>
+    <!-- EN: 32 MB -->
+    <string name="d86_32_mb_eac42f">32 MB</string>
+    <!-- EN: 45 Hz (JMP2 not populated) -->
+    <string name="d86_45_hz_jmp2_not_populated_73ddb5">45Hz (JMP2 미장착)</string>
+    <!-- EN: 4-bit -->
+    <string name="d86_4_bit_41a020">4비트</string>
+    <!-- EN: 4 MB -->
+    <string name="d86_4_mb_b6de6b">4MB</string>
+    <!-- EN: 512 KB -->
+    <string name="d86_512_kb_406c35">512 KB</string>
+    <!-- EN: 60 Hz (JMP2 = 2) -->
+    <string name="d86_60_hz_jmp2_2_ad41bf">60 ㎐ (JMP2 = 2)</string>
+    <!-- EN: 64 KB -->
+    <string name="d86_64_kb_91ab95">64 KB</string>
+    <!-- EN: 64 MB -->
+    <string name="d86_64_mb_a2319f">64 MB</string>
+    <!-- EN: 6CH variant (6-channel) -->
+    <string name="d86_6ch_variant_6_channel_6e13eb">6채널 변형(6채널)</string>
+    <!-- EN: 80-conductor cable -->
+    <string name="d86_80_conductor_cable_181d75">80선 케이블</string>
+    <!-- EN: 8-bit -->
+    <string name="d86_8_bit_a35efa">8비트</string>
+    <!-- EN: 8-bit (top pins closed - required for XT-class 8-bit slots) -->
+    <string name="d86_8_bit_top_pins_closed_required_for_xt_cl_d879cd">8비트(위쪽 핀 닫힘, XT 8비트 슬롯에 필요)</string>
+    <!-- EN: 8 KB -->
+    <string name="d86_8_kb_757334">8 KB</string>
+    <!-- EN: 8 MB -->
+    <string name="d86_8_mb_decd79">8MB</string>
+    <!-- EN: A00 (Japanese) -->
+    <string name="d86_a00_japanese_e0b607">A00(일본용)</string>
+    <!-- EN: A02 (European) -->
+    <string name="d86_a02_european_e681a6">A02(유럽용)</string>
+    <!-- EN: Address -->
+    <string name="d86_address_d70f93">주소</string>
+    <!-- EN: Adlib Address -->
+    <string name="d86_adlib_address_18ccef">Adlib 주소</string>
+    <!-- EN: Alternate monochrome contrast -->
+    <string name="d86_alternate_monochrome_contrast_3eec4d">대체 단색 대비</string>
+    <!-- EN: Amber -->
+    <string name="d86_amber_27a01d">호박색</string>
+    <!-- EN: Amber Monochrome -->
+    <string name="d86_amber_monochrome_98d59d">호박색 단색</string>
+    <!-- EN: Baud Rate -->
+    <string name="d86_baud_rate_78c95d">전송 속도</string>
+    <!-- EN: Bilinear filtering -->
+    <string name="d86_bilinear_filtering_baf47f">이중선형 필터링</string>
+    <!-- EN: BIOS address -->
+    <string name="d86_bios_address_210bbe">BIOS 주소</string>
+    <!-- EN: BIOS Address -->
+    <string name="d86_bios_address_b33cb5">BIOS 주소</string>
+    <!-- EN: BIOS Revision -->
+    <string name="d86_bios_revision_391463">BIOS 개정</string>
+    <!-- EN: Blend -->
+    <string name="d86_blend_7a358c">블렌드</string>
+    <!-- EN: Blue -->
+    <string name="d86_blue_7d44bc">파랑</string>
+    <!-- EN: Bochs latest -->
+    <string name="d86_bochs_latest_a50f8d">Bochs 최신 정보</string>
+    <!-- EN: Bus width -->
+    <string name="d86_bus_width_de70d9">버스 폭</string>
+    <!-- EN: Buttons -->
+    <string name="d86_buttons_503d46">버튼</string>
+    <!-- EN: Character set -->
+    <string name="d86_character_set_ab0956">문자 집합</string>
+    <!-- EN: Codec -->
+    <string name="d86_codec_a33676">코덱</string>
+    <!-- EN: Color -->
+    <string name="d86_color_1d0c83">색상</string>
+    <!-- EN: Color 40x25 (5153/CGA) -->
+    <string name="d86_color_40x25_5153_cga_386512">컬러 40x25 (5153/CGA)</string>
+    <!-- EN: Color 80x25 (5153/CGA) -->
+    <string name="d86_color_80x25_5153_cga_c28450">컬러 80x25 (5153/CGA)</string>
+    <!-- EN: Color (generic) -->
+    <string name="d86_color_generic_cef0e9">색상 (일반)</string>
+    <!-- EN: Color (IBM 5153) -->
+    <string name="d86_color_ibm_5153_1c9d0b">컬러 (IBM 5153)</string>
+    <!-- EN: Color Interlaced -->
+    <string name="d86_color_interlaced_f7f834">컬러 인터레이스</string>
+    <!-- EN: Color (no brown) -->
+    <string name="d86_color_no_brown_0c2273">컬러 (갈색 없음)</string>
+    <!-- EN: Color Non-Interlaced -->
+    <string name="d86_color_non_interlaced_bc43a2">컬러 비인터레이스</string>
+    <!-- EN: Columns -->
+    <string name="d86_columns_cf723c">열 수</string>
+    <!-- EN: Composite -->
+    <string name="d86_composite_b9ec0f">합성</string>
+    <!-- EN: Composite type -->
+    <string name="d86_composite_type_52d9f9">복합 유형</string>
+    <!-- EN: Control MIDI volume -->
+    <string name="d86_control_midi_volume_12a56e">MIDI 음량 조절</string>
+    <!-- EN: Control PC speaker -->
+    <string name="d86_control_pc_speaker_4f6f3e">PC 스피커 제어</string>
+    <!-- EN: Coprocessor bus I/O width (JU1) -->
+    <string name="d86_coprocessor_bus_i_o_width_ju1_bd1fd9">보조 프로세서 버스 I/O 폭(JU1)</string>
+    <!-- EN: Czech Kamenicky (CP 895) #1 -->
+    <string name="d86_czech_kamenicky_cp_895_1_9946c7">체코어 Kamenicky (CP 895) #1</string>
+    <!-- EN: Czech Kamenicky (CP 895) #2 -->
+    <string name="d86_czech_kamenicky_cp_895_2_2d1c10">체코어 Kamenicky (CP 895) #2</string>
+    <!-- EN: Default -->
+    <string name="d86_default_808d7d">기본값</string>
+    <!-- EN: Default Baud rate -->
+    <string name="d86_default_baud_rate_c3a750">기본 보드 속도</string>
+    <!-- EN: Disable BIOS -->
+    <string name="d86_disable_bios_0b91b5">BIOS 비활성화</string>
+    <!-- EN: Disabled -->
+    <string name="d86_disabled_f4f447">사용 안 함</string>
+    <!-- EN: Display type -->
+    <string name="d86_display_type_99c8dd">디스플레이 유형</string>
+    <!-- EN: Dither subtraction -->
+    <string name="d86_dither_subtraction_6f6adf">디더링 감산</string>
+    <!-- EN: Dithering -->
+    <string name="d86_dithering_67c0f2">디더링</string>
+    <!-- EN: DMA -->
+    <string name="d86_dma_1ba799">DMA</string>
+    <!-- EN: Dot spacing -->
+    <string name="d86_dot_spacing_23d5da">도트 간격</string>
+    <!-- EN: DSP Version -->
+    <string name="d86_dsp_version_95259a">DSP 버전</string>
+    <!-- EN: Dynamic recompiler -->
+    <string name="d86_dynamic_recompiler_6a0912">동적 리컴파일러</string>
+    <!-- EN: EISA slot -->
+    <string name="d86_eisa_slot_088719">EISA 슬롯</string>
+    <!-- EN: EMU8000 Address -->
+    <string name="d86_emu8000_address_481671">EMU8000 주소</string>
+    <!-- EN: Enable Adlib ports -->
+    <string name="d86_enable_adlib_ports_da39e8">Adlib 포트 활성화</string>
+    <!-- EN: Enable BIOS -->
+    <string name="d86_enable_bios_a875b3">BIOS 활성화</string>
+    <!-- EN: Enable BIOS extension ROM Writes -->
+    <string name="d86_enable_bios_extension_rom_writes_4c4df4">BIOS 확장 ROM 쓰기 활성화</string>
+    <!-- EN: Enable CMS -->
+    <string name="d86_enable_cms_155210">CMS 사용</string>
+    <!-- EN: Enable Game port -->
+    <string name="d86_enable_game_port_6a1adc">게임 포트 사용</string>
+    <!-- EN: Enable IDE (Secondary Channel) -->
+    <string name="d86_enable_ide_secondary_channel_439297">IDE 사용(보조 채널)</string>
+    <!-- EN: Enable MPU-401 -->
+    <string name="d86_enable_mpu_401_d4f5e8">MPU-401 사용</string>
+    <!-- EN: Enable NMI for CGA emulation -->
+    <string name="d86_enable_nmi_for_cga_emulation_8311f2">CGA 에뮬레이션을 위한 NMI 활성화</string>
+    <!-- EN: Enable OPL -->
+    <string name="d86_enable_opl_dea1b7">OPL 사용</string>
+    <!-- EN: Enable Secondary Controller -->
+    <string name="d86_enable_secondary_controller_e03b43">보조 컨트롤러 사용</string>
+    <!-- EN: English (US) -->
+    <string name="d86_english_us_f20315">영어 (US)</string>
+    <!-- EN: Enhanced Color - Enhanced Mode (5154/ECD) -->
+    <string name="d86_enhanced_color_enhanced_mode_5154_ecd_b6f9dd">향상된 색상 - 향상된 모드 (5154/ECD)</string>
+    <!-- EN: Enhanced Color - Normal Mode (5154/ECD) -->
+    <string name="d86_enhanced_color_normal_mode_5154_ecd_2c9e94">향상된 색상 - 일반 모드 (5154/ECD)</string>
+    <!-- EN: FDC Address -->
+    <string name="d86_fdc_address_e727be">FDC 주소</string>
+    <!-- EN: Five + 2 Wheels -->
+    <string name="d86_five_2_wheels_0c6876">5버튼 + 2휠</string>
+    <!-- EN: Five + Wheel -->
+    <string name="d86_five_wheel_f64cf0">5버튼+휠</string>
+    <!-- EN: Floppy controller enabled (jumper) -->
+    <string name="d86_floppy_controller_enabled_jumper_9500ca">플로피 컨트롤러 사용(점퍼)</string>
+    <!-- EN: Font -->
+    <string name="d86_font_b97c4d">폰트</string>
+    <!-- EN: Generic -->
+    <string name="d86_generic_ff7613">일반</string>
+    <!-- EN: Generic RGBI color monitor -->
+    <string name="d86_generic_rgbi_color_monitor_feb047">일반 RGBI 컬러 모니터</string>
+    <!-- EN: GPU raster backend (uses 1 render thread) -->
+    <string name="d86_gpu_raster_backend_uses_1_render_thread_052f52">GPU 래스터화(렌더 스레드 1개 사용)</string>
+    <!-- EN: Gray -->
+    <string name="d86_gray_4f9bef">회색</string>
+    <!-- EN: Gray Monochrome -->
+    <string name="d86_gray_monochrome_568de2">회색 단색</string>
+    <!-- EN: Green -->
+    <string name="d86_green_933bf2">녹색</string>
+    <!-- EN: Green Monochrome -->
+    <string name="d86_green_monochrome_48ca7b">녹색 단색</string>
+    <!-- EN: Has Quadcolor II daughter board -->
+    <string name="d86_has_quadcolor_ii_daughter_board_263f78">쿼드컬러 II 딸보드</string>
+    <!-- EN: Has secondary 8x8 character set -->
+    <string name="d86_has_secondary_8x8_character_set_35368f">8x8 보조 문자 집합</string>
+    <!-- EN: High DMA -->
+    <string name="d86_high_dma_e34410">높은 DMA</string>
+    <!-- EN: Host ID -->
+    <string name="d86_host_id_7e7bac">호스트 ID</string>
+    <!-- EN: Hz -->
+    <string name="d86_hz_97aaf5">Hz</string>
+    <!-- EN: IBM Nordic (CP 437-Nordic) -->
+    <string name="d86_ibm_nordic_cp_437_nordic_9a7c8a">IBM 북유럽어 (CP 437-Nordic)</string>
+    <!-- EN: IDE Controller -->
+    <string name="d86_ide_controller_ebb99e">IDE 컨트롤러</string>
+    <!-- EN: Initial RAM size -->
+    <string name="d86_initial_ram_size_7018b9">초기 RAM 크기</string>
+    <!-- EN: IRQ -->
+    <string name="d86_irq_6dcf08">IRQ</string>
+    <!-- EN: Korean (Kasan Hangulmadang-16 VGA) -->
+    <string name="d86_korean_kasan_hangulmadang_16_vga_2b3a56">한국어(Kasan 한글마당-16 VGA)</string>
+    <!-- EN: Korean (TriGem 286M) -->
+    <string name="d86_korean_trigem_286m_11e0b1">한국어(TriGem 286M)</string>
+    <!-- EN: Korean (TriGem) -->
+    <string name="d86_korean_trigem_f18876">한국어(TriGem)</string>
+    <!-- EN: Line doubling type -->
+    <string name="d86_line_doubling_type_0aaddf">라인 두 배 유형</string>
+    <!-- EN: Linear framebuffer base -->
+    <string name="d86_linear_framebuffer_base_e0be35">선형 프레임버퍼의 기본 주소</string>
+    <!-- EN: Linear interpolation -->
+    <string name="d86_linear_interpolation_353a3b">선형 보간</string>
+    <!-- EN: Low DMA -->
+    <string name="d86_low_dma_4f9f60">낮은 DMA</string>
+    <!-- EN: Memory size -->
+    <string name="d86_memory_size_9e722d">메모리 크기</string>
+    <!-- EN: Mixer -->
+    <string name="d86_mixer_7f45fc">믹서</string>
+    <!-- EN: Model -->
+    <string name="d86_model_68c2cc">모델</string>
+    <!-- EN: Monitor type -->
+    <string name="d86_monitor_type_4ef0b1">모니터 유형</string>
+    <!-- EN: Mono Interlaced -->
+    <string name="d86_mono_interlaced_c51036">모노 인터레이스</string>
+    <!-- EN: Mono Non-Interlaced -->
+    <string name="d86_mono_non_interlaced_081876">모노 비인터레이스</string>
+    <!-- EN: Monochrome (5151/MDA) (amber) -->
+    <string name="d86_monochrome_5151_mda_amber_e6b8bb">흑백 (5151/MDA) (호박색)</string>
+    <!-- EN: Monochrome (5151/MDA) (green) -->
+    <string name="d86_monochrome_5151_mda_green_f7515c">흑백 (5151/MDA) (녹색)</string>
+    <!-- EN: Monochrome (5151/MDA) (white) -->
+    <string name="d86_monochrome_5151_mda_white_b5a462">흑백 (5151/MDA) (흰색)</string>
+    <!-- EN: MPU-401 Address -->
+    <string name="d86_mpu_401_address_6545ce">MPU-401 주소</string>
+    <!-- EN: New -->
+    <string name="d86_new_6403f2">신형</string>
+    <!-- EN: Non-timed (original) -->
+    <string name="d86_non_timed_original_ce4a53">타이밍 없음 (원본)</string>
+    <!-- EN: None -->
+    <string name="d86_none_6eef66">없음</string>
+    <!-- EN: Off (CPU renderer) -->
+    <string name="d86_off_cpu_renderer_fade21">끔(CPU 렌더러)</string>
+    <!-- EN: Off -->
+    <string name="d86_off_e3de5a">꺼짐</string>
+    <!-- EN: Old -->
+    <string name="d86_old_fbb3c3">구형</string>
+    <!-- EN: On -->
+    <string name="d86_on_e0049a">켜짐</string>
+    <!-- EN: Other languages -->
+    <string name="d86_other_languages_80d5c6">기타 언어</string>
+    <!-- EN: Parallel Port -->
+    <string name="d86_parallel_port_019607">병렬 포트</string>
+    <!-- EN: Plug and Play -->
+    <string name="d86_plug_and_play_93ffca">플러그 앤 플레이</string>
+    <!-- EN: RAM Address -->
+    <string name="d86_ram_address_036c00">RAM 주소</string>
+    <!-- EN: RAM size -->
+    <string name="d86_ram_size_32b200">RAM 크기</string>
+    <!-- EN: RAMDAC type -->
+    <string name="d86_ramdac_type_a8933c">램닥 유형</string>
+    <!-- EN: Receive MIDI input -->
+    <string name="d86_receive_midi_input_ddf6a2">미디 입력 받기</string>
+    <!-- EN: Receive MIDI input (MPU-401) -->
+    <string name="d86_receive_midi_input_mpu_401_c61b40">미디 입력 수신(MPU-401)</string>
+    <!-- EN: Regular AT -->
+    <string name="d86_regular_at_7bcc97">일반 AT</string>
+    <!-- EN: Regular XT -->
+    <string name="d86_regular_xt_58ce5d">일반 XT</string>
+    <!-- EN: Render threads -->
+    <string name="d86_render_threads_87d848">렌더 스레드</string>
+    <!-- EN: Rev. D (Generic) -->
+    <string name="d86_rev_d_generic_6837ae">Rev. D(일반)</string>
+    <!-- EN: Revision -->
+    <string name="d86_revision_3beb9a">개정</string>
+    <!-- EN: RGB type -->
+    <string name="d86_rgb_type_de4a07">RGB 유형</string>
+    <!-- EN: Rows -->
+    <string name="d86_rows_52d0b3">행 수</string>
+    <!-- EN: RTS toggle -->
+    <string name="d86_rts_toggle_637b5b">RTS 토글</string>
+    <!-- EN: SB Address -->
+    <string name="d86_sb_address_34b00f">SB 주소</string>
+    <!-- EN: Scandinavian -->
+    <string name="d86_scandinavian_ef3767">스칸디나비아</string>
+    <!-- EN: Screen Filter -->
+    <string name="d86_screen_filter_8dc856">화면 필터</string>
+    <!-- EN: Secondary Controller DMA -->
+    <string name="d86_secondary_controller_dma_140a65">보조 컨트롤러 DMA</string>
+    <!-- EN: Secondary Controller IRQ -->
+    <string name="d86_secondary_controller_irq_f32a1d">보조 컨트롤러 IRQ</string>
+    <!-- EN: Serial Port -->
+    <string name="d86_serial_port_373371">직렬 포트</string>
+    <!-- EN: SID Model -->
+    <string name="d86_sid_model_272a97">SID 모델</string>
+    <!-- EN: SigmaTel STAC9721T (stereo) -->
+    <string name="d86_sigmatel_stac9721t_stereo_550e42">시그마텔 STAC9721T(스테레오)</string>
+    <!-- EN: Simple doubling -->
+    <string name="d86_simple_doubling_717ccb">단순 2배</string>
+    <!-- EN: Slot 1 -->
+    <string name="d86_slot_1_56d27a">슬롯 1</string>
+    <!-- EN: Slot 2 -->
+    <string name="d86_slot_2_9f47b6">슬롯 2</string>
+    <!-- EN: Slot 3 -->
+    <string name="d86_slot_3_ce2450">슬롯 3</string>
+    <!-- EN: Slot 4 -->
+    <string name="d86_slot_4_93cc82">슬롯 4</string>
+    <!-- EN: Snow emulation -->
+    <string name="d86_snow_emulation_eb5fff">화면 스노우 에뮬레이션</string>
+    <!-- EN: sRGB interpolation -->
+    <string name="d86_srgb_interpolation_2c99e6">sRGB 보간</string>
+    <!-- EN: Surround module -->
+    <string name="d86_surround_module_f25142">서라운드 모듈</string>
+    <!-- EN: TCP/IP listening port -->
+    <string name="d86_tcp_ip_listening_port_452cef">TCP/IP 수신 포트</string>
+    <!-- EN: Telnet emulation -->
+    <string name="d86_telnet_emulation_5743a4">텔넷 에뮬레이션</string>
+    <!-- EN: Three -->
+    <string name="d86_three_f3cd46">3버튼</string>
+    <!-- EN: Translate 26 -> 17 -->
+    <string name="d86_translate_26_17_05ab4b">번역 26 -&gt; 17</string>
+    <!-- EN: True color -->
+    <string name="d86_true_color_014864">트루 컬러</string>
+    <!-- EN: Two -->
+    <string name="d86_two_16e018">2버튼</string>
+    <!-- EN: US (CP 437) -->
+    <string name="d86_us_cp_437_7ff915">미국 (CP 437)</string>
+    <!-- EN: Use EEPROM setting -->
+    <string name="d86_use_eeprom_setting_da4ffc">EEPROM 설정 사용</string>
+    <!-- EN: Variant -->
+    <string name="d86_variant_cc91b1">세부 모델</string>
+    <!-- EN: Version 1.02 (English) -->
+    <string name="d86_version_1_02_english_bd0acb">버전 1.02(영어)</string>
+    <!-- EN: Version 1.02 (German) -->
+    <string name="d86_version_1_02_german_0ee00e">버전 1.02(독일어)</string>
+    <!-- EN: Version 1.03 (English) -->
+    <string name="d86_version_1_03_english_9b8828">버전 1.03(영어)</string>
+    <!-- EN: Video chroma-keying -->
+    <string name="d86_video_chroma_keying_6d57ed">비디오 크로마키</string>
+    <!-- EN: Wheel -->
+    <string name="d86_wheel_0d972a">휠</string>
+    <!-- EN: Wiring -->
+    <string name="d86_wiring_233c1d">배선</string>
+    <!-- EN: XGA type -->
+    <string name="d86_xga_type_824696">XGA 유형</string>
+    <!-- EN: Zero wait state -->
+    <string name="d86_zero_wait_state_c7b39c">대기 상태 없음</string>
+</resources>

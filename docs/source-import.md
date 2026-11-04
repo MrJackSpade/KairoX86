@@ -31,6 +31,13 @@
 - **`kairox86-native-size` group:** each frame, the VGA family (`svga_doblit`: the renderers that draw each pixel twice across, when no cursor, overlay or accelerator draws over them and the same renderer drew the whole frame) and the CGA (40-column text and 320-wide graphics, not composite; its line doubling) say on their monitor how many times they drew each pixel across and each line down, and the frontend keeps one of each, so the core hands the host the machine's own pixels (KairoX86#37).
 - **`kairox86-guest-input` group:** every processor's INT decoder (the 386 and later interpreters, which the recompiler runs INT through, the 8088, the cycle-exact 8088 and the NEC V20/V30) passes each INT n, with AX and the caller's code address, to the frontend's `kairo_observe_int`, through the call's registers: it counts the BIOS keyboard waits and polls (INT 16h) and the mouse driver's reads (INT 33h) for the Auto touch mode (KairoX86#43), and for direct touch turns the program's next "get the position" (INT 33h AX=03h) into the driver's "set the position" (AX=04h) to the tapped point (KairoX86#44); with DS, it follows the console line DOS writes, so a keyboard read at a DOS prompt counts as the command shell waiting for a command (KairoX86#46).
 
+## 86Box's translations
+
+- **Source:** https://github.com/86Box/86Box, the 86Box snapshot's commit `fc675106a7f7eae57bf89b212f634cb4a6758015`, `src/qt/languages/`: the template `86box.pot` and the translations `de-DE.po`, `es-ES.po`, `ja-JP.po`, `ko-KR.po`, `pt-BR.po` and `ru-RU.po` (GPL-2.0-or-later, as 86Box).
+- **Copied to:** `third_party/86box-languages/`, unchanged.
+- **Used by:** `tools/device_strings.py`, which takes from them the words of the cards' own options (labels and choice names) the Machine settings show, and their translations, into `kairox86/src/main/res/values*/strings_86box.xml` (KairoX86#207). KairoX86's other languages (Arabic, Indonesian) and the words 86Box leaves untranslated come from `tools/device_strings_translations.json`.
+- **Imported:** 2026-11-04.
+
 ## 86Box ROM set index
 
 - **Source:** https://github.com/86Box/roms, commit `ebefe507a659192ad4c0155b984cdec30b1e1ecd` (2026-10-29, "Merge pull request #620 from MaxwellS04/Mach64"), the ROM set of the 86Box snapshot's date.

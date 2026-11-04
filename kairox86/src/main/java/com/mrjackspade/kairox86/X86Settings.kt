@@ -142,11 +142,17 @@ object X86Settings {
 
     /** [option], kept in [section] of 86box.cfg, as a setting (KairoX86#201), with 86Box's own choices and default. */
     fun cardOption(section: String, option: X86Hardware.CardOption) =
-        MachineOption("$CARD_OPTION${option.key}:$section", UiText.fixed(option.label), option.choices.map { choice ->
-            val label = if (!option.binary) UiText.fixed(choice.label)
+        MachineOption("$CARD_OPTION${option.key}:$section", deviceText(option.label), option.choices.map { choice ->
+            val label = if (!option.binary) deviceText(choice.label)
                 else UiText.res(if (choice.value == "1") FrontendR.string.kairo_on else FrontendR.string.kairo_off)
             ChoiceOption(choice.value, label, null, firmwareMissing.takeIf { !choice.available })
         }, option.default)
+
+    /**
+     * A card option's text as the player reads it (KairoX86#207): a word of 86Box's in the player's
+     * language (X86DeviceStrings), a name or a value as 86Box writes it.
+     */
+    private fun deviceText(english: String): UiText = X86DeviceStrings.resources[english]?.let { UiText.res(it) } ?: UiText.fixed(english)
 
     /** In the order they show; each after the ones it depends on. */
     val all = listOf(machine, processor, memory, video, sound, network, hdc, scsi, fdc, mouse, joystick, clock, skipMemoryCheck)

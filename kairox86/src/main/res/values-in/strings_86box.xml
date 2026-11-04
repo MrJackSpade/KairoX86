@@ -1,0 +1,376 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Indonesian (in): the translation of values/strings_86box.xml. Each EN comment is the English a string translates; update it with the translation. Check with shared/tools/translations.py check. -->
+<resources>
+    <!-- EN: 128 KB -->
+    <string name="d86_128_kb_bb8543">128 KB</string>
+    <!-- EN: 12 MB -->
+    <string name="d86_12_mb_6674e6">12 MB</string>
+    <!-- EN: 16-bit (bottom pins closed - AT-class 16-bit slots only) -->
+    <string name="d86_16_bit_bottom_pins_closed_at_class_16_bi_85eac9">16-bit (pin bawah tertutup - hanya slot 16-bit kelas AT)</string>
+    <!-- EN: 16-bit -->
+    <string name="d86_16_bit_dc4083">16-bit</string>
+    <!-- EN: 16 KB -->
+    <string name="d86_16_kb_855689">16 KB</string>
+    <!-- EN: 16 MB -->
+    <string name="d86_16_mb_77a260">16 MB</string>
+    <!-- EN: 1990 BIOS -->
+    <string name="d86_1990_bios_768ec7">BIOS 1990</string>
+    <!-- EN: 1991 BIOS (>1GB) -->
+    <string name="d86_1991_bios_1gb_13dab4">BIOS 1991 (&gt;1 GB)</string>
+    <!-- EN: 1 MB -->
+    <string name="d86_1_mb_9b2252">1 MB</string>
+    <!-- EN: 2048 MB -->
+    <string name="d86_2048_mb_b361b6">2048 MB</string>
+    <!-- EN: 20 MB -->
+    <string name="d86_20_mb_132890">20 MB</string>
+    <!-- EN: 24 MB -->
+    <string name="d86_24_mb_233194">24 MB</string>
+    <!-- EN: 256 KB -->
+    <string name="d86_256_kb_122ab2">256 KB</string>
+    <!-- EN: 28 MB -->
+    <string name="d86_28_mb_dcf730">28 MB</string>
+    <!-- EN: 2 MB -->
+    <string name="d86_2_mb_63f273">2 MB</string>
+    <!-- EN: 30 Hz (JMP2 = 1) -->
+    <string name="d86_30_hz_jmp2_1_7afe29">30 Hz (JMP2 = 1)</string>
+    <!-- EN: 32 KB -->
+    <string name="d86_32_kb_895b11">32 KB</string>
+    <!-- EN: 32 MB -->
+    <string name="d86_32_mb_eac42f">32 MB</string>
+    <!-- EN: 45 Hz (JMP2 not populated) -->
+    <string name="d86_45_hz_jmp2_not_populated_73ddb5">45 Hz (JMP2 tidak terpasang)</string>
+    <!-- EN: 4-bit -->
+    <string name="d86_4_bit_41a020">4-bit</string>
+    <!-- EN: 4 MB -->
+    <string name="d86_4_mb_b6de6b">4 MB</string>
+    <!-- EN: 512 KB -->
+    <string name="d86_512_kb_406c35">512 KB</string>
+    <!-- EN: 60 Hz (JMP2 = 2) -->
+    <string name="d86_60_hz_jmp2_2_ad41bf">60 Hz (JMP2 = 2)</string>
+    <!-- EN: 64 KB -->
+    <string name="d86_64_kb_91ab95">64 KB</string>
+    <!-- EN: 64 MB -->
+    <string name="d86_64_mb_a2319f">64 MB</string>
+    <!-- EN: 6CH variant (6-channel) -->
+    <string name="d86_6ch_variant_6_channel_6e13eb">Varian 6CH (6 kanal)</string>
+    <!-- EN: 80-conductor cable -->
+    <string name="d86_80_conductor_cable_181d75">Kabel 80 konduktor</string>
+    <!-- EN: 8-bit -->
+    <string name="d86_8_bit_a35efa">8-bit</string>
+    <!-- EN: 8-bit (top pins closed - required for XT-class 8-bit slots) -->
+    <string name="d86_8_bit_top_pins_closed_required_for_xt_cl_d879cd">8-bit (pin atas tertutup - wajib untuk slot 8-bit kelas XT)</string>
+    <!-- EN: 8 KB -->
+    <string name="d86_8_kb_757334">8 KB</string>
+    <!-- EN: 8 MB -->
+    <string name="d86_8_mb_decd79">8 MB</string>
+    <!-- EN: A00 (Japanese) -->
+    <string name="d86_a00_japanese_e0b607">A00 (Jepang)</string>
+    <!-- EN: A02 (European) -->
+    <string name="d86_a02_european_e681a6">A02 (Eropa)</string>
+    <!-- EN: Address -->
+    <string name="d86_address_d70f93">Alamat</string>
+    <!-- EN: Adlib Address -->
+    <string name="d86_adlib_address_18ccef">Alamat Adlib</string>
+    <!-- EN: Alternate monochrome contrast -->
+    <string name="d86_alternate_monochrome_contrast_3eec4d">Kontras monokrom alternatif</string>
+    <!-- EN: Amber -->
+    <string name="d86_amber_27a01d">Kuning tua</string>
+    <!-- EN: Amber Monochrome -->
+    <string name="d86_amber_monochrome_98d59d">Monokrom kuning tua</string>
+    <!-- EN: Baud Rate -->
+    <string name="d86_baud_rate_78c95d">Laju baud</string>
+    <!-- EN: Bilinear filtering -->
+    <string name="d86_bilinear_filtering_baf47f">Penyaringan bilinear</string>
+    <!-- EN: BIOS address -->
+    <string name="d86_bios_address_210bbe">Alamat BIOS</string>
+    <!-- EN: BIOS Address -->
+    <string name="d86_bios_address_b33cb5">Alamat BIOS</string>
+    <!-- EN: BIOS Revision -->
+    <string name="d86_bios_revision_391463">Revisi BIOS</string>
+    <!-- EN: Blend -->
+    <string name="d86_blend_7a358c">Campur</string>
+    <!-- EN: Blue -->
+    <string name="d86_blue_7d44bc">Biru</string>
+    <!-- EN: Bochs latest -->
+    <string name="d86_bochs_latest_a50f8d">Bochs terbaru</string>
+    <!-- EN: Bus width -->
+    <string name="d86_bus_width_de70d9">Lebar bus</string>
+    <!-- EN: Buttons -->
+    <string name="d86_buttons_503d46">Tombol</string>
+    <!-- EN: Character set -->
+    <string name="d86_character_set_ab0956">Set karakter</string>
+    <!-- EN: Codec -->
+    <string name="d86_codec_a33676">Codec</string>
+    <!-- EN: Color -->
+    <string name="d86_color_1d0c83">Warna</string>
+    <!-- EN: Color 40x25 (5153/CGA) -->
+    <string name="d86_color_40x25_5153_cga_386512">Warna 40x25 (5153/CGA)</string>
+    <!-- EN: Color 80x25 (5153/CGA) -->
+    <string name="d86_color_80x25_5153_cga_c28450">Warna 80x25 (5153/CGA)</string>
+    <!-- EN: Color (generic) -->
+    <string name="d86_color_generic_cef0e9">Warna (umum)</string>
+    <!-- EN: Color (IBM 5153) -->
+    <string name="d86_color_ibm_5153_1c9d0b">Warna (IBM 5153)</string>
+    <!-- EN: Color Interlaced -->
+    <string name="d86_color_interlaced_f7f834">Warna berselang</string>
+    <!-- EN: Color (no brown) -->
+    <string name="d86_color_no_brown_0c2273">Warna (tanpa cokelat)</string>
+    <!-- EN: Color Non-Interlaced -->
+    <string name="d86_color_non_interlaced_bc43a2">Warna tak berselang</string>
+    <!-- EN: Columns -->
+    <string name="d86_columns_cf723c">Kolom</string>
+    <!-- EN: Composite -->
+    <string name="d86_composite_b9ec0f">Komposit</string>
+    <!-- EN: Composite type -->
+    <string name="d86_composite_type_52d9f9">Jenis komposit</string>
+    <!-- EN: Control MIDI volume -->
+    <string name="d86_control_midi_volume_12a56e">Atur volume MIDI</string>
+    <!-- EN: Control PC speaker -->
+    <string name="d86_control_pc_speaker_4f6f3e">Atur speaker PC</string>
+    <!-- EN: Coprocessor bus I/O width (JU1) -->
+    <string name="d86_coprocessor_bus_i_o_width_ju1_bd1fd9">Lebar I/O bus koprosesor (JU1)</string>
+    <!-- EN: Czech Kamenicky (CP 895) #1 -->
+    <string name="d86_czech_kamenicky_cp_895_1_9946c7">Ceko Kamenicky (CP 895) #1</string>
+    <!-- EN: Czech Kamenicky (CP 895) #2 -->
+    <string name="d86_czech_kamenicky_cp_895_2_2d1c10">Ceko Kamenicky (CP 895) #2</string>
+    <!-- EN: Default -->
+    <string name="d86_default_808d7d">Bawaan</string>
+    <!-- EN: Default Baud rate -->
+    <string name="d86_default_baud_rate_c3a750">Laju baud bawaan</string>
+    <!-- EN: Disable BIOS -->
+    <string name="d86_disable_bios_0b91b5">Matikan BIOS</string>
+    <!-- EN: Disabled -->
+    <string name="d86_disabled_f4f447">Mati</string>
+    <!-- EN: Display type -->
+    <string name="d86_display_type_99c8dd">Jenis tampilan</string>
+    <!-- EN: Dither subtraction -->
+    <string name="d86_dither_subtraction_6f6adf">Pengurangan dither</string>
+    <!-- EN: Dithering -->
+    <string name="d86_dithering_67c0f2">Dithering</string>
+    <!-- EN: DMA -->
+    <string name="d86_dma_1ba799">DMA</string>
+    <!-- EN: Dot spacing -->
+    <string name="d86_dot_spacing_23d5da">Jarak titik</string>
+    <!-- EN: DSP Version -->
+    <string name="d86_dsp_version_95259a">Versi DSP</string>
+    <!-- EN: Dynamic recompiler -->
+    <string name="d86_dynamic_recompiler_6a0912">Rekompilator dinamis</string>
+    <!-- EN: EISA slot -->
+    <string name="d86_eisa_slot_088719">Slot EISA</string>
+    <!-- EN: EMU8000 Address -->
+    <string name="d86_emu8000_address_481671">Alamat EMU8000</string>
+    <!-- EN: Enable Adlib ports -->
+    <string name="d86_enable_adlib_ports_da39e8">Aktifkan port Adlib</string>
+    <!-- EN: Enable BIOS -->
+    <string name="d86_enable_bios_a875b3">Aktifkan BIOS</string>
+    <!-- EN: Enable BIOS extension ROM Writes -->
+    <string name="d86_enable_bios_extension_rom_writes_4c4df4">Izinkan penulisan ROM ekstensi BIOS</string>
+    <!-- EN: Enable CMS -->
+    <string name="d86_enable_cms_155210">Aktifkan CMS</string>
+    <!-- EN: Enable Game port -->
+    <string name="d86_enable_game_port_6a1adc">Aktifkan port game</string>
+    <!-- EN: Enable IDE (Secondary Channel) -->
+    <string name="d86_enable_ide_secondary_channel_439297">Aktifkan IDE (kanal sekunder)</string>
+    <!-- EN: Enable MPU-401 -->
+    <string name="d86_enable_mpu_401_d4f5e8">Aktifkan MPU-401</string>
+    <!-- EN: Enable NMI for CGA emulation -->
+    <string name="d86_enable_nmi_for_cga_emulation_8311f2">Aktifkan NMI untuk emulasi CGA</string>
+    <!-- EN: Enable OPL -->
+    <string name="d86_enable_opl_dea1b7">Aktifkan OPL</string>
+    <!-- EN: Enable Secondary Controller -->
+    <string name="d86_enable_secondary_controller_e03b43">Aktifkan pengontrol sekunder</string>
+    <!-- EN: English (US) -->
+    <string name="d86_english_us_f20315">Inggris (AS)</string>
+    <!-- EN: Enhanced Color - Enhanced Mode (5154/ECD) -->
+    <string name="d86_enhanced_color_enhanced_mode_5154_ecd_b6f9dd">Warna Ditingkatkan - Mode Ditingkatkan (5154/ECD)</string>
+    <!-- EN: Enhanced Color - Normal Mode (5154/ECD) -->
+    <string name="d86_enhanced_color_normal_mode_5154_ecd_2c9e94">Warna Ditingkatkan - Mode Normal (5154/ECD)</string>
+    <!-- EN: FDC Address -->
+    <string name="d86_fdc_address_e727be">Alamat FDC</string>
+    <!-- EN: Five + 2 Wheels -->
+    <string name="d86_five_2_wheels_0c6876">Lima + 2 roda</string>
+    <!-- EN: Five + Wheel -->
+    <string name="d86_five_wheel_f64cf0">Lima + roda</string>
+    <!-- EN: Floppy controller enabled (jumper) -->
+    <string name="d86_floppy_controller_enabled_jumper_9500ca">Pengontrol disket aktif (jumper)</string>
+    <!-- EN: Font -->
+    <string name="d86_font_b97c4d">Fon</string>
+    <!-- EN: Generic -->
+    <string name="d86_generic_ff7613">Umum</string>
+    <!-- EN: Generic RGBI color monitor -->
+    <string name="d86_generic_rgbi_color_monitor_feb047">Monitor warna RGBI umum</string>
+    <!-- EN: GPU raster backend (uses 1 render thread) -->
+    <string name="d86_gpu_raster_backend_uses_1_render_thread_052f52">Rasterisasi GPU (memakai 1 thread render)</string>
+    <!-- EN: Gray -->
+    <string name="d86_gray_4f9bef">Abu-abu</string>
+    <!-- EN: Gray Monochrome -->
+    <string name="d86_gray_monochrome_568de2">Monokrom abu-abu</string>
+    <!-- EN: Green -->
+    <string name="d86_green_933bf2">Hijau</string>
+    <!-- EN: Green Monochrome -->
+    <string name="d86_green_monochrome_48ca7b">Monokrom hijau</string>
+    <!-- EN: Has Quadcolor II daughter board -->
+    <string name="d86_has_quadcolor_ii_daughter_board_263f78">Dengan papan tambahan Quadcolor II</string>
+    <!-- EN: Has secondary 8x8 character set -->
+    <string name="d86_has_secondary_8x8_character_set_35368f">Dengan set karakter 8x8 sekunder</string>
+    <!-- EN: High DMA -->
+    <string name="d86_high_dma_e34410">DMA tinggi</string>
+    <!-- EN: Host ID -->
+    <string name="d86_host_id_7e7bac">ID host</string>
+    <!-- EN: Hz -->
+    <string name="d86_hz_97aaf5">Hz</string>
+    <!-- EN: IBM Nordic (CP 437-Nordic) -->
+    <string name="d86_ibm_nordic_cp_437_nordic_9a7c8a">IBM Nordik (CP 437-Nordic)</string>
+    <!-- EN: IDE Controller -->
+    <string name="d86_ide_controller_ebb99e">Pengontrol IDE</string>
+    <!-- EN: Initial RAM size -->
+    <string name="d86_initial_ram_size_7018b9">Ukuran RAM awal</string>
+    <!-- EN: IRQ -->
+    <string name="d86_irq_6dcf08">IRQ</string>
+    <!-- EN: Korean (Kasan Hangulmadang-16 VGA) -->
+    <string name="d86_korean_kasan_hangulmadang_16_vga_2b3a56">Korea (Kasan Hangulmadang-16 VGA)</string>
+    <!-- EN: Korean (TriGem 286M) -->
+    <string name="d86_korean_trigem_286m_11e0b1">Korea (TriGem 286M)</string>
+    <!-- EN: Korean (TriGem) -->
+    <string name="d86_korean_trigem_f18876">Korea (TriGem)</string>
+    <!-- EN: Line doubling type -->
+    <string name="d86_line_doubling_type_0aaddf">Jenis penggandaan baris</string>
+    <!-- EN: Linear framebuffer base -->
+    <string name="d86_linear_framebuffer_base_e0be35">Basis framebuffer linear</string>
+    <!-- EN: Linear interpolation -->
+    <string name="d86_linear_interpolation_353a3b">Interpolasi linear</string>
+    <!-- EN: Low DMA -->
+    <string name="d86_low_dma_4f9f60">DMA rendah</string>
+    <!-- EN: Memory size -->
+    <string name="d86_memory_size_9e722d">Ukuran memori</string>
+    <!-- EN: Mixer -->
+    <string name="d86_mixer_7f45fc">Mixer</string>
+    <!-- EN: Model -->
+    <string name="d86_model_68c2cc">Model</string>
+    <!-- EN: Monitor type -->
+    <string name="d86_monitor_type_4ef0b1">Jenis monitor</string>
+    <!-- EN: Mono Interlaced -->
+    <string name="d86_mono_interlaced_c51036">Mono berselang</string>
+    <!-- EN: Mono Non-Interlaced -->
+    <string name="d86_mono_non_interlaced_081876">Mono tak berselang</string>
+    <!-- EN: Monochrome (5151/MDA) (amber) -->
+    <string name="d86_monochrome_5151_mda_amber_e6b8bb">Monokrom (5151/MDA) (kuning tua)</string>
+    <!-- EN: Monochrome (5151/MDA) (green) -->
+    <string name="d86_monochrome_5151_mda_green_f7515c">Monokrom (5151/MDA) (hijau)</string>
+    <!-- EN: Monochrome (5151/MDA) (white) -->
+    <string name="d86_monochrome_5151_mda_white_b5a462">Monokrom (5151/MDA) (putih)</string>
+    <!-- EN: MPU-401 Address -->
+    <string name="d86_mpu_401_address_6545ce">Alamat MPU-401</string>
+    <!-- EN: New -->
+    <string name="d86_new_6403f2">Baru</string>
+    <!-- EN: Non-timed (original) -->
+    <string name="d86_non_timed_original_ce4a53">Tanpa pewaktu (asli)</string>
+    <!-- EN: None -->
+    <string name="d86_none_6eef66">Tidak ada</string>
+    <!-- EN: Off (CPU renderer) -->
+    <string name="d86_off_cpu_renderer_fade21">Mati (render CPU)</string>
+    <!-- EN: Off -->
+    <string name="d86_off_e3de5a">Mati</string>
+    <!-- EN: Old -->
+    <string name="d86_old_fbb3c3">Lama</string>
+    <!-- EN: On -->
+    <string name="d86_on_e0049a">Nyala</string>
+    <!-- EN: Other languages -->
+    <string name="d86_other_languages_80d5c6">Bahasa lain</string>
+    <!-- EN: Parallel Port -->
+    <string name="d86_parallel_port_019607">Port paralel</string>
+    <!-- EN: Plug and Play -->
+    <string name="d86_plug_and_play_93ffca">Plug and Play</string>
+    <!-- EN: RAM Address -->
+    <string name="d86_ram_address_036c00">Alamat RAM</string>
+    <!-- EN: RAM size -->
+    <string name="d86_ram_size_32b200">Ukuran RAM</string>
+    <!-- EN: RAMDAC type -->
+    <string name="d86_ramdac_type_a8933c">Jenis RAMDAC</string>
+    <!-- EN: Receive MIDI input -->
+    <string name="d86_receive_midi_input_ddf6a2">Terima masukan MIDI</string>
+    <!-- EN: Receive MIDI input (MPU-401) -->
+    <string name="d86_receive_midi_input_mpu_401_c61b40">Terima masukan MIDI (MPU-401)</string>
+    <!-- EN: Regular AT -->
+    <string name="d86_regular_at_7bcc97">AT biasa</string>
+    <!-- EN: Regular XT -->
+    <string name="d86_regular_xt_58ce5d">XT biasa</string>
+    <!-- EN: Render threads -->
+    <string name="d86_render_threads_87d848">Thread render</string>
+    <!-- EN: Rev. D (Generic) -->
+    <string name="d86_rev_d_generic_6837ae">Rev. D (umum)</string>
+    <!-- EN: Revision -->
+    <string name="d86_revision_3beb9a">Revisi</string>
+    <!-- EN: RGB type -->
+    <string name="d86_rgb_type_de4a07">Jenis RGB</string>
+    <!-- EN: Rows -->
+    <string name="d86_rows_52d0b3">Baris</string>
+    <!-- EN: RTS toggle -->
+    <string name="d86_rts_toggle_637b5b">Alihkan RTS</string>
+    <!-- EN: SB Address -->
+    <string name="d86_sb_address_34b00f">Alamat SB</string>
+    <!-- EN: Scandinavian -->
+    <string name="d86_scandinavian_ef3767">Skandinavia</string>
+    <!-- EN: Screen Filter -->
+    <string name="d86_screen_filter_8dc856">Filter layar</string>
+    <!-- EN: Secondary Controller DMA -->
+    <string name="d86_secondary_controller_dma_140a65">DMA pengontrol sekunder</string>
+    <!-- EN: Secondary Controller IRQ -->
+    <string name="d86_secondary_controller_irq_f32a1d">IRQ pengontrol sekunder</string>
+    <!-- EN: Serial Port -->
+    <string name="d86_serial_port_373371">Port serial</string>
+    <!-- EN: SID Model -->
+    <string name="d86_sid_model_272a97">Model SID</string>
+    <!-- EN: SigmaTel STAC9721T (stereo) -->
+    <string name="d86_sigmatel_stac9721t_stereo_550e42">SigmaTel STAC9721T (stereo)</string>
+    <!-- EN: Simple doubling -->
+    <string name="d86_simple_doubling_717ccb">Penggandaan sederhana</string>
+    <!-- EN: Slot 1 -->
+    <string name="d86_slot_1_56d27a">Slot 1</string>
+    <!-- EN: Slot 2 -->
+    <string name="d86_slot_2_9f47b6">Slot 2</string>
+    <!-- EN: Slot 3 -->
+    <string name="d86_slot_3_ce2450">Slot 3</string>
+    <!-- EN: Slot 4 -->
+    <string name="d86_slot_4_93cc82">Slot 4</string>
+    <!-- EN: Snow emulation -->
+    <string name="d86_snow_emulation_eb5fff">Emulasi semut</string>
+    <!-- EN: sRGB interpolation -->
+    <string name="d86_srgb_interpolation_2c99e6">Interpolasi sRGB</string>
+    <!-- EN: Surround module -->
+    <string name="d86_surround_module_f25142">Modul surround</string>
+    <!-- EN: TCP/IP listening port -->
+    <string name="d86_tcp_ip_listening_port_452cef">Port dengar TCP/IP</string>
+    <!-- EN: Telnet emulation -->
+    <string name="d86_telnet_emulation_5743a4">Emulasi Telnet</string>
+    <!-- EN: Three -->
+    <string name="d86_three_f3cd46">Tiga</string>
+    <!-- EN: Translate 26 -> 17 -->
+    <string name="d86_translate_26_17_05ab4b">Ubah 26 -&gt; 17</string>
+    <!-- EN: True color -->
+    <string name="d86_true_color_014864">True color</string>
+    <!-- EN: Two -->
+    <string name="d86_two_16e018">Dua</string>
+    <!-- EN: US (CP 437) -->
+    <string name="d86_us_cp_437_7ff915">AS (CP 437)</string>
+    <!-- EN: Use EEPROM setting -->
+    <string name="d86_use_eeprom_setting_da4ffc">Pakai pengaturan EEPROM</string>
+    <!-- EN: Variant -->
+    <string name="d86_variant_cc91b1">Varian</string>
+    <!-- EN: Version 1.02 (English) -->
+    <string name="d86_version_1_02_english_bd0acb">Versi 1.02 (Inggris)</string>
+    <!-- EN: Version 1.02 (German) -->
+    <string name="d86_version_1_02_german_0ee00e">Versi 1.02 (Jerman)</string>
+    <!-- EN: Version 1.03 (English) -->
+    <string name="d86_version_1_03_english_9b8828">Versi 1.03 (Inggris)</string>
+    <!-- EN: Video chroma-keying -->
+    <string name="d86_video_chroma_keying_6d57ed">Chroma key video</string>
+    <!-- EN: Wheel -->
+    <string name="d86_wheel_0d972a">Roda</string>
+    <!-- EN: Wiring -->
+    <string name="d86_wiring_233c1d">Pengabelan</string>
+    <!-- EN: XGA type -->
+    <string name="d86_xga_type_824696">Jenis XGA</string>
+    <!-- EN: Zero wait state -->
+    <string name="d86_zero_wait_state_c7b39c">Tanpa wait state</string>
+</resources>
