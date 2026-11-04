@@ -178,9 +178,13 @@ class MainActivity : MachineActivity<X86Entry>() {
         override fun scan(tree: Uri, depth: ScanDepth, cancelled: AtomicBoolean, progress: (String) -> Unit) =
             machines.scan(tree, depth, cancelled, progress)
         override fun store(tree: Uri, entries: List<X86Entry>) = machines.store(tree, entries)
-        // A disk image picked for a drive on the Disks page (KairoX86#48).
-        override fun inspectExternal(file: ExternalGameFile, cancelled: AtomicBoolean): List<X86Entry> =
-            listOf(machines.pickedDisk(file.uri, file.name, file.size, file.modified))
+        // A disk image picked for a drive on the Disks page (KairoX86#48). A machine's 86box.cfg
+        // from another app is the library's, matched there: outside it, its folder is out of reach
+        // (KairoX86#210).
+        override fun inspectExternal(file: ExternalGameFile, cancelled: AtomicBoolean): List<X86Entry> {
+            check(!file.name.equals(X86Library.CONFIG, ignoreCase = true)) { getString(R.string.machine_external_config) }
+            return listOf(machines.pickedDisk(file.uri, file.name, file.size, file.modified))
+        }
         override fun prepareMedia(entry: X86Entry, cancelled: AtomicBoolean, progress: (String) -> Unit): File {
             val running = checkNotNull(session) { getString(R.string.machine_disk_no_machine) }
             // A disk of the machine's folder is its session file; one picked on the device gets a link.

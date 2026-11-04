@@ -36,6 +36,10 @@ object KairoX86App : AppUnderTest() {
     override val otherGame = "dos486"
     override val defaultOption = "clock"
     override val searchTerm = "xt"
+    // A library entry is the machine folder, not its 86box.cfg.
+    override val bootGameEntryFile = "xt"
+    // A machine is its folder: launched alone before setup, it asks for the games folder (KairoX86#210).
+    override val launchBeforeSetupMessage = "A machine starts from its games folder: choose the folder that holds it first."
     override val arrowKeys = listOf(PcKey.UP.scanCode, PcKey.DOWN.scanCode, PcKey.LEFT.scanCode, PcKey.RIGHT.scanCode)
     override val returnKey = PcKey.ENTER.scanCode
     override val spaceKey = PcKey.SPACE.scanCode

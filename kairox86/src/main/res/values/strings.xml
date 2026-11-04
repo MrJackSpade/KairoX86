@@ -46,6 +46,8 @@
     <string name="media_tape">Tape</string>
     <!-- %1$s is the file's name. -->
     <string name="machine_not_disk">%1$s is no floppy or CD image</string>
+    <!-- A machine's 86box.cfg opened from another app before its games folder is chosen (KairoX86#210). -->
+    <string name="machine_external_config">A machine starts from its games folder: choose the folder that holds it first.</string>
     <string name="machine_disk_no_machine">A disk goes in a running machine</string>
     <!-- The machine settings (86box.cfg), each with 86Box's own choices (Kairo#143). -->
     <string name="setting_processor">Processor</string>

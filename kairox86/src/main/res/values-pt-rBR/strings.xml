@@ -68,6 +68,8 @@
     <!-- %1$s is the file's name. -->
     <!-- EN: %1$s is no floppy or CD image -->
     <string name="machine_not_disk">%1$s não é uma imagem de disquete nem de CD</string>
+    <!-- EN: A machine starts from its games folder: choose the folder that holds it first. -->
+    <string name="machine_external_config">Uma máquina é iniciada pela sua pasta de jogos: escolha primeiro a pasta que a contém.</string>
     <!-- EN: A disk goes in a running machine -->
     <string name="machine_disk_no_machine">Um disco vai em uma máquina em execução</string>
     <!-- The machine settings (86box.cfg), each with 86Box's own choices (Kairo#143). -->

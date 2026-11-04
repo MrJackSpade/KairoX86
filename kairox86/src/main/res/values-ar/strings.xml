@@ -68,6 +68,8 @@
     <!-- %1$s is the file's name. -->
     <!-- EN: %1$s is no floppy or CD image -->
     <string name="machine_not_disk">%1$s ليس صورة قرص مرن ولا قرص CD</string>
+    <!-- EN: A machine starts from its games folder: choose the folder that holds it first. -->
+    <string name="machine_external_config">يبدأ الجهاز من مجلد ألعابه: اختر المجلد الذي يحويه أولًا.</string>
     <!-- EN: A disk goes in a running machine -->
     <string name="machine_disk_no_machine">يوضع القرص في جهاز قيد التشغيل</string>
     <!-- The machine settings (86box.cfg), each with 86Box's own choices (Kairo#143). -->
