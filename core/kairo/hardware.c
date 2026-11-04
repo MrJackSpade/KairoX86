@@ -262,6 +262,20 @@ put_cards(const struct kind *kind, int m)
 static bool
 put_card_options(const char *kind_name, const char *id)
 {
+    /* "machine <id>": the board's own options, its firmware among them (KairoX86#208). 86Box keeps
+       them in the machine device's section: its name, the device being instance 0. */
+    if (!strcmp(kind_name, "machine")) {
+        const int m = machine_named(id);
+        if (m < 0)
+            return false;
+        const device_t *device = machine_get_device(m);
+        put("{\"section\":");
+        put_string(device ? device->name : id);
+        put(",\"options\":");
+        put_options(device);
+        put("}");
+        return true;
+    }
     for (size_t k = 0; k < sizeof(kinds) / sizeof(kinds[0]); k++) {
         if (strcmp(kinds[k].name, kind_name))
             continue;

@@ -32,6 +32,8 @@ object X86Hardware {
     const val FDC = "fdc"
     const val MOUSE = "mouse"
     const val JOYSTICK = "joystick"
+    /** The board itself, for [options]: its own options (KairoX86#208). */
+    const val MACHINE = "machine"
     private val KINDS = listOf(VIDEO, SOUND, NETWORK, HDC, SCSI, FDC, MOUSE, JOYSTICK)
 
     /** The player's 86Box ROM set (MainActivity.firmwareFolder), set before the first query. */

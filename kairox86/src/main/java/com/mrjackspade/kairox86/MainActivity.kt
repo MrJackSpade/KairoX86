@@ -79,13 +79,18 @@ class MainActivity : MachineActivity<X86Entry>() {
      * The options of each card [entry]'s machine has (KairoX86#201): a group for each card, named by
      * 86Box, with its own options, kept in its section of the folder's 86box.cfg.
      */
-    override fun machineExtraGroups(entry: X86Entry, enabled: () -> Boolean): List<RowGroup> =
-        chosenCards(entry).mapNotNull { (kind, card) ->
-            val own = X86Hardware.options(kind, card.id)
-            own.options.takeIf { it.isNotEmpty() }?.let { options ->
-                RowGroup(card.name.uppercase(), options.map { option -> machineChoiceRow(entry, X86Settings.cardOption(own.section, option), enabled) })
+    override fun machineExtraGroups(entry: X86Entry, enabled: () -> Boolean): List<RowGroup> {
+        // The board's own options first (its firmware, KairoX86#208), then each card's.
+        val machine = configStore.read(entry, X86Settings.machine.option) ?: X86Settings.machine.option.default
+        val name = X86Hardware.machines().first { it.id == machine }.name
+        return (listOf(Triple(X86Hardware.MACHINE, machine, name)) + chosenCards(entry).map { (kind, card) -> Triple(kind, card.id, card.name) })
+            .mapNotNull { (kind, id, title) ->
+                val own = X86Hardware.options(kind, id)
+                own.options.takeIf { it.isNotEmpty() }?.let { options ->
+                    RowGroup(title.uppercase(), options.map { option -> machineChoiceRow(entry, X86Settings.cardOption(own.section, option), enabled) })
+                }
             }
-        }
+    }
 
     /**
      * The cards [entry]'s machine has, each with its kind: those its 86box.cfg chooses or 86Box's
@@ -119,6 +124,8 @@ class MainActivity : MachineActivity<X86Entry>() {
         if (tree == null) return
         readAhead.submit { X86Hardware.machines() }
         for (entry in entries.filter { !it.disk && it.playable }) readAhead.submit {
+            val machine = configStore.read(entry, X86Settings.machine.option) ?: X86Settings.machine.option.default
+            X86Hardware.options(X86Hardware.MACHINE, machine)
             for ((kind, card) in chosenCards(entry)) X86Hardware.options(kind, card.id)
         }
     }
