@@ -36,36 +36,21 @@ param(
     # The player's ROM set on the device.
     [string]$RomSet = '/data/local/tmp/kx86/bios',
     # Compares the working tree's core with itself unlinked instead of with the base revision's.
-    [switch]$Unlinked
+    [switch]$Unlinked,
+    # Each build's profile (KairoX86#123): off by default, since a change to the core makes the
+    # recorded profile stale; 'use' builds with core/pgo as the app does (-BasePgo off -TreePgo use
+    # measures the profile itself).
+    [ValidateSet('use', 'off')][string]$BasePgo = 'off',
+    [ValidateSet('use', 'off')][string]$TreePgo = 'off'
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
-$sdk = [Environment]::GetEnvironmentVariable('ANDROID_HOME', 'User')
-if (-not $sdk) { throw 'ANDROID_HOME is not set: it names the Android SDK' }
-$ndk = Join-Path $sdk 'ndk\28.2.13676358'
-$cmake = Join-Path $sdk 'cmake\3.22.1\bin\cmake.exe'
-$ninja = Join-Path $sdk 'cmake\3.22.1\bin\ninja.exe'
-$adb = Join-Path $sdk 'platform-tools\adb.exe'
+Import-Module (Join-Path $PSScriptRoot 'CoreBuild.psm1') -Force
+$tools = Get-CoreTools
+$adb = $tools.Adb
 $work = Join-Path $root '.build\exact'
 $remote = '/data/local/tmp/kx86/exact'
 New-Item -ItemType Directory -Force $work | Out-Null
-
-# The core of the tree at $Source, built as the app's release build makes it (its CMake arguments).
-function Build-Core([string]$Source, [string]$Name) {
-    $build = Join-Path $work "build-$Name"
-    $out = Join-Path $build 'out'
-    if (-not (Test-Path (Join-Path $build 'build.ninja'))) {
-        & $cmake "-H$Source\kairox86\src\main\cpp" "-B$build" -GNinja "-DCMAKE_MAKE_PROGRAM=$ninja" `
-            -DCMAKE_SYSTEM_NAME=Android -DCMAKE_SYSTEM_VERSION=26 -DANDROID_PLATFORM=android-26 -DANDROID_ABI=arm64-v8a `
-            -DCMAKE_ANDROID_ARCH_ABI=arm64-v8a "-DANDROID_NDK=$ndk" "-DCMAKE_ANDROID_NDK=$ndk" `
-            "-DCMAKE_TOOLCHAIN_FILE=$ndk\build\cmake\android.toolchain.cmake" -DANDROID_STL=c++_shared `
-            -DCMAKE_BUILD_TYPE=RelWithDebInfo -DKAIRO_PGO=ON "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=$out" "-DCMAKE_RUNTIME_OUTPUT_DIRECTORY=$out" | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw "CMake could not configure the $Name core" }
-    }
-    & $ninja -C $build game_profile 86Box | Select-Object -Last 1 | Out-Host
-    if ($LASTEXITCODE -ne 0) { throw "The $Name core did not build" }
-    return $out
-}
 
 # The base revision's tree: its files and the shared commit it pins, as git archives.
 if ($Unlinked) { $Base = 'HEAD' }
@@ -80,9 +65,10 @@ if (-not (Test-Path (Join-Path $baseSource 'kairox86'))) {
     tar -x -f (Join-Path $work 'shared.tar') -C (Join-Path $baseSource 'shared')
     Remove-Item (Join-Path $work 'base.tar'), (Join-Path $work 'shared.tar')
 }
-$tree = Build-Core $root 'tree'
+$tree = Build-Core $root (Join-Path $work "build-tree-$TreePgo") $TreePgo
 $builds = if ($Unlinked) { [ordered]@{ base = $tree; tree = $tree } }
-          else { [ordered]@{ base = (Build-Core $baseSource "base-$($baseCommit.Substring(0, 12))"); tree = $tree } }
+          else { [ordered]@{ base = (Build-Core $baseSource (Join-Path $work "build-base-$($baseCommit.Substring(0, 12))-$BasePgo") $BasePgo)
+                             tree = $tree } }
 $baseMode = if ($Unlinked) { 'unlinked' } else { '' }
 
 # The machines and both builds on the device.
@@ -91,13 +77,13 @@ $machines = Join-Path $work 'machines'
 if ($LASTEXITCODE -ne 0) { throw 'machines.py failed' }
 $frames = Get-Content -Raw (Join-Path $machines 'machines.json') | ConvertFrom-Json
 $names = if ($Machine) { $Machine -split ',' } else { $frames.PSObject.Properties.Name }
-$cxx = Join-Path $ndk 'toolchains\llvm\prebuilt\windows-x86_64\sysroot\usr\lib\aarch64-linux-android\libc++_shared.so'
+$cxx = $tools.CxxShared
 & $adb -s $Device shell "su 0 sh -c 'rm -rf $remote/machines $remote/base $remote/tree; mkdir -p $remote/base $remote/tree'"
-& $adb -s $Device push $machines "$remote/" | Out-Null
-& $adb -s $Device push (Join-Path $root 'core\test\exact\run.sh') "$remote/run.sh" | Out-Null
+Push-ToDevice $Device $machines "$remote/"
+Push-ToDevice $Device (Join-Path $root 'core\test\exact\run.sh') "$remote/run.sh"
 foreach ($name in $builds.Keys) {
     foreach ($file in @((Join-Path $builds[$name] 'game_profile'), (Join-Path $builds[$name] 'libkairox86_86box.so'), $cxx)) {
-        & $adb -s $Device push $file "$remote/$name/" | Out-Null
+        Push-ToDevice $Device $file "$remote/$name/"
     }
 }
 & $adb -s $Device shell "su 0 sh -c 'chmod 755 $remote/run.sh $remote/base/game_profile $remote/tree/game_profile'"

@@ -80,6 +80,30 @@ include_directories(${KAIROX86_ZLIB_INCLUDE})
 if(ANDROID AND ANDROID_ABI STREQUAL "x86_64")
     add_compile_options("SHELL:-include signal.h")
 endif()
+# Profile-guided optimization (KairoX86#123): the device's arm64 core is built with the profile of
+# the RG DS running the exactness standard's machines (core/pgo, recorded by tools/pgo-train.ps1). A
+# function whose code no longer matches the profile is a build error, so a change to the core
+# records it again. -DKAIRO_PGO=OFF builds without it; KAIROX86_PGO_GENERATE builds the core that
+# records it. Set before 86Box is added, so every target here and below is built with it.
+if(ANDROID AND ANDROID_ABI STREQUAL "arm64-v8a")
+    set(KAIROX86_PGO_DEFAULT ON)
+else()
+    set(KAIROX86_PGO_DEFAULT OFF)
+endif()
+option(KAIRO_PGO "Build the core with its recorded profile (core/pgo)" ${KAIROX86_PGO_DEFAULT})
+option(KAIROX86_PGO_GENERATE "Build the core that records a profile (tools/pgo-train.ps1)" OFF)
+if(KAIRO_PGO)
+    if(KAIROX86_PGO_GENERATE)
+        message(FATAL_ERROR "The recorded profile is for the ordinary core: add -DKAIRO_PGO=OFF to a KAIROX86_PGO_GENERATE build")
+    endif()
+    include("${KAIROX86_ROOT}/shared/cmake/KairoPgo.cmake")
+    kairo_use_profile("${CMAKE_CURRENT_LIST_DIR}/pgo/arm64.proftext" "${CMAKE_CURRENT_LIST_DIR}/pgo/profile.json"
+        "${KAIROX86_ROOT}")
+endif()
+if(KAIROX86_PGO_GENERATE)
+    add_compile_options(-fprofile-generate)
+    add_link_options(-fprofile-generate)
+endif()
 add_subdirectory("${KAIROX86_THIRD_PARTY}/86box" 86box)
 
 set_target_properties(86Box PROPERTIES OUTPUT_NAME kairox86_86box C_VISIBILITY_PRESET hidden CXX_VISIBILITY_PRESET hidden)

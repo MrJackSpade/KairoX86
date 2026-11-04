@@ -1,0 +1,54 @@
+{
+  "format": "LLVM IR instrumentation profile text, sparse",
+  "compilerVersion": "19.0.1",
+  "ndkProvenance": "28.2.13676358",
+  "abi": "arm64-v8a",
+  "sourceRevision": "68c6d0ff0d6cf19221d0990551225e7e4b4a5ebf",
+  "portableTextSha256": "c5f9dc177efe91248d92b9f00e85809a8191ffec3392a0cc6957aa73acf33c65",
+  "functionRecords": 3640,
+  "pathOccurrencesRewritten": 2613,
+  "normalization": "The checkout root in function names is @KAIRO_SOURCE@/ (shared/cmake/KairoPgo.cmake puts the actual root back before indexing). LF newlines, one final newline.",
+  "training": "tools/pgo-train.ps1 on the RG DS: xt,486,win98-486,win98-pentium through their exactness-standard frames",
+  "inputs": [
+    {
+      "name": "486-16752-15855839066869561477_0",
+      "rawProfileSha256": "fb6dd67defaca841f21b4ced59924c7a9fb3bc273c793dc85687e520c367d67e",
+      "weight": 1
+    },
+    {
+      "name": "486-16752-8675047629670820029_0",
+      "rawProfileSha256": "a085eaa54e884f6ef110c54fb1e2e23297fb065ab829ffb051e506d5bd5b3252",
+      "weight": 1
+    },
+    {
+      "name": "win98-486-16771-15855839066869561477_0",
+      "rawProfileSha256": "096cd15fdd7bdfe43e07068574c0e04210dec816c52b63b579190060dd4a4001",
+      "weight": 1
+    },
+    {
+      "name": "win98-486-16771-8675047629670820029_0",
+      "rawProfileSha256": "7694a9254f5cfee9cbe96eb632fdcc4259e86a7206447773eba99bd3828e4787",
+      "weight": 1
+    },
+    {
+      "name": "win98-pentium-16797-15855839066869561477_0",
+      "rawProfileSha256": "c854c64788b044a0ff9e01a1eb23d1fae9d2043c7386d5c921fee4a06be030db",
+      "weight": 1
+    },
+    {
+      "name": "win98-pentium-16797-8675047629670820029_0",
+      "rawProfileSha256": "1c7de3a18109c5f594ba5e62bbc3811fb66e1ccd96793c8f8f828b7dca35637e",
+      "weight": 1
+    },
+    {
+      "name": "xt-16737-15855839066869561477_0",
+      "rawProfileSha256": "7581821d0b518b346d13d6c346f4044e151f0155fef519d1dbc0e8b1edccb55d",
+      "weight": 1
+    },
+    {
+      "name": "xt-16737-8675047629670820029_0",
+      "rawProfileSha256": "9aadb0164005308b815c4039c44d516f790a8cb9c7c1b62a82b88a871b3001ca",
+      "weight": 1
+    }
+  ]
+}
