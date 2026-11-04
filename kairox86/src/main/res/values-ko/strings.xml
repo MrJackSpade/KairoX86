@@ -98,8 +98,8 @@
     <string name="firmware_rom_set">86Box 펌웨어</string>
     <!-- EN: A firmware file of 86Box\'s -->
     <string name="firmware_rom_description">86Box의 펌웨어 파일</string>
-    <!-- EN: Import the folder holding 86Box\'s BIOS and device firmware (its ROM set). Each file is found by its content, whatever its name. -->
-    <string name="firmware_rom_set_note">86Box의 BIOS와 장치 펌웨어(ROM 세트)가 든 폴더를 가져오세요. 각 파일은 이름과 관계없이 내용으로 찾습니다.</string>
+    <!-- EN: Import the folder holding 86Box\'s BIOS and device firmware. Each file is found by its content, whatever its name. -->
+    <string name="firmware_rom_set_note">86Box의 BIOS와 장치 펌웨어가 든 폴더를 가져오세요. 각 파일은 이름과 관계없이 내용으로 찾습니다.</string>
     <!-- EN: 486 DOS PC -->
     <string name="preset_486">DOS용 486 PC</string>
     <!-- EN: Pentium Windows 9x PC -->

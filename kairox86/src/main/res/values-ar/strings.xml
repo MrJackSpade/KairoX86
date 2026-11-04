@@ -98,8 +98,8 @@
     <string name="firmware_rom_set">البرامج الثابتة لـ 86Box</string>
     <!-- EN: A firmware file of 86Box\'s -->
     <string name="firmware_rom_description">ملف برنامج ثابت من 86Box</string>
-    <!-- EN: Import the folder holding 86Box\'s BIOS and device firmware (its ROM set). Each file is found by its content, whatever its name. -->
-    <string name="firmware_rom_set_note">استورد المجلد الذي يحوي BIOS والبرامج الثابتة للأجهزة من 86Box (مجموعة ROM الخاصة به). يُعرف كل ملف من محتواه أيًّا كان اسمه.</string>
+    <!-- EN: Import the folder holding 86Box\'s BIOS and device firmware. Each file is found by its content, whatever its name. -->
+    <string name="firmware_rom_set_note">استورد المجلد الذي يحوي BIOS والبرامج الثابتة للأجهزة من 86Box. يُعرف كل ملف من محتواه أيًّا كان اسمه.</string>
     <!-- EN: 486 DOS PC -->
     <string name="preset_486">حاسوب 486 لنظام DOS</string>
     <!-- EN: Pentium Windows 9x PC -->

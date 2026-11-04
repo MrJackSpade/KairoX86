@@ -98,8 +98,8 @@
     <string name="firmware_rom_set">Firmware do 86Box</string>
     <!-- EN: A firmware file of 86Box\'s -->
     <string name="firmware_rom_description">Um arquivo de firmware do 86Box</string>
-    <!-- EN: Import the folder holding 86Box\'s BIOS and device firmware (its ROM set). Each file is found by its content, whatever its name. -->
-    <string name="firmware_rom_set_note">Importe a pasta com a BIOS e o firmware de dispositivos do 86Box (o conjunto de ROMs dele). Cada arquivo é reconhecido pelo conteúdo, qualquer que seja o nome.</string>
+    <!-- EN: Import the folder holding 86Box\'s BIOS and device firmware. Each file is found by its content, whatever its name. -->
+    <string name="firmware_rom_set_note">Importe a pasta com a BIOS e o firmware de dispositivos do 86Box. Cada arquivo é reconhecido pelo conteúdo, qualquer que seja o nome.</string>
     <!-- EN: 486 DOS PC -->
     <string name="preset_486">PC 486 para DOS</string>
     <!-- EN: Pentium Windows 9x PC -->

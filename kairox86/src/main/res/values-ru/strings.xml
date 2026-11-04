@@ -98,8 +98,8 @@
     <string name="firmware_rom_set">Прошивки 86Box</string>
     <!-- EN: A firmware file of 86Box\'s -->
     <string name="firmware_rom_description">Файл прошивки 86Box</string>
-    <!-- EN: Import the folder holding 86Box\'s BIOS and device firmware (its ROM set). Each file is found by its content, whatever its name. -->
-    <string name="firmware_rom_set_note">Импортируйте папку с BIOS и прошивками устройств 86Box (его набор ROM). Каждый файл распознаётся по содержимому, как бы он ни назывался.</string>
+    <!-- EN: Import the folder holding 86Box\'s BIOS and device firmware. Each file is found by its content, whatever its name. -->
+    <string name="firmware_rom_set_note">Импортируйте папку с BIOS и прошивками устройств 86Box. Каждый файл распознаётся по содержимому, как бы он ни назывался.</string>
     <!-- EN: 486 DOS PC -->
     <string name="preset_486">ПК 486 для DOS</string>
     <!-- EN: Pentium Windows 9x PC -->
