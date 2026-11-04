@@ -6,7 +6,7 @@ Used by core/test/stops/make_floppies.py and core/test/display/make_raster.py.
 import subprocess
 from pathlib import Path
 
-TOOLCHAIN = Path('F:/tools/llvm-mingw-20261006-ucrt-x86_64/bin')
+TOOLCHAIN = Path('G:/tools/llvm-mingw-20261006-ucrt-x86_64/bin')
 FLOPPY_BYTES = 1474560
 
 
