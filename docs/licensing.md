@@ -22,6 +22,10 @@ The PC emulation comes from [86Box](https://86box.net/) (`third_party/86box/`, s
 
 86Box's cassette port (`src/device/cassette.c`, `src/include/86box/cassette.h`, from PCE) says "GNU General Public License version 2" without "or later", and `src/network/net_vde.c` "GPL version 2". KairoX86 leaves them out of its snapshot and builds its own cassette port in their place (`src/device/kairo_cassette.c`, `src/include/86box/kairo_cassette.h`, GPL-2.0-or-later); VDE networking is not built. Every file KairoX86 builds is GPL-2.0-or-later or more permissive.
 
+### 86Box's translations
+
+The Machine settings translate the words of 86Box's card options with 86Box's own translations where it has them (`third_party/86box-languages/`, from its `src/qt/languages/`, GPL-2.0-or-later as 86Box), built into `kairox86/src/main/res/values*/strings_86box.xml` by `tools/device_strings.py`; the rest are KairoX86's own (`tools/device_strings_translations.json`).
+
 ### The shader runtime
 
 Since 86Box is GPL-2.0-or-later, KairoX86 links the shared RetroArch Slang shader runtime, which uses librashader under its GPL-3.0-only option and includes Rust crates licensed only under Apache-2.0, and the combined app is distributed under GPLv3 terms, as the other Kairo apps are.
