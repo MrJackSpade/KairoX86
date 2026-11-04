@@ -6,6 +6,7 @@ import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
 import android.provider.DocumentsContract.Document
 import android.system.Os
+import com.mrjackspade.kairo.frontend.DiskArchive
 import com.mrjackspade.kairo.frontend.DocumentTreeWalker
 import com.mrjackspade.kairo.frontend.GameKey
 import com.mrjackspade.kairo.frontend.LibraryItem
@@ -30,24 +31,31 @@ import java.util.concurrent.atomic.AtomicBoolean
  * With [disk], a disk image a drive takes while a machine runs (the Disks page, KairoX86#48): one of
  * the running machine's folder ([uri] its file in the session folder) or one picked on the device
  * ([uri] its document), or one the library scan found in the games folder ([X86Library.disks], [uri]
- * its document). The library lists machines only.
+ * its document). A disk image inside a ZIP or 7z archive ([zipEntry], KairoX86#217) has the archive
+ * as its [uri] and [path]; a drive takes it once it is unpacked into the running machine's folder
+ * ([X86Library.Session.unpack]). The scan also keeps an entry for each archive itself, which no drive
+ * takes, so an archive it has read is not read again. The library lists machines only.
  */
 data class X86Entry(
     override val id: String,
-    /** The 86box.cfg document. */
+    /** The 86box.cfg document; for a disk, its document, or its archive's. */
     override val uri: String,
-    /** The folder's path in the games folder ("" for the games folder itself). */
+    /** The folder's path in the games folder ("" for the games folder itself); for a disk, its file's, or its archive's. */
     override val path: String,
+    /** The document's size and modification time; for a disk in an archive, the archive's. */
     val size: Long,
     val modified: Long,
     override val contentId: String?,
     override val error: String? = null,
     override val catalogId: String? = contentId,
     override val member: String? = null,
-    val disk: Boolean = false
-) : LibraryItem {
+    val disk: Boolean = false,
+    /** The disk image's path inside its archive, or null for any other entry. */
     override val zipEntry: String? = null
-    override val displayName: String get() = path.substringAfterLast('/').ifEmpty { "86Box" }
+) : LibraryItem {
+    /** The disk image's own file name, by which a drive takes it: its member's in an archive. */
+    val diskName: String get() = zipEntry ?: path
+    override val displayName: String get() = (zipEntry ?: path).substringAfterLast('/').ifEmpty { "86Box" }
     override val playable: Boolean get() = contentId != null && error == null
     override val mediaLabel: UiText get() = UiText.res(if (disk) R.string.media_disk else R.string.media_machine)
 }
@@ -61,25 +69,30 @@ data class X86Entry(
 class X86Library(private val context: Context) {
     private val walker = DocumentTreeWalker(context)
     // Version 2 keeps the games folder's disk images beside the machines (KairoX86#209); version 3
-    // each machine's first catalog ID (KairoX86#213).
-    private val cache = VersionedLibraryCache(File(context.filesDir, "library-v1.bin"), 3, 8 * 1024 * 1024, 100_000,
-        ::writeEntry, ::readEntry)
+    // each machine's first catalog ID (KairoX86#213); version 4 the disk images inside archives (KairoX86#217).
+    private val cache = VersionedLibraryCache(File(context.filesDir, "library-v1.bin"), 4, 8 * 1024 * 1024, 100_000,
+        ::writeEntry, ::readEntry, earlierRecords = mapOf(3 to ::readEntryV3))
     private val pipeline = LibraryScanPipeline<DocumentTreeWalker.FileEntry, X86Entry>(context, cache,
         entryId = { it.id },
         enumerate = { tree, depth, cancelled, progress ->
-            // The walk finds the disk images too, unread: a drive's Other choice (KairoX86#209).
-            val (configs, images) = walker.scan(tree, cancelled, { it.equals(CONFIG, ignoreCase = true) || diskKind(it) != null },
-                progress, depth = depth).files.partition { it.path.substringAfterLast('/').equals(CONFIG, ignoreCase = true) }
-            LibraryScanPipeline.Plan(configs, finalEntries = images.map { file ->
+            // The walk finds the disk images too, unread: a drive's Other choice (KairoX86#209). An
+            // archive is read for the images in it (KairoX86#217).
+            val files = walker.scan(tree, cancelled, { isConfig(it) || diskKind(it) != null || DiskArchive.isArchive(it) },
+                progress, depth = depth).files
+            val (images, work) = files.partition { diskKind(it.path) != null }
+            LibraryScanPipeline.Plan(work, finalEntries = images.map { file ->
                 X86Entry(file.path, file.uri.toString(), file.path, file.size, file.modified, DISK, disk = true)
             })
         },
-        inspect = { file, scan -> listOf(inspect(file, scan)) },
+        inspect = { file, scan -> if (isConfig(file.path)) listOf(inspect(file, scan)) else inspectArchive(file, scan) },
         failed = { file, scan, error ->
-            listOf(entryOf(file, null, error.message ?: "Unreadable", scan.earlier[folderOf(file.path)]?.catalogId))
+            val message = error.message ?: "Unreadable"
+            if (isConfig(file.path)) listOf(entryOf(file, null, message, scan.earlier[folderOf(file.path)]?.catalogId))
+            else listOf(archiveOf(file, message))
         },
         describe = { it.path },
-        known = { file, scan -> scan.prior[folderOf(file.path)]?.let { it.size == file.size && it.modified == file.modified } == true },
+        known = { file, scan -> if (isConfig(file.path)) scan.prior[folderOf(file.path)]?.let { it.size == file.size && it.modified == file.modified } == true
+            else knownArchive(file, scan) != null },
         sourceOf = { it.uri },
         displayOrder = { entries -> entries.sortedBy { it.displayName.lowercase() } })
 
@@ -99,7 +112,8 @@ class X86Library(private val context: Context) {
 
     private fun machinesOf(tree: Uri, entries: List<X86Entry>): List<X86Entry> {
         val (images, machines) = entries.partition { it.disk }
-        folderDisks = FolderDisks(tree.toString(), images.sortedBy { it.path.lowercase() })
+        // By path, an archive's images by theirs in it.
+        folderDisks = FolderDisks(tree.toString(), images.sortedBy { it.id.lowercase() })
         return machines
     }
 
@@ -119,6 +133,35 @@ class X86Library(private val context: Context) {
 
     private fun entryOf(file: DocumentTreeWalker.FileEntry, contentId: String?, error: String?, catalogId: String? = contentId) =
         X86Entry(folderOf(file.path), file.uri.toString(), folderOf(file.path), file.size, file.modified, contentId, error, catalogId)
+
+    /**
+     * The archive [file]'s entries (KairoX86#217): its own, which no drive takes, then one for each
+     * disk image in it. The images are listed, not read: a drive's disk is unpacked when it is chosen.
+     */
+    private fun inspectArchive(file: DocumentTreeWalker.FileEntry, scan: LibraryScanPipeline.ScanContext<X86Entry>): List<X86Entry> {
+        if (!scan.forceHash) knownArchive(file, scan)?.let { return it }
+        scan.hashStarted(file.path)
+        return listOf(archiveOf(file, null)) + archiveDisks(file.uri, file.path, file.size, file.modified) { member -> GameKey.inArchive(file.path, member).path }
+    }
+
+    /** What the last scan found in the archive [file], when it is the same document still; else null. */
+    private fun knownArchive(file: DocumentTreeWalker.FileEntry, scan: LibraryScanPipeline.ScanContext<X86Entry>): List<X86Entry>? =
+        scan.priorFrom(file.uri.toString()).takeIf { found ->
+            found.any { it.id == file.path && it.zipEntry == null && it.error == null } &&
+                found.all { it.size == file.size && it.modified == file.modified }
+        }
+
+    /** The archive [file]'s own entry, failed with [error] when it could not be read. */
+    private fun archiveOf(file: DocumentTreeWalker.FileEntry, error: String?) =
+        X86Entry(file.path, file.uri.toString(), file.path, file.size, file.modified, DISK, error, disk = true)
+
+    /** The disk images a drive takes in the archive [name] at [uri], each keyed by [key] of its path in it. */
+    private fun archiveDisks(uri: Uri, name: String, size: Long, modified: Long, key: (String) -> String): List<X86Entry> =
+        DiskArchive.open(context, uri, name, size).use { archive ->
+            archive.members.filter { diskKind(DiskArchive.safeName(it.name)) != null }.map { member ->
+                X86Entry(key(member.name), uri.toString(), name, size, modified, DISK, disk = true, zipEntry = member.name)
+            }
+        }
 
     /**
      * Prepares [entry]'s session folder from its folder in [tree] and returns the session, whose
@@ -168,6 +211,84 @@ class X86Library(private val context: Context) {
     }
 
     /**
+     * Where in its machine's folder the disk [entry] inside an archive is unpacked to (KairoX86#217):
+     * in a folder named after the archive with its kind ("Game (zip)" for Game.zip), at its path in
+     * the archive. The kind keeps a ZIP's and a 7z's of one name apart, and the folder's name is never
+     * the archive's own, which may be beside it.
+     */
+    fun unpackedPath(entry: X86Entry): String {
+        val member = DiskArchive.safeName(checkNotNull(entry.zipEntry) { "${entry.displayName} is in no archive" })
+        val archive = entry.path.substringAfterLast('/')
+        val kind = archive.substringAfterLast('.').lowercase()
+        return "${archive.substringBeforeLast('.')} ($kind)/$member"
+    }
+
+    /**
+     * Unpacks the disk [entry] inside an archive into the folder [folder] of [tree] at
+     * [unpackedPath], checked against the archive's size and CRC-32, through a partial file renamed
+     * when it is whole; returns the disk's document. One unpacked before is kept, not replaced.
+     */
+    fun unpackInto(tree: Uri, folder: String, entry: X86Entry, cancelled: AtomicBoolean, progress: (String) -> Unit): Uri {
+        val relative = unpackedPath(entry)
+        var parent = folder
+        for (name in relative.split('/').dropLast(1)) {
+            val existing = children(tree, parent).firstOrNull { it.name == name }
+            check(existing == null || existing.folder) { context.getString(R.string.machine_create_failed, relative) }
+            parent = existing?.id ?: created(DocumentsContract.createDocument(context.contentResolver,
+                DocumentsContract.buildDocumentUriUsingTree(tree, parent), Document.MIME_TYPE_DIR, name), name)
+                .let(DocumentsContract::getDocumentId)
+        }
+        val name = relative.substringAfterLast('/')
+        children(tree, parent).firstOrNull { it.name == name }?.let { done ->
+            check(!done.folder) { context.getString(R.string.machine_create_failed, relative) }
+            return DocumentsContract.buildDocumentUriUsingTree(tree, done.id)
+        }
+        progress(context.getString(FrontendR.string.kairo_disk_preparing, entry.displayName))
+        // A partial file a crash left goes first: the new one would get another name.
+        children(tree, parent).filter { it.name == "$name.part" && !it.folder }.forEach { stale ->
+            check(DocumentsContract.deleteDocument(context.contentResolver, DocumentsContract.buildDocumentUriUsingTree(tree, stale.id))) {
+                context.getString(R.string.machine_delete_failed, stale.name)
+            }
+        }
+        val partial = created(DocumentsContract.createDocument(context.contentResolver, DocumentsContract.buildDocumentUriUsingTree(tree, parent),
+            "application/octet-stream", "$name.part"), "$name.part")
+        return try {
+            DiskArchive.open(context, Uri.parse(entry.uri), entry.path, entry.size).use { archive ->
+                val member = archive.members.firstOrNull { it.name == entry.zipEntry }
+                    ?: error(context.getString(FrontendR.string.kairo_disk_member_missing, entry.zipEntry))
+                checkNotNull(context.contentResolver.openOutputStream(partial, "wt")) { context.getString(R.string.machine_write_failed, name) }
+                    .use { output ->
+                        archive.copy(member, output) {
+                            if (cancelled.get()) throw java.util.concurrent.CancellationException("Cancelled")
+                        }
+                    }
+            }
+            created(DocumentsContract.renameDocument(context.contentResolver, partial, name), name)
+        } catch (failure: Exception) {
+            // The partial file goes; the failure that stopped the unpacking is the one reported.
+            try {
+                DocumentsContract.deleteDocument(context.contentResolver, partial)
+            } catch (cleanup: Exception) {
+                failure.addSuppressed(cleanup)
+            }
+            throw failure
+        }
+    }
+
+    /**
+     * The document [uri] a provider made as [name], failing when it made none or gave it another
+     * name, as a provider does for a name that is taken ("Game (1)").
+     */
+    private fun created(uri: Uri?, name: String): Uri {
+        checkNotNull(uri) { context.getString(R.string.machine_create_failed, name) }
+        val made = checkNotNull(context.contentResolver.query(uri, arrayOf(Document.COLUMN_DISPLAY_NAME), null, null, null)) {
+            context.getString(R.string.machine_create_failed, name)
+        }.use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
+        check(made == name) { context.getString(R.string.machine_create_failed, name) }
+        return uri
+    }
+
+    /**
      * A machine's session: its folder in the games folder ([folder]), the session folder 86Box runs
      * ([dir]), and the files of the folder held open for it.
      */
@@ -211,6 +332,27 @@ class X86Library(private val context: Context) {
             open += descriptor
             Os.symlink("/proc/self/fd/${descriptor.fd}", file.path)
             return file
+        }
+
+        /** The file of this session folder the disk [entry] inside an archive is unpacked to ([unpackedPath]). */
+        fun unpacked(entry: X86Entry): File = File(dir, unpackedPath(entry))
+
+        /**
+         * Makes the disk [entry] inside an archive one of this machine's own (KairoX86#217): unpacked,
+         * the first time it is chosen, into the machine's folder ([unpackInto]), and linked into this
+         * session as the folder's other files are. From then on that file is the disk: 86Box writes
+         * to it in place, and the archive is left as it was. Returns the session file.
+         */
+        fun unpack(entry: X86Entry, cancelled: AtomicBoolean, progress: (String) -> Unit): File {
+            val target = unpacked(entry)
+            if (target.exists()) return target
+            val relative = unpackedPath(entry)
+            check(target.parentFile!!.isDirectory || target.parentFile!!.mkdirs()) { context.getString(R.string.machine_create_failed, relative) }
+            val document = unpackInto(tree, folder, entry, cancelled, progress)
+            val descriptor = checkNotNull(context.contentResolver.openFileDescriptor(document, "rw")) { context.getString(R.string.machine_open_failed, relative) }
+            open += descriptor
+            Os.symlink("/proc/self/fd/${descriptor.fd}", target.path)
+            return target
         }
 
         /** Copies the small files 86Box rewrites and links every other file, in [source]'s folder at [relative]. */
@@ -293,6 +435,64 @@ class X86Library(private val context: Context) {
             }
     }
 
+    /**
+     * Makes [disk] [machine]'s first hard disk, or leaves it none for null (KairoX86#217); returns
+     * the 86box.cfg changes, which are made. A disk in an archive is unpacked into the machine's
+     * folder first ([unpackInto]); one already in the folder is used where it is. Its geometry is the
+     * one the image names (X86HardDisk), and the drive keeps the bus and channel it had, an IDE
+     * drive on the first channel for a machine with none. 86Box takes the change when the machine
+     * next starts.
+     */
+    fun setHardDisk(machine: X86Entry, tree: Uri, disk: X86Entry?, cancelled: AtomicBoolean, progress: (String) -> Unit): List<X86Settings.Change> {
+        val config = config(machine, tree)
+        val changes = if (disk == null) listOf(X86Settings.Change(HARD_DISKS, "hdd_01_fn", null),
+            X86Settings.Change(HARD_DISKS, "hdd_01_parameters", null), X86Settings.Change(HARD_DISKS, "hdd_01_ide_channel", null))
+        else {
+            val folder = findFolder(tree, machine.path)
+            val (relative, document) = if (disk.zipEntry != null) {
+                    val unpacked = unpackedPath(disk)
+                    val uri = unpackInto(tree, folder, disk, cancelled, progress)
+                    remember(tree, machine, unpacked, uri)
+                    unpacked to uri
+                } else {
+                    val prefix = if (machine.path.isEmpty()) "" else "${machine.path}/"
+                    require(disk.path.startsWith(prefix)) { "${disk.path} is not in ${machine.displayName}'s folder" }
+                    disk.path.removePrefix(prefix) to Uri.parse(disk.uri)
+                }
+            val geometry = checkNotNull(context.contentResolver.openFileDescriptor(document, "r")) { context.getString(R.string.machine_open_failed, relative) }
+                .use { descriptor ->
+                    val channel = java.io.FileInputStream(descriptor.fileDescriptor).channel
+                    X86HardDisk.geometry(relative, descriptor.statSize) { offset, length ->
+                        val buffer = java.nio.ByteBuffer.allocate(length)
+                        while (buffer.hasRemaining()) check(channel.read(buffer, offset + buffer.position()) > 0) { context.getString(R.string.machine_open_failed, relative) }
+                        buffer.array()
+                    }
+                }
+            // The drive's write protection and bus, as 86box.cfg had them.
+            val had = config[HARD_DISKS, "hdd_01_parameters"]?.split(',')?.map { it.trim() }
+            val bus = had?.getOrNull(4) ?: "ide"
+            listOf(X86Settings.Change(HARD_DISKS, "hdd_01_fn", relative),
+                X86Settings.Change(HARD_DISKS, "hdd_01_parameters",
+                    "${geometry.sectors}, ${geometry.heads}, ${geometry.cylinders}, ${had?.getOrNull(3) ?: "0"}, $bus")) +
+                listOfNotNull(X86Settings.Change(HARD_DISKS, "hdd_01_ide_channel", "0:0")
+                    .takeIf { bus == "ide" && config[HARD_DISKS, "hdd_01_ide_channel"] == null })
+        }
+        change(machine, tree, changes)
+        return changes
+    }
+
+    /**
+     * Adds the disk unpacked to [relative] in [machine]'s folder to the disks the last scan found, so
+     * the machine's own disks list it before the next scan does.
+     */
+    private fun remember(tree: Uri, machine: X86Entry, relative: String, uri: Uri) {
+        val path = if (machine.path.isEmpty()) relative else "${machine.path}/$relative"
+        val found = disks(tree)
+        if (found.any { it.id == path }) return
+        folderDisks = FolderDisks(tree.toString(),
+            (found + X86Entry(path, uri.toString(), path, -1, 0, DISK, disk = true)).sortedBy { it.id.lowercase() })
+    }
+
     /** The machine folder's 86box.cfg (Kairo#142), as it is now. */
     fun config(entry: X86Entry, tree: Uri): IniText = IniText(readConfig(tree, entry))
 
@@ -322,6 +522,15 @@ class X86Library(private val context: Context) {
         return X86Entry("disk-picked:$uri", uri.toString(), name, size, modified, DISK, disk = true)
     }
 
+    /**
+     * The disk images a drive takes in an archive picked on the device (KairoX86#217); one chosen is
+     * unpacked into the running machine's folder, as one the library found is.
+     */
+    fun pickedArchive(uri: Uri, name: String, size: Long, modified: Long): List<X86Entry> =
+        archiveDisks(uri, name, size, modified) { member -> "disk-picked:$uri/$member" }.also { disks ->
+            require(disks.isNotEmpty()) { context.getString(FrontendR.string.kairo_disk_no_image_in, "IBM PC", name) }
+        }
+
     private fun writeEntry(output: DataOutputStream, entry: X86Entry) {
         output.writeUTF(entry.id)
         output.writeUTF(entry.uri)
@@ -332,9 +541,14 @@ class X86Library(private val context: Context) {
         output.writeUTF(entry.error ?: "")
         output.writeBoolean(entry.disk)
         output.writeUTF(entry.catalogId ?: "")
+        output.writeUTF(entry.zipEntry ?: "")
     }
 
-    private fun readEntry(input: DataInputStream): X86Entry {
+    private fun readEntry(input: DataInputStream): X86Entry =
+        readEntryV3(input).copy(zipEntry = input.readUTF().ifEmpty { null })
+
+    /** A record of version 3, before disks inside archives. */
+    private fun readEntryV3(input: DataInputStream): X86Entry {
         val id = input.readUTF()
         val uri = input.readUTF()
         val path = input.readUTF()
@@ -347,12 +561,14 @@ class X86Library(private val context: Context) {
         return X86Entry(id, uri, path, size, modified, contentId, error, catalogId, disk = disk)
     }
 
-    /** A drive's kind of disk image. */
-    enum class DiskKind { FLOPPY, CD }
+    /** A drive's kind of disk image; a hard disk goes in when the machine starts (KairoX86#217). */
+    enum class DiskKind { FLOPPY, CD, HARD_DISK }
 
     companion object {
         const val CONFIG = "86box.cfg"
         const val NVR = "nvr"
+        /** The 86box.cfg section of the hard disks. */
+        const val HARD_DISKS = "Hard disks"
         /** A disk entry's content ID: disks are no games of the catalog. */
         private const val DISK = "disk"
 
@@ -364,6 +580,7 @@ class X86Library(private val context: Context) {
         fun diskKind(name: String): DiskKind? = when (name.substringAfterLast('.', "").lowercase()) {
             in FLOPPY_IMAGES -> DiskKind.FLOPPY
             in CD_IMAGES -> DiskKind.CD
+            in X86HardDisk.IMAGES -> DiskKind.HARD_DISK
             else -> null
         }
 
@@ -402,6 +619,9 @@ class X86Library(private val context: Context) {
 
         /** The folder of the 86box.cfg at [path]. */
         fun folderOf(path: String) = path.substringBeforeLast('/', "")
+
+        /** Whether the file at [path] is a machine's 86box.cfg. */
+        private fun isConfig(path: String) = path.substringAfterLast('/').equals(CONFIG, ignoreCase = true)
 
         /** The files 86Box rewrites, copied into the session and back: its configuration and CMOS. */
         private fun copied(path: String) = path.equals(CONFIG, ignoreCase = true) || path.startsWith("$NVR/")
