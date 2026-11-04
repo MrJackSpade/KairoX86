@@ -87,8 +87,10 @@ class MainActivity : MachineActivity<X86Entry>() {
             val chosen = configStore.read(entry, setting.option) ?: setting.option.default(values)
             // A card the machine does not take has no rows: the player is asked for another (askUnfit).
             val card = takes.cards.getValue(kind).firstOrNull { it.id == chosen }
-            card?.takeIf { it.options.isNotEmpty() }?.let {
-                RowGroup(it.name.uppercase(), it.options.map { option -> machineChoiceRow(entry, X86Settings.cardOption(it, option), enabled) })
+                ?.takeIf { it.id != "none" && it.id != "internal" } ?: return@mapNotNull null
+            val own = X86Hardware.options(kind, card.id)
+            own.options.takeIf { it.isNotEmpty() }?.let { options ->
+                RowGroup(card.name.uppercase(), options.map { option -> machineChoiceRow(entry, X86Settings.cardOption(own.section, option), enabled) })
             }
         }
     }

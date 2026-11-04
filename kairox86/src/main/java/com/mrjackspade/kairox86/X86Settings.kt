@@ -128,9 +128,9 @@ object X86Settings {
     /** A card option's ID: "card:<key>:<section>" (a key has no colon; a section may have any). */
     private const val CARD_OPTION = "card:"
 
-    /** [option] of [card] as a setting (KairoX86#201), with 86Box's own choices and default. */
-    fun cardOption(card: X86Hardware.Card, option: X86Hardware.CardOption) =
-        MachineOption("$CARD_OPTION${option.key}:${card.section}", UiText.fixed(option.label), option.choices.map { choice ->
+    /** [option], kept in [section] of 86box.cfg, as a setting (KairoX86#201), with 86Box's own choices and default. */
+    fun cardOption(section: String, option: X86Hardware.CardOption) =
+        MachineOption("$CARD_OPTION${option.key}:$section", UiText.fixed(option.label), option.choices.map { choice ->
             val label = if (!option.binary) UiText.fixed(choice.label)
                 else UiText.res(if (choice.value == "1") FrontendR.string.kairo_on else FrontendR.string.kairo_off)
             ChoiceOption(choice.value, label, null, firmwareMissing.takeIf { !choice.available })

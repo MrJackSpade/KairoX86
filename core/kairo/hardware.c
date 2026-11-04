@@ -245,19 +245,40 @@ put_cards(const struct kind *kind, int m)
         put_string(id);
         put(",\"name\":");
         put_string(device ? device->name : id);
-        put(",\"available\":%s,\"section\":", kind->available(card) ? "true" : "false");
-        /* The section 86Box reads the card's options from (device.c: the name, " #<instance>" when not 0). */
-        char section[256];
-        if (device && kind->instance)
-            snprintf(section, sizeof(section), "%s #%i", device->name, kind->instance);
-        else
-            snprintf(section, sizeof(section), "%s", device ? device->name : id);
-        put_string(section);
-        put(",\"options\":");
-        put_options(device);
-        put("}");
+        put(",\"available\":%s}", kind->available(card) ? "true" : "false");
     }
     put("]");
+}
+
+/* Card [id] of [kind]'s options (KairoX86#201): the section of 86box.cfg 86Box reads them from
+   (device.c: the device's name, " #<instance>" when the instance is not 0) and the options
+   themselves. Its own query, for the chosen cards only: every card's options in the machine
+   query made it too large to read on the app's main thread (KairoX86#202). */
+static bool
+put_card_options(const char *kind_name, const char *id)
+{
+    for (size_t k = 0; k < sizeof(kinds) / sizeof(kinds[0]); k++) {
+        if (strcmp(kinds[k].name, kind_name))
+            continue;
+        for (int card = 0; kinds[k].internal_name(card) && kinds[k].internal_name(card)[0]; card++) {
+            if (strcmp(kinds[k].internal_name(card), id))
+                continue;
+            const device_t *device = kinds[k].device(card);
+            char            section[256];
+            if (device && kinds[k].instance)
+                snprintf(section, sizeof(section), "%s #%i", device->name, kinds[k].instance);
+            else
+                snprintf(section, sizeof(section), "%s", device ? device->name : id);
+            put("{\"section\":");
+            put_string(section);
+            put(",\"options\":");
+            put_options(device);
+            put("}");
+            return true;
+        }
+        return false;
+    }
+    return false;
 }
 
 /* Every machine: its internal name, name, type and whether its firmware is there. */
@@ -373,6 +394,16 @@ hardware_query(const char *rom_folder, const char *query)
         if (m < 0)
             return NULL;
         put_machine(m);
+    } else if (!strncmp(query, "options ", 8)) {
+        /* "options <kind> <card id>" */
+        const char *kind = query + 8;
+        const char *id   = strchr(kind, ' ');
+        if (id == NULL)
+            return NULL;
+        char kind_name[32];
+        snprintf(kind_name, sizeof(kind_name), "%.*s", (int) (id - kind), kind);
+        if (!put_card_options(kind_name, id + 1))
+            return NULL;
     } else
         return NULL;
     return text;
