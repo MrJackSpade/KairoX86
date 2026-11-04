@@ -29,7 +29,8 @@ import java.util.concurrent.atomic.AtomicBoolean
  *
  * With [disk], a disk image a drive takes while a machine runs (the Disks page, KairoX86#48): one of
  * the running machine's folder ([uri] its file in the session folder) or one picked on the device
- * ([uri] its document). The library lists machines only.
+ * ([uri] its document), or one the library scan found in the games folder ([X86Library.disks], [uri]
+ * its document). The library lists machines only.
  */
 data class X86Entry(
     override val id: String,
@@ -59,13 +60,18 @@ data class X86Entry(
  */
 class X86Library(private val context: Context) {
     private val walker = DocumentTreeWalker(context)
-    private val cache = VersionedLibraryCache(File(context.filesDir, "library-v1.bin"), 1, 8 * 1024 * 1024, 100_000,
+    // Version 2 keeps the games folder's disk images beside the machines (KairoX86#209).
+    private val cache = VersionedLibraryCache(File(context.filesDir, "library-v1.bin"), 2, 8 * 1024 * 1024, 100_000,
         ::writeEntry, ::readEntry)
     private val pipeline = LibraryScanPipeline<DocumentTreeWalker.FileEntry, X86Entry>(context, cache,
         entryId = { it.id },
         enumerate = { tree, depth, cancelled, progress ->
-            LibraryScanPipeline.Plan(walker.scan(tree, cancelled, { it.equals(CONFIG, ignoreCase = true) }, progress,
-                depth = depth).files)
+            // The walk finds the disk images too, unread: a drive's Other choice (KairoX86#209).
+            val (configs, images) = walker.scan(tree, cancelled, { it.equals(CONFIG, ignoreCase = true) || diskKind(it) != null },
+                progress, depth = depth).files.partition { it.path.substringAfterLast('/').equals(CONFIG, ignoreCase = true) }
+            LibraryScanPipeline.Plan(configs, finalEntries = images.map { file ->
+                X86Entry(file.path, file.uri.toString(), file.path, file.size, file.modified, DISK, disk = true)
+            })
         },
         inspect = { file, scan -> listOf(inspect(file, scan)) },
         failed = { file, _, error -> listOf(entryOf(file, null, error.message ?: "Unreadable")) },
@@ -75,10 +81,24 @@ class X86Library(private val context: Context) {
         displayOrder = { entries -> entries.sortedBy { it.displayName.lowercase() } })
 
     val hashCount: Int get() = pipeline.hashCount
-    fun cached(tree: Uri): List<X86Entry> = pipeline.cached(tree)
+    fun cached(tree: Uri): List<X86Entry> = machinesOf(tree, pipeline.cached(tree))
     fun scan(tree: Uri, depth: ScanDepth, cancelled: AtomicBoolean, progress: (String) -> Unit): List<X86Entry> =
-        pipeline.scan(tree, depth, cancelled, progress)
-    fun store(tree: Uri, entries: List<X86Entry>) = pipeline.store(tree, entries)
+        machinesOf(tree, pipeline.scan(tree, depth, cancelled, progress))
+    /** Saves the library's machines, with the disk images the last scan found. */
+    fun store(tree: Uri, entries: List<X86Entry>) = pipeline.store(tree, entries.filterNot { it.disk } + disks(tree))
+
+    /** The games folder [tree] and the disk images its last scan found there, in path order. */
+    private class FolderDisks(val tree: String, val disks: List<X86Entry>)
+    @Volatile private var folderDisks: FolderDisks? = null
+
+    /** Every disk image the library scan found in [tree] (KairoX86#209); empty until it is read or scanned. */
+    fun disks(tree: Uri): List<X86Entry> = folderDisks?.takeIf { it.tree == tree.toString() }?.disks.orEmpty()
+
+    private fun machinesOf(tree: Uri, entries: List<X86Entry>): List<X86Entry> {
+        val (images, machines) = entries.partition { it.disk }
+        folderDisks = FolderDisks(tree.toString(), images.sortedBy { it.path.lowercase() })
+        return machines
+    }
 
     private fun inspect(file: DocumentTreeWalker.FileEntry, scan: LibraryScanPipeline.ScanContext<X86Entry>): X86Entry {
         scan.prior[folderOf(file.path)]?.let { prior ->
@@ -162,7 +182,8 @@ class X86Library(private val context: Context) {
         fun disks(): List<X86Entry> = dir.walkTopDown().filter { it.isFile && diskKind(it.name) != null }
             .map { file ->
                 val path = file.relativeTo(dir).invariantSeparatorsPath
-                X86Entry("disk:$path", file.absolutePath, path, 0, 0, DISK, disk = true)
+                // Keyed by its path in the games folder, as the scan keys the same image (otherDisks).
+                X86Entry(if (entryId.isEmpty()) path else "$entryId/$path", file.absolutePath, path, 0, 0, DISK, disk = true)
             }.sortedBy { it.path.lowercase() }.toList()
 
         /** The machine's disk the session folder's [path] is, as a drive reports it; null for any other. */
@@ -285,10 +306,12 @@ class X86Library(private val context: Context) {
         output.writeLong(entry.modified)
         output.writeUTF(entry.contentId ?: "")
         output.writeUTF(entry.error ?: "")
+        output.writeBoolean(entry.disk)
     }
 
     private fun readEntry(input: DataInputStream) = X86Entry(input.readUTF(), input.readUTF(), input.readUTF(),
-        input.readLong(), input.readLong(), input.readUTF().ifEmpty { null }, input.readUTF().ifEmpty { null })
+        input.readLong(), input.readLong(), input.readUTF().ifEmpty { null }, input.readUTF().ifEmpty { null },
+        disk = input.readBoolean())
 
     /** A drive's kind of disk image. */
     enum class DiskKind { FLOPPY, CD }

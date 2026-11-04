@@ -156,6 +156,17 @@ class MainActivity : MachineActivity<X86Entry>() {
     override fun ownDisks(current: X86Entry, takes: (X86Entry) -> Boolean): List<X86Entry> =
         ((session?.disks() ?: emptyList()) + mountedMedia().filterNotNull()).distinctBy { it.id }.filter(takes)
 
+    /**
+     * Every disk image of the games folder, as the library scan found it: other machines' disks and
+     * loose images, and the running machine's own as its session files, so they go in as its own
+     * do (KairoX86#209).
+     */
+    override fun otherDisks(current: X86Entry, takes: (X86Entry) -> Boolean): List<X86Entry> {
+        val folder = checkNotNull(tree) { "A machine runs with no games folder" }
+        val own = session?.disks().orEmpty().associateBy { it.id }
+        return machines.disks(folder).map { own[it.id] ?: it }.filter(takes)
+    }
+
     private val machines by lazy { X86Library(this) }
     override fun createCatalog() = LayeredGameCatalog(this, X86Catalog)
     override fun createLibrary(catalog: LayeredGameCatalog): MachineLibrary<X86Entry> = Library()
@@ -173,7 +184,7 @@ class MainActivity : MachineActivity<X86Entry>() {
         override fun prepareMedia(entry: X86Entry, cancelled: AtomicBoolean, progress: (String) -> Unit): File {
             val running = checkNotNull(session) { getString(R.string.machine_disk_no_machine) }
             // A disk of the machine's folder is its session file; one picked on the device gets a link.
-            return if (entry.id.startsWith("disk:")) File(entry.uri) else running.link(entry)
+            return if (running.disks().any { it.id == entry.id }) File(entry.uri) else running.link(entry)
         }
         override fun deleteSource(entry: X86Entry, entries: List<X86Entry>) = error(getString(R.string.machine_delete))
         override fun hasWorkingImage(entry: X86Entry) = false

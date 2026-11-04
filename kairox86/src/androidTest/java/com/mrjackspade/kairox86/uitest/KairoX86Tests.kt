@@ -41,8 +41,8 @@ object KairoX86App : AppUnderTest() {
     override val spaceKey = PcKey.SPACE.scanCode
     // 86Box saves no state of a running machine (KairoX86#187).
     override val hasStates = false
-    // The disks of the machine's own folder are the Disks page's choices (MainActivity.ownDisks).
-    override val mediaSwap = MediaSwap("dos486", "Floppy A", "freedos", filler = "img")
+    // dos486 starts with its own freedos.img in drive A; xt's floppy is on its Other page (MainActivity.otherDisks).
+    override val mediaSwap = MediaSwap("dos486", "Floppy A", "fd13", filler = "img")
 }
 
 // Every shared suite (KairoX86#87); no StateTests: 86Box saves no machine state (#187).
