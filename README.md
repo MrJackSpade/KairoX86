@@ -47,6 +47,7 @@ KairoX86 comes with [GLaBIOS](https://glabios.org/), a free BIOS for the IBM PC,
 ## Documentation
 
 - [Adding a game](docs/add-a-game.md): setting up a game as a machine, step by step
+- [Creating a new game on a blank disk](docs/create-a-game.md): a new PC, its blank hard disk, and installing DOS and games onto it
 - [Licensing and credits](docs/licensing.md): code license and third-party components
 - [Source provenance](docs/source-import.md): where the emulator source came from and what was copied
 - [Development](docs/development.md): building, host tests and generated code
