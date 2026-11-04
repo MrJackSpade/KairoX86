@@ -89,7 +89,7 @@ struct kind {
     const char *(*internal_name)(int card);
     const device_t *(*device)(int card);
     int (*available)(int card);
-    uintptr_t onboard; /* the machine flag that says the board has one ("internal") */
+    uintptr_t onboard; /* the machine flag that says the board has one ("internal"); ONBOARD_ALWAYS for every board */
     int instance;      /* the instance 86Box adds the first card as: its options' section is "<name> #<n>" (device.c) */
 };
 
@@ -113,6 +113,11 @@ mouse_device(int mouse)
     return mouse_get_device(mouse);
 }
 
+/* 86Box runs every board with its own floppy controller ("internal") when 86box.cfg names none
+   (config.c), and each board's init adds it then, whether or not the board has MACHINE_FDC
+   (KairoX86#204): "none" is a board without one. */
+#define ONBOARD_ALWAYS UINTPTR_MAX
+
 static const struct kind kinds[] = {
     /* The instances are those 86Box adds the first card of each kind with: video_reset, sound_card_init,
        network_init, hdc_init and scsi_card_init add slot i as i + 1; fdc_card_init and mouse_reset add
@@ -122,7 +127,7 @@ static const struct kind kinds[] = {
     { "network", network_card_get_internal_name,  network_card_getdevice, network_card_available, MACHINE_NIC,   1 },
     { "hdc",     hdc_get_internal_name,           hdc_get_device,         hdc_available,          MACHINE_HDC,   1 },
     { "scsi",    scsi_card_get_internal_name,     scsi_card_getdevice,    scsi_card_available,    0,             1 },
-    { "fdc",     fdc_card_get_internal_name,      fdc_card_getdevice,     fdc_card_available,     MACHINE_FDC,   0 },
+    { "fdc",     fdc_card_get_internal_name,      fdc_card_getdevice,     fdc_card_available,     ONBOARD_ALWAYS, 0 },
     { "mouse",   mouse_internal_name,             mouse_device,           mouse_available,        MACHINE_MOUSE, 0 },
 };
 
@@ -233,7 +238,7 @@ put_cards(const struct kind *kind, int m)
     for (int card = 0; kind->internal_name(card) && kind->internal_name(card)[0]; card++) {
         const char     *id     = kind->internal_name(card);
         const device_t *device = kind->device(card);
-        if (!strcmp(id, "internal") && !(kind->onboard && machine_has_flags(m, kind->onboard)))
+        if (!strcmp(id, "internal") && kind->onboard != ONBOARD_ALWAYS && !(kind->onboard && machine_has_flags(m, kind->onboard)))
             continue;
         /* A board whose video is its only video takes no other (86Box's config keeps it internal). */
         if ((kind->onboard == MACHINE_VIDEO) && machine_has_flags(m, MACHINE_VIDEO_ONLY) && strcmp(id, "internal"))
