@@ -14,7 +14,11 @@ import com.mrjackspade.kairo.frontend.UiText
  * - [DOS_486]: a 486DX2-66 on the ASUS PVI-486AP4, 16 MB, S3 Trio64V2/DX, Sound Blaster 16, PS/2
  *   mouse, IDE with a blank 504 MB hard disk and an ATAPI CD-ROM (FreeDOS 1.3's 1.44M installer).
  *   Its CMOS holds the disk as its BIOS's IDE HDD AUTO DETECTION found it (User Type, 1024/16/63)
- *   and boots A, then C: an installer floppy when one is in, the installed disk when none is.
+ *   and boots A, then C: an installer floppy when one is in, the installed disk when none is. Its
+ *   IDE HDD Block Mode is off (KairoX86#216): this BIOS's INT 13h writes a drive's control byte
+ *   before it checks the drive exists, and for drives 84h-87h that byte is ROM text, which sets the
+ *   no-retry flag that makes it send READ MULTIPLE as C0h. FreeDOS's FDISK asks for all eight
+ *   drives, and the drive rejects the C0h, so block mode breaks FreeDOS 1.3's installer.
  * - [WIN9X]: a Pentium MMX 233 on the ASUS TX97, 64 MB, S3 Trio64V2/DX, Sound Blaster 16, IDE with
  *   a blank 2 GB hard disk, which its BIOS detects at each start (LBA), and an ATAPI CD-ROM, its
  *   BIOS booting the CD first (Windows 98 SE Setup, started from a DOS floppy with the CD's driver).
