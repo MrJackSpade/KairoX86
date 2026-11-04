@@ -17,7 +17,7 @@ import com.mrjackspade.kairo.frontend.MachineActivity
 import com.mrjackspade.kairo.frontend.MachineFirstRun
 import com.mrjackspade.kairo.frontend.MachineLibrary
 import com.mrjackspade.kairo.frontend.MachineOption
-import com.mrjackspade.kairo.frontend.MachineStatus
+import com.mrjackspade.kairo.frontend.GuestKeyboardLayout
 import com.mrjackspade.kairo.frontend.GameMachineStore
 import com.mrjackspade.kairo.frontend.StartupCommands
 import com.mrjackspade.kairox86.X86Library.DiskKind
@@ -200,7 +200,6 @@ class MainActivity : MachineActivity<X86Entry>() {
         awaitRunning()
         Log.i("KairoMachine", "Started ${entry.displayName}: firmware ${firmwareReady - began} ms, " +
             "machine folder ${folderReady - firmwareReady} ms, emulator ${SystemClock.elapsedRealtime() - folderReady} ms")
-        followKeyboard()
         // What the machine's drives hold, from its 86box.cfg, as the Disks page shows it, with only
         // the drives it has (KairoX86#197).
         val drives = checkNotNull(bridge.mediaDrives()) { "The machine stopped before its drives were read" }
@@ -208,23 +207,11 @@ class MainActivity : MachineActivity<X86Entry>() {
     }
 
     /**
-     * The on-screen keyboard of the machine that runs, once its first frame names it (x86_core.cpp
+     * The on-screen keyboard of the machine that runs, as its first frame names it (x86_core.cpp
      * details, KairoX86#65): the legends of its keyboard model, JIS with its kana, Korean, Brazilian,
      * ISO, or the XT's and AT's fewer keys.
      */
-    private fun followKeyboard() {
-        while (true) {
-            val status = MachineStatus(bridge.status())
-            if (status.state == "Error") error(status.error)
-            val keyboard = status.core["keyboard"]
-            if (keyboard != null) {
-                val layout = X86Keys.layoutFor(keyboard)
-                runOnUiThread { useKeyboard(layout) }
-                return
-            }
-            Thread.sleep(20)
-        }
-    }
+    override val keyboardNamed: (String) -> GuestKeyboardLayout = X86Keys::layoutFor
 
     /**
      * The free firmware the app ships (assets/free-firmware: GLaBIOS, the character ROM), each file
