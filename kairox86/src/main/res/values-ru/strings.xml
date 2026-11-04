@@ -28,8 +28,8 @@
     <string name="machine_folder_missing">Папка %1$s пропала</string>
     <!-- EN: Another app can open a disk image, but KairoX86 runs machines: put the machine\'s folder in the games folder -->
     <string name="machine_external">Другое приложение может открыть образ диска, но KairoX86 запускает машины: положите папку машины в папку с играми</string>
-    <!-- EN: KairoX86 does not delete a machine\'s folder: remove it in a file manager -->
-    <string name="machine_delete">KairoX86 не удаляет папку машины: удалите её в файловом менеджере</string>
+    <!-- EN: Could not delete %1$s -->
+    <string name="machine_delete_failed">Не удалось удалить %1$s</string>
     <!-- EN: Another machine is still running -->
     <string name="machine_still_running">Другая машина ещё работает</string>
     <!-- EN: The machine\'s working folder could not be prepared -->

@@ -269,6 +269,23 @@ class X86Library(private val context: Context) {
         }
     }
 
+    /**
+     * Deletes [entry], the game being its folder (KairoX86#211): the folder goes, disks and all. A
+     * machine in the games folder itself loses only its 86box.cfg and nvr/, since that folder holds
+     * every other machine and disk too.
+     */
+    fun delete(entry: X86Entry, tree: Uri) {
+        val folder = findFolder(tree, entry.path)
+        val doomed = if (entry.path.isEmpty())
+            children(tree, folder).filter { it.name.equals(CONFIG, ignoreCase = true) || (it.folder && it.name == NVR) }
+                .map { it.id to it.name }
+        else listOf(folder to entry.path)
+        for ((id, name) in doomed)
+            check(DocumentsContract.deleteDocument(context.contentResolver, DocumentsContract.buildDocumentUriUsingTree(tree, id))) {
+                context.getString(R.string.machine_delete_failed, name)
+            }
+    }
+
     /** The machine folder's 86box.cfg (Kairo#142), as it is now. */
     fun config(entry: X86Entry, tree: Uri): IniText = IniText(readConfig(tree, entry))
 

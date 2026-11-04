@@ -28,8 +28,8 @@
     <string name="machine_folder_missing">Folder %1$s sudah tidak ada</string>
     <!-- EN: Another app can open a disk image, but KairoX86 runs machines: put the machine\'s folder in the games folder -->
     <string name="machine_external">Aplikasi lain dapat membuka image disk, tetapi KairoX86 menjalankan mesin: taruh folder mesin di folder game</string>
-    <!-- EN: KairoX86 does not delete a machine\'s folder: remove it in a file manager -->
-    <string name="machine_delete">KairoX86 tidak menghapus folder mesin: hapus folder itu di pengelola file</string>
+    <!-- EN: Could not delete %1$s -->
+    <string name="machine_delete_failed">Tidak dapat menghapus %1$s</string>
     <!-- EN: Another machine is still running -->
     <string name="machine_still_running">Mesin lain masih berjalan</string>
     <!-- EN: The machine\'s working folder could not be prepared -->

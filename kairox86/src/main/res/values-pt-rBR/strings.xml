@@ -28,8 +28,8 @@
     <string name="machine_folder_missing">A pasta %1$s sumiu</string>
     <!-- EN: Another app can open a disk image, but KairoX86 runs machines: put the machine\'s folder in the games folder -->
     <string name="machine_external">Outro app pode abrir uma imagem de disco, mas o KairoX86 executa máquinas: coloque a pasta da máquina na pasta de jogos</string>
-    <!-- EN: KairoX86 does not delete a machine\'s folder: remove it in a file manager -->
-    <string name="machine_delete">O KairoX86 não apaga a pasta de uma máquina: remova-a em um gerenciador de arquivos</string>
+    <!-- EN: Could not delete %1$s -->
+    <string name="machine_delete_failed">Não foi possível apagar %1$s</string>
     <!-- EN: Another machine is still running -->
     <string name="machine_still_running">Outra máquina ainda está em execução</string>
     <!-- EN: The machine\'s working folder could not be prepared -->

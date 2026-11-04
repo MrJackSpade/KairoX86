@@ -190,7 +190,7 @@ class MainActivity : MachineActivity<X86Entry>() {
             // A disk of the machine's folder is its session file; one picked on the device gets a link.
             return if (running.disks().any { it.id == entry.id }) File(entry.uri) else running.link(entry)
         }
-        override fun deleteSource(entry: X86Entry, entries: List<X86Entry>) = error(getString(R.string.machine_delete))
+        override fun deleteSource(entry: X86Entry, entries: List<X86Entry>) = machines.delete(entry, checkNotNull(tree) { "No games folder" })
         override fun hasWorkingImage(entry: X86Entry) = false
         override fun withMember(entry: X86Entry, member: String) = entry.copy(member = member)
         override fun resetWorkingImage(entry: X86Entry) = error("A machine runs in place, with no working copy")

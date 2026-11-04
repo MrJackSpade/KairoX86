@@ -28,8 +28,8 @@
     <string name="machine_folder_missing">Der Ordner %1$s fehlt</string>
     <!-- EN: Another app can open a disk image, but KairoX86 runs machines: put the machine\'s folder in the games folder -->
     <string name="machine_external">Eine andere App kann ein Disk-Image öffnen, aber KairoX86 führt Maschinen aus: Lege den Ordner der Maschine in den Spieleordner</string>
-    <!-- EN: KairoX86 does not delete a machine\'s folder: remove it in a file manager -->
-    <string name="machine_delete">KairoX86 löscht den Ordner einer Maschine nicht: Entferne ihn in einem Dateimanager</string>
+    <!-- EN: Could not delete %1$s -->
+    <string name="machine_delete_failed">%1$s konnte nicht gelöscht werden</string>
     <!-- EN: Another machine is still running -->
     <string name="machine_still_running">Eine andere Maschine läuft noch</string>
     <!-- EN: The machine\'s working folder could not be prepared -->

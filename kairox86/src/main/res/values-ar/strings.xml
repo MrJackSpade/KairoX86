@@ -28,8 +28,8 @@
     <string name="machine_folder_missing">المجلد %1$s لم يعد موجودًا</string>
     <!-- EN: Another app can open a disk image, but KairoX86 runs machines: put the machine\'s folder in the games folder -->
     <string name="machine_external">يمكن لتطبيق آخر فتح صورة قرص، لكن KairoX86 يشغّل الأجهزة: ضع مجلد الجهاز في مجلد الألعاب</string>
-    <!-- EN: KairoX86 does not delete a machine\'s folder: remove it in a file manager -->
-    <string name="machine_delete">لا يحذف KairoX86 مجلد الجهاز: احذفه من مدير الملفات</string>
+    <!-- EN: Could not delete %1$s -->
+    <string name="machine_delete_failed">تعذّر حذف %1$s</string>
     <!-- EN: Another machine is still running -->
     <string name="machine_still_running">لا يزال جهاز آخر قيد التشغيل</string>
     <!-- EN: The machine\'s working folder could not be prepared -->

@@ -21,7 +21,7 @@
     <!-- %1$s is the folder's path in the games folder. -->
     <string name="machine_folder_missing">The folder %1$s is gone</string>
     <string name="machine_external">Another app can open a disk image, but KairoX86 runs machines: put the machine\'s folder in the games folder</string>
-    <string name="machine_delete">KairoX86 does not delete a machine\'s folder: remove it in a file manager</string>
+    <string name="machine_delete_failed">Could not delete %1$s</string>
     <string name="machine_still_running">Another machine is still running</string>
     <string name="machine_session_failed">The machine\'s working folder could not be prepared</string>
     <string name="machine_list_failed">A folder of the games folder could not be read</string>
