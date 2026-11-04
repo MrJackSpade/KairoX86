@@ -19,7 +19,8 @@
 // Options:
 //   --warmup <n>    run n frames before measuring (script frames count from the start)
 //   --shots <n>     write the picture every n measured frames as <work dir>/frame-<frame>.bmp
-//   --hashes <file> write each frame's picture hash, sound hash and sound frames, warmup included
+//   --hashes <file> write each frame's picture hash, sound hash and sound frames, warmup included,
+//                   and last the guest's state at the end (registers, tsc and all RAM)
 //   --seed <n>      the repeatable run's seed (default 1, so two runs repeat; 0 runs as the app does)
 //   --runs <n>      run the machine n times in this process, each from a fresh copy, and fail unless
 //                   every run's hashes match the first's
@@ -314,6 +315,12 @@ int main(int argc, char **argv) {
         for (size_t slot = 0; slot < held.size(); ++slot) std::printf("media %zu: %s\n", slot, held[slot].c_str());
         // The lock keys' lamps at the end: bit 0 Caps Lock, 1 Num Lock, 2 Scroll Lock.
         std::printf("locks %d\n", machine->locks());
+        // The guest's state at the end (registers, control registers, tsc and all RAM): the hashes
+        // file's last line, so two builds that run the guest alike match there too.
+        char state[64];
+        std::snprintf(state, sizeof(state), "state %016llx", (unsigned long long) machine->state());
+        std::printf("%s\n", state);
+        lines[size_t(run)].push_back(state);
         machine->close();
     }
 

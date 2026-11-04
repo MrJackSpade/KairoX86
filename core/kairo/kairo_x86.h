@@ -143,6 +143,11 @@ struct KairoX86Api {
 	bool (*media_path)(int slot, char *path, int size);
 	/* Whether the machine has slot's drive (its 86box.cfg's floppy drive type, its CD-ROM drive). */
 	bool (*media_drive)(int slot);
+	/* The guest's state as one number, for the exactness standard (docs/development.md): FNV-1a over
+	 * the general registers, pc, flags, the six segments (selector, base, limit, access), CR0, CR2,
+	 * CR3, CR4, tsc and all of the board's RAM. Two cores that run a guest alike give the same number
+	 * at the same frame. Between frames only. */
+	uint64_t (*state)(void);
 
 	/* Resets the machine: a hard reset, as switching it off and on does. */
 	void (*reset)(void);

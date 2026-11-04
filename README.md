@@ -49,6 +49,7 @@ KairoX86 comes with [GLaBIOS](https://glabios.org/), a free BIOS for the IBM PC,
 - [Licensing and credits](docs/licensing.md): code license and third-party components
 - [Source provenance](docs/source-import.md): where the emulator source came from and what was copied
 - [Development](docs/development.md): building, host tests and generated code
+- [The core's speed record](docs/core-performance.md): what each core change gained, and the exactness standard every one passes
 
 ## Help and community
 

@@ -1,9 +1,9 @@
 """KairoX86's local changes to the third-party snapshots in third_party/, which
 shared/tools/local_patches.py applies and checks. docs/source-import.md describes each change.
 
-The KAIRO9X_* groups are the 86Box changes made for Kairo9X (Kairo9X/PERF-FINDINGS.md: the
-headless Android build and the exact speed fixes, each gated against the no-link reference);
-both apps use this one patched core (KairoX86#183)."""
+The KAIRO9X_* groups are the 86Box changes made in the Kairo9X proof of concept, where this core
+began (KairoX86#183): the headless Android build and the exact speed fixes of docs/core-performance.md,
+each gated against the no-link reference."""
 
 KAIRO9X_BUILD = [
     ('86box/CMakeLists.txt',
@@ -1070,7 +1070,7 @@ KAIROX86_LIBRARY = [
     ('86box/CMakeLists.txt',
      'if(NOT CMAKE_PROJECT_VERSION_PATCH)' + _NL + '    set(CMAKE_PROJECT_VERSION_PATCH 0)' + _NL,
      'if(NOT PROJECT_VERSION_PATCH)' + _NL + '    set(PROJECT_VERSION_PATCH 0)' + _NL),
-    # The recompiler's pool near the core's code (Kairo9X PERF-FINDINGS #47), which as a library
+    # The recompiler's pool near the core's code (docs/core-performance.md #47), which as a library
     # loaded among others is not the program: the nearest free place after or before the library,
     # within ADRP's 4 GiB, instead of one fixed address past it. The code generator takes BL/ADRP
     # only for what is in reach, so where the pool lands does not change the guest.
@@ -1108,7 +1108,7 @@ KAIROX86_LIBRARY = [
      + '        }' + _NL
      + '        if (pool == MAP_FAILED)' + _NL
      + '            fatal("plat_mmap: no room for the recompiler within 4 GiB of the program\\n");' + _NL),
-    # Kairo9X's 8bpp drawing thread (PERF-FINDINGS #42) ran until the process ended. A host that runs
+    # The 8bpp drawing thread (docs/core-performance.md #42) ran until the process ended. A host that runs
     # machine after machine in one process, unloading each one's copy of the core, must find no thread
     # of it left: svga_render_close (from video_close) drains the queue and joins the thread.
     ('86box/src/video/vid_svga_render.c',

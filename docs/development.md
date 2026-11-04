@@ -21,9 +21,9 @@ shared\tools\build.ps1 -Install <adb serial>
 
 ## The core
 
-`third_party/86box/` is 86Box at a pinned commit; `tools/patches.py` holds every local change, which `shared/tools/local_patches.py` applies to a fresh copy of the snapshot and checks (`--check`). The core is shared with Kairo9X (KairoX86#183): a change to it goes into `tools/patches.py` here, never into a copy of its own.
+`third_party/86box/` is 86Box at a pinned commit; `tools/patches.py` holds every local change, which `shared/tools/local_patches.py` applies to a fresh copy of the snapshot and checks (`--check`). A change to it goes into `tools/patches.py`, never into an edited copy of the snapshot.
 
-Every change to the core's code is exact or it does not go in: the guest state at a fixed emulated time must match the reference fingerprint bit for bit (Kairo9X `PERF-FINDINGS.md`, `poc/vm/ab.sh`).
+Every change to the core's code is exact or it does not go in. The standard is `tools/exact.ps1 -Device <serial>`: it builds the core of a base revision (HEAD by default) and of the working tree as the release build makes them, runs the standard's machines (`core/test/exact/machines.py`: the XT, its V20 version, an AT, a 386SX, the 486 and a Pentium on FreeDOS floppies, and Windows 98 booting on the 486 and the Pentium) under both on the RG DS, and fails unless every machine's `game_profile --hashes` match line for line: every frame's picture and sound, and the guest's state at the end (registers, control registers, tsc and all RAM). A change to the recompiler must also pass `tools/exact.ps1 -Device <serial> -Unlinked`, the core against itself with block linking off, the plain C dispatch loop. The FreeDOS machines come from the local test set (`roms/uitest`); the Windows 98 reference disks stay on the device in `/data/local/tmp/kx86/exact/ref/` (`win98-486`, `win98-pentium`: `base.vhd` and `nvr/`), and each run opens a new differencing disk over them. What each change gained, and what was tried and dropped, is in [the core's speed record](core-performance.md).
 
 ## Host tests
 

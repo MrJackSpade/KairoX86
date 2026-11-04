@@ -131,6 +131,7 @@ int X86Machine::locks() const { return impl_->api->locks(); }
 std::string X86Machine::keyboard_model() const { return impl_->api->keyboard_model(); }
 std::string X86Machine::started() const { return impl_->api->started(); }
 bool X86Machine::loading() const { return impl_->api->loading(); }
+uint64_t X86Machine::state() const { return impl_->api->state(); }
 
 X86Machine::GuestInput X86Machine::guest_input() const {
     KairoX86GuestInput input{};

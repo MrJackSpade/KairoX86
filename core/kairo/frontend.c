@@ -1215,6 +1215,56 @@ api_guest_input(struct KairoX86GuestInput *input)
     input->mouse_driven     = mouse_driven();
 }
 
+/* One step of FNV-1a over size bytes at data. */
+static uint64_t
+fnv1a(uint64_t hash, const void *data, size_t size)
+{
+    const uint8_t *bytes = (const uint8_t *) data;
+    for (size_t i = 0; i < size; i++) {
+        hash ^= bytes[i];
+        hash *= 1099511628211ULL;
+    }
+    return hash;
+}
+
+static uint64_t
+fnv1a_u32(uint64_t hash, uint32_t value)
+{
+    return fnv1a(hash, &value, sizeof(value));
+}
+
+static uint64_t
+fnv1a_seg(uint64_t hash, const x86seg *seg)
+{
+    hash = fnv1a_u32(hash, seg->seg);
+    hash = fnv1a_u32(hash, seg->base);
+    hash = fnv1a_u32(hash, seg->limit);
+    return fnv1a_u32(hash, seg->access);
+}
+
+static uint64_t
+api_state(void)
+{
+    uint64_t hash = 14695981039346656037ULL;
+    for (int r = 0; r < 8; r++)
+        hash = fnv1a_u32(hash, cpu_state.regs[r].l);
+    hash = fnv1a_u32(hash, cpu_state.pc);
+    hash = fnv1a_u32(hash, cpu_state.flags | ((uint32_t) cpu_state.eflags << 16));
+    hash = fnv1a_seg(hash, &cpu_state.seg_cs);
+    hash = fnv1a_seg(hash, &cpu_state.seg_ds);
+    hash = fnv1a_seg(hash, &cpu_state.seg_es);
+    hash = fnv1a_seg(hash, &cpu_state.seg_ss);
+    hash = fnv1a_seg(hash, &cpu_state.seg_fs);
+    hash = fnv1a_seg(hash, &cpu_state.seg_gs);
+    hash = fnv1a_u32(hash, cr0);
+    hash = fnv1a_u32(hash, cr2);
+    hash = fnv1a_u32(hash, cr3);
+    hash = fnv1a_u32(hash, cr4);
+    const uint64_t now = (uint64_t) tsc;
+    hash = fnv1a(hash, &now, sizeof(now));
+    return fnv1a(hash, ram, (size_t) mem_size * 1024);
+}
+
 static bool
 api_loading(void)
 {
@@ -1442,6 +1492,7 @@ static const struct KairoX86Api api = {
     .keyboard_model  = api_keyboard_model,
     .started         = api_started,
     .loading         = api_loading,
+    .state           = api_state,
     .guest_input     = api_guest_input,
     .media           = api_media,
     .media_path      = api_media_path,

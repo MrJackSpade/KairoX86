@@ -74,6 +74,8 @@ public:
     std::string started() const;
     // Whether the last frame was loading from a floppy disk (kairo_x86.h): the host runs it flat out.
     bool loading() const;
+    // The guest's state as one number (kairo_x86.h state), between frames.
+    uint64_t state() const;
     // How the guest reads its input since the machine started (kairo_x86.h), for the Auto touch mode.
     struct GuestInput {
         uint64_t keyboard_waits = 0;
