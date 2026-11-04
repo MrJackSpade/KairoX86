@@ -297,6 +297,41 @@ cycles_forward(int c)
     cycles_ex++;
 }
 
+/* KairoX86#205: the passes a halted V20/V30 (HLT repeating, nothing to interrupt it) spends before
+   the next timer is due, at once, as kairox86-halt-skip does for the 8088 (KairoX86#199). With the
+   bus interface idle or suspended and staying so, no DMA cycle and no wait states, a cycle only
+   counts: biu_cycle runs no bus access, run_dma_cycle and biu_do_cycle change nothing, and
+   cycles_forward takes a cycle off and moves tsc on. Only a timer can end the halt, so every pass of
+   [pass_cycles] before the one where the next timer is due goes by at once; that pass, and the
+   slice's last, still run cycle by cycle. */
+void
+biu_halt_skip(int pass_cycles)
+{
+    if (((biu_state != BIU_STATE_IDLE) && (biu_state != BIU_STATE_SUSP)) || (biu_next_state != biu_state) ||
+        (dma_state != DMA_STATE_IDLE) || (wait_states != 0) || (dma_wait_states != 0) || is286 || (pass_cycles <= 0))
+        return;
+
+    const uint64_t multi = (uint64_t) xt_cpu_multi >> 32ULL;
+    const int64_t  ahead = (int64_t) (timer_target - (uint64_t) tsc);
+
+    if ((multi == 0) || (ahead <= 0))
+        return;
+
+    /* Every skipped cycle leaves tsc before the timer's time, and the slice a pass to run. */
+    int64_t       passes = (int64_t) (((uint64_t) ahead - 1) / multi) / pass_cycles;
+    const int64_t room   = ((int64_t) cycles - 1) / pass_cycles;
+
+    if (passes > room)
+        passes = room;
+    if (passes <= 0)
+        return;
+
+    const int64_t skip = passes * pass_cycles;
+    cycles -= (int) skip;
+    tsc += (uint64_t) skip * multi;
+    cycles_ex += (int) skip;
+}
+
 static void
 bus_outb(uint16_t port, uint8_t val)
 {

@@ -540,15 +540,23 @@ fdd_current_track(void *priv)
 static int
 fdd_type_invert_densel(int type)
 {
+    /* KairoX86#206: whether the machine is a PS/1, PS/2 or PS/55, worked out once for each machine:
+       the floppy poll asks for every bit, and the name search was a fortieth of a 486's time. */
+    static int ps_machine = -1;
+    static int ps_answer  = 0;
     int ret;
 
     if (drive_types[type].flags & FLAG_PS2) {
-        /* The Model 25/30 planar also belongs to the 7690, whose display
-           name does not contain "PS/2". Its drive wiring is unchanged. */
-        ret = (machines[machine].init == machine_ps2_8086_init) ||
-              (!!strstr(machine_getname(machine), "PS/1")) ||
-              (!!strstr(machine_getname(machine), "PS/2")) ||
-              (!!strstr(machine_getname(machine), "PS/55"));
+        if (ps_machine != machine) {
+            /* The Model 25/30 planar also belongs to the 7690, whose display
+               name does not contain "PS/2". Its drive wiring is unchanged. */
+            ps_answer  = (machines[machine].init == machine_ps2_8086_init) ||
+                         (!!strstr(machine_getname(machine), "PS/1")) ||
+                         (!!strstr(machine_getname(machine), "PS/2")) ||
+                         (!!strstr(machine_getname(machine), "PS/55"));
+            ps_machine = machine;
+        }
+        ret = ps_answer;
     } else
         ret = drive_types[type].flags & FLAG_INVERT_DENSEL;
 

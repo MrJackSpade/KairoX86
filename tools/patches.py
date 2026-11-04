@@ -1639,6 +1639,24 @@ KAIROX86_HALT_SKIP = [
      '                    repeating = 1;\n                    completed = 0;\n                    CPU_NOTE_HALT(); /* KairoX86 */\n                    clock_end();\n                    halt_skip(); /* KairoX86#199 */\n'),
 ]
 
+KAIROX86_HALT_SKIP_VX0 = [
+    ('86box/src/cpu/vx0_biu.c',
+     '    cycles_ex++;\n}\n',
+     "    cycles_ex++;\n}\n\n/* KairoX86#205: the passes a halted V20/V30 (HLT repeating, nothing to interrupt it) spends before\n   the next timer is due, at once, as kairox86-halt-skip does for the 8088 (KairoX86#199). With the\n   bus interface idle or suspended and staying so, no DMA cycle and no wait states, a cycle only\n   counts: biu_cycle runs no bus access, run_dma_cycle and biu_do_cycle change nothing, and\n   cycles_forward takes a cycle off and moves tsc on. Only a timer can end the halt, so every pass of\n   [pass_cycles] before the one where the next timer is due goes by at once; that pass, and the\n   slice's last, still run cycle by cycle. */\nvoid\nbiu_halt_skip(int pass_cycles)\n{\n    if (((biu_state != BIU_STATE_IDLE) && (biu_state != BIU_STATE_SUSP)) || (biu_next_state != biu_state) ||\n        (dma_state != DMA_STATE_IDLE) || (wait_states != 0) || (dma_wait_states != 0) || is286 || (pass_cycles <= 0))\n        return;\n\n    const uint64_t multi = (uint64_t) xt_cpu_multi >> 32ULL;\n    const int64_t  ahead = (int64_t) (timer_target - (uint64_t) tsc);\n\n    if ((multi == 0) || (ahead <= 0))\n        return;\n\n    /* Every skipped cycle leaves tsc before the timer's time, and the slice a pass to run. */\n    int64_t       passes = (int64_t) (((uint64_t) ahead - 1) / multi) / pass_cycles;\n    const int64_t room   = ((int64_t) cycles - 1) / pass_cycles;\n\n    if (passes > room)\n        passes = room;\n    if (passes <= 0)\n        return;\n\n    const int64_t skip = passes * pass_cycles;\n    cycles -= (int) skip;\n    tsc += (uint64_t) skip * multi;\n    cycles_ex += (int) skip;\n}\n"),
+    ('86box/src/cpu/vx0_biu.h',
+     'extern void        biu_suspend_fetch(void);\n',
+     'extern void        biu_suspend_fetch(void);\nextern void        biu_halt_skip(int pass_cycles);\n'),
+    ('86box/src/cpu/vx0.c',
+     '                halted    = 1;\n                CPU_NOTE_HALT(); /* KairoX86 */\n',
+     "                halted    = 1;\n                CPU_NOTE_HALT(); /* KairoX86 */\n                /* KairoX86#205: a pass is execute_instruction's cycle when no ModR/M is loaded and\n                   the three above. */\n                if (!nx && !group_delay && !in_0f && !(is_nec && !(cpu_state.flags & MD_FLAG)))\n                    biu_halt_skip((modrm_loaded ? 0 : 1) + 3);\n"),
+]
+
+KAIROX86_DENSEL_ONCE = [
+    ('86box/src/floppy/fdd.c',
+     'fdd_type_invert_densel(int type)\n{\n    int ret;\n\n    if (drive_types[type].flags & FLAG_PS2) {\n        /* The Model 25/30 planar also belongs to the 7690, whose display\n           name does not contain "PS/2". Its drive wiring is unchanged. */\n        ret = (machines[machine].init == machine_ps2_8086_init) ||\n              (!!strstr(machine_getname(machine), "PS/1")) ||\n              (!!strstr(machine_getname(machine), "PS/2")) ||\n              (!!strstr(machine_getname(machine), "PS/55"));\n    } else\n',
+     'fdd_type_invert_densel(int type)\n{\n    /* KairoX86#206: whether the machine is a PS/1, PS/2 or PS/55, worked out once for each machine:\n       the floppy poll asks for every bit, and the name search was a fortieth of a 486\'s time. */\n    static int ps_machine = -1;\n    static int ps_answer  = 0;\n    int ret;\n\n    if (drive_types[type].flags & FLAG_PS2) {\n        if (ps_machine != machine) {\n            /* The Model 25/30 planar also belongs to the 7690, whose display\n               name does not contain "PS/2". Its drive wiring is unchanged. */\n            ps_answer  = (machines[machine].init == machine_ps2_8086_init) ||\n                         (!!strstr(machine_getname(machine), "PS/1")) ||\n                         (!!strstr(machine_getname(machine), "PS/2")) ||\n                         (!!strstr(machine_getname(machine), "PS/55"));\n            ps_machine = machine;\n        }\n        ret = ps_answer;\n    } else\n'),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -1662,6 +1680,8 @@ PATCHES = {
     'kairox86-lazy-pit': KAIROX86_LAZY_PIT,
     'kairox86-video-hoist': KAIROX86_VIDEO_HOIST,
     'kairox86-halt-skip': KAIROX86_HALT_SKIP,
+    'kairox86-halt-skip-vx0': KAIROX86_HALT_SKIP_VX0,
+    'kairox86-densel-once': KAIROX86_DENSEL_ONCE,
 }
 
 ADDED = [

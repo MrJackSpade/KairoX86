@@ -111,6 +111,7 @@ extern uint16_t    biu_pfq_fetch(void);
 extern void        biu_update_pc(void);
 extern void        biu_queue_flush(void);
 extern void        biu_suspend_fetch(void);
+extern void        biu_halt_skip(int pass_cycles);
 extern void        biu_begin_eu(void);
 extern void        biu_wait_for_read_finish(void);
 

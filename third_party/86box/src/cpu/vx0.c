@@ -4165,6 +4165,10 @@ execute_instruction(void)
 
                 halted    = 1;
                 CPU_NOTE_HALT(); /* KairoX86 */
+                /* KairoX86#205: a pass is execute_instruction's cycle when no ModR/M is loaded and
+                   the three above. */
+                if (!nx && !group_delay && !in_0f && !(is_nec && !(cpu_state.flags & MD_FLAG)))
+                    biu_halt_skip((modrm_loaded ? 0 : 1) + 3);
             }
 
             if (is_nec)
