@@ -72,6 +72,14 @@ set(CPPTHREADS ON CACHE BOOL "" FORCE)
 # shared frontend's pinned zlib, on Android and on the host alike.
 get_target_property(KAIROX86_ZLIB_INCLUDE kairo_zlib INTERFACE_INCLUDE_DIRECTORIES)
 include_directories(${KAIROX86_ZLIB_INCLUDE})
+# Android's x86_64 headers (time.h, unistd.h) reach signal.h and with it the kernel's
+# asm/sigcontext.h and sys/ucontext.h, whose field and register names 86Box takes for its own macros
+# (cpu.h's segments cs, ds, es, ss, fs, gs; the x86-64 recompiler's REG_RAX ...), so the x86_64 build
+# for the test emulator did not compile (KairoX86#212). Each source reads signal.h first, before any
+# of 86Box's macros exist. The arm64 headers include no such structs.
+if(ANDROID AND ANDROID_ABI STREQUAL "x86_64")
+    add_compile_options("SHELL:-include signal.h")
+endif()
 add_subdirectory("${KAIROX86_THIRD_PARTY}/86box" 86box)
 
 set_target_properties(86Box PROPERTIES OUTPUT_NAME kairox86_86box C_VISIBILITY_PRESET hidden CXX_VISIBILITY_PRESET hidden)
