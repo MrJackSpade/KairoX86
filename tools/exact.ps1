@@ -62,7 +62,7 @@ function Build-Core([string]$Source, [string]$Name) {
             -DCMAKE_BUILD_TYPE=RelWithDebInfo -DKAIRO_PGO=ON "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=$out" "-DCMAKE_RUNTIME_OUTPUT_DIRECTORY=$out" | Out-Null
         if ($LASTEXITCODE -ne 0) { throw "CMake could not configure the $Name core" }
     }
-    & $ninja -C $build game_profile 86Box | Select-Object -Last 1
+    & $ninja -C $build game_profile 86Box | Select-Object -Last 1 | Out-Host
     if ($LASTEXITCODE -ne 0) { throw "The $Name core did not build" }
     return $out
 }
