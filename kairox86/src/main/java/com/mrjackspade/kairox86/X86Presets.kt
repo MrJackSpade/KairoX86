@@ -12,21 +12,33 @@ import com.mrjackspade.kairo.frontend.UiText
  * - [XT]: an IBM PC on GLaBIOS, the free BIOS the app ships, so it needs no firmware from the
  *   player; CGA, AdLib, a 720K and a 360K drive (FreeDOS 1.3's 720K installer).
  * - [DOS_486]: a 486DX2-66 on the ASUS PVI-486AP4, 16 MB, S3 Trio64V2/DX, Sound Blaster 16, PS/2
- *   mouse, IDE with an ATAPI CD-ROM (FreeDOS 1.3's 1.44M installer).
+ *   mouse, IDE with a blank 504 MB hard disk and an ATAPI CD-ROM (FreeDOS 1.3's 1.44M installer).
+ *   Its CMOS holds the disk as its BIOS's IDE HDD AUTO DETECTION found it (User Type, 1024/16/63)
+ *   and boots A, then C: an installer floppy when one is in, the installed disk when none is.
  * - [WIN9X]: a Pentium MMX 233 on the ASUS TX97, 64 MB, S3 Trio64V2/DX, Sound Blaster 16, IDE with
- *   an ATAPI CD-ROM, its BIOS booting the CD first (Windows 98 SE Setup, started from a DOS floppy
- *   with the CD's driver).
+ *   a blank 2 GB hard disk, which its BIOS detects at each start (LBA), and an ATAPI CD-ROM, its
+ *   BIOS booting the CD first (Windows 98 SE Setup, started from a DOS floppy with the CD's driver).
  */
 object X86Presets {
-    /** A preset: its folder in assets/presets, its row's name, and the hardware whose firmware it needs. */
-    class Preset(val id: String, val label: Int, val files: List<String>, val machine: String, val cards: Map<String, String>)
+    /**
+     * A preset: its folder in assets/presets, its row's name, the hardware whose firmware it needs,
+     * and the blank hard disk its 86box.cfg names (KairoX86#162), written into the new folder as
+     * [HARD_DISK].
+     */
+    class Preset(val id: String, val label: Int, val files: List<String>, val machine: String, val cards: Map<String, String>,
+                 val hardDisk: X86BlankDisk? = null)
+
+    /** A new machine's blank hard disk, as its 86box.cfg names it (hdd_01_fn). */
+    const val HARD_DISK = "disk.vhd"
 
     val XT = Preset("xt", R.string.preset_xt, listOf("86box.cfg"), "ibmpc82",
         mapOf(X86Hardware.VIDEO to "cga", X86Hardware.SOUND to "adlib"))
+    // The 486's disk is the 504 MB a DOS-era BIOS addresses by CHS (1024 cylinders, 16 heads, 63
+    // sectors); the Pentium's is 2 GB, past it by LBA, room for Windows 98 and its games.
     val DOS_486 = Preset("486", R.string.preset_486, listOf("86box.cfg", "nvr/486ap4.nvr"), "486ap4",
-        mapOf(X86Hardware.VIDEO to "s3_trio64v2dx_pci", X86Hardware.SOUND to "sb16"))
+        mapOf(X86Hardware.VIDEO to "s3_trio64v2dx_pci", X86Hardware.SOUND to "sb16"), X86BlankDisk(1024, 16, 63))
     val WIN9X = Preset("pentium", R.string.preset_win9x, listOf("86box.cfg", "nvr/tx97.nvr"), "tx97",
-        mapOf(X86Hardware.VIDEO to "s3_trio64v2dx_pci", X86Hardware.SOUND to "sb16"))
+        mapOf(X86Hardware.VIDEO to "s3_trio64v2dx_pci", X86Hardware.SOUND to "sb16"), X86BlankDisk(4096, 16, 63))
 
     val all = listOf(XT, DOS_486, WIN9X)
 
@@ -46,11 +58,13 @@ object X86Presets {
 
     /** The presets as new entries the create flow writes, each from its assets. */
     fun blankDisks(context: Context): List<BlankDisk> = all.map { preset ->
-        BlankDisk.Folder("preset-${preset.id}", UiText.res(preset.label), preset.files.map { path ->
+        val assets = preset.files.map { path ->
             path to { output: java.io.OutputStream ->
                 context.assets.open("presets/${preset.id}/$path").use { it.copyTo(output) }
                 Unit
             }
-        }) { unavailable(preset) }
+        }
+        val disk = preset.hardDisk?.let { blank -> listOf(HARD_DISK to { output: java.io.OutputStream -> blank.write(output) }) }.orEmpty()
+        BlankDisk.Folder("preset-${preset.id}", UiText.res(preset.label), assets + disk) { unavailable(preset) }
     }
 }

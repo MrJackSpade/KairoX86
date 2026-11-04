@@ -27,8 +27,25 @@ class X86PresetsTest {
             assertEquals(preset.id, preset.machine, config["Machine", "machine"])
             assertEquals(preset.id, preset.cards[X86Hardware.VIDEO], config["Video", "gfxcard"])
             assertEquals(preset.id, preset.cards[X86Hardware.SOUND], config["Sound", "sndcard"])
-            // A new machine names no media: its disks are the player's.
-            assertNull(preset.id, X86Library.missingMedium(config) { false })
+            // The only medium a new machine names is its own blank hard disk, written with it (KairoX86#162):
+            // its other disks are the player's.
+            assertNull(preset.id, X86Library.missingMedium(config) { preset.hardDisk != null && it == X86Presets.HARD_DISK })
+        }
+    }
+
+    @Test
+    fun aHardDiskIsNamedWithItsOwnGeometry() {
+        for (preset in X86Presets.all) {
+            val config = IniText(File(folder(preset), "86box.cfg").readText())
+            val disk = preset.hardDisk
+            if (disk == null) {
+                assertNull(preset.id, config["Hard disks", "hdd_01_fn"])
+                continue
+            }
+            assertEquals(preset.id, X86Presets.HARD_DISK, config["Hard disks", "hdd_01_fn"])
+            // 86Box's order: sectors, heads, cylinders, then its write precompensation and bus.
+            assertEquals(preset.id, "${disk.sectors}, ${disk.heads}, ${disk.cylinders}, 0, ide", config["Hard disks", "hdd_01_parameters"])
+            assertEquals(preset.id, "0:0", config["Hard disks", "hdd_01_ide_channel"])
         }
     }
 

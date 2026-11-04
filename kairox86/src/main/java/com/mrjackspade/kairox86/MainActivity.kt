@@ -143,8 +143,16 @@ class MainActivity : MachineActivity<X86Entry>() {
     override val bindingsCodec = X86Keys.bindings
     override val artworkDownloadsEnabled: Boolean get() = resources.getBoolean(R.bool.catalog_art_download_enabled)
 
-    /** A new machine starts from a hardware preset (KairoX86#184); its blank disks are KairoX86#162. */
-    override val blankDisks: List<BlankDisk> by lazy { X86Presets.blankDisks(this) }
+    /**
+     * A new machine starts from a hardware preset (KairoX86#184), with its blank hard disk; a blank
+     * floppy, such as a game's save disk, is an image of its own, on every drive's Other page
+     * (KairoX86#162).
+     */
+    override val blankDisks: List<BlankDisk> by lazy {
+        X86Presets.blankDisks(this) + X86BlankFloppy.all.map { floppy ->
+            BlankDisk.Image(floppy.id, UiText.res(FrontendR.string.kairo_blank_floppy, floppy.label), "img", floppy::write)
+        }
+    }
 
     // The removable drives (KairoX86#48), in the core's slot order (kairo_x86.h): floppy drives A
     // and B, then the first CD-ROM drive.
@@ -153,13 +161,13 @@ class MainActivity : MachineActivity<X86Entry>() {
         MediaSlot(UiText.res(R.string.media_floppy_b)) { it.disk && X86Library.diskKind(it.path) == DiskKind.FLOPPY },
         MediaSlot(UiText.res(FrontendR.string.kairo_cd_rom)) { it.disk && X86Library.diskKind(it.path) == DiskKind.CD })
 
-    /** A machine's own disks are the images of its folder, and what its drives hold. */
     /**
      * No set-disks row: a machine's disks are the files of its folder, chosen for its drives on the
      * running machine's Disks page, not library entries grouped into a set (KairoX86#215).
      */
     override fun gameDisksRow(entry: X86Entry, enabled: () -> Boolean, disabledReason: () -> String): SettingsRow? = null
 
+    /** A machine's own disks are the images of its folder, and what its drives hold. */
     override fun ownDisks(current: X86Entry, takes: (X86Entry) -> Boolean): List<X86Entry> =
         ((session?.disks() ?: emptyList()) + mountedMedia().filterNotNull()).distinctBy { it.id }.filter(takes)
 
