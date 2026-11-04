@@ -33,12 +33,24 @@ object X86Settings {
 
     private val firmwareMissing = UiText.res(R.string.setting_firmware_missing)
 
-    /** The PC: every machine 86Box has, by type; one whose firmware the ROM set lacks shows but cannot be picked. */
-    val machine = single(MachineOption(MACHINE_ID, UiText.res(FrontendR.string.kairo_option_machine), {
-        X86Hardware.machines().map { machine ->
+    /** [machineChoices] and the machines they were made from. */
+    private var machineChoices: Pair<List<X86Hardware.Machine>, List<ChoiceOption>>? = null
+
+    /**
+     * Every machine as a choice, made again only when [X86Hardware.machines] is a new list: a settings
+     * page asks for the choices for each label it shows (KairoX86#203).
+     */
+    @Synchronized private fun machineChoices(): List<ChoiceOption> {
+        val machines = X86Hardware.machines()
+        machineChoices?.takeIf { it.first === machines }?.let { return it.second }
+        return machines.map { machine ->
             ChoiceOption(machine.id, UiText.fixed(machine.name), null, firmwareMissing.takeIf { !machine.available }, machine.type)
-        }
-    }, FIRST_MACHINE), MACHINE, "machine")
+        }.also { machineChoices = machines to it }
+    }
+
+    /** The PC: every machine 86Box has, by type; one whose firmware the ROM set lacks shows but cannot be picked. */
+    val machine = single(MachineOption(MACHINE_ID, UiText.res(FrontendR.string.kairo_option_machine), { machineChoices() },
+        FIRST_MACHINE), MACHINE, "machine")
 
     /** The processor: the families and speeds the machine takes, as cpu_family, cpu_speed and cpu_multi. */
     val processor = Setting(MachineOption("processor", UiText.res(R.string.setting_processor), { emptyList() }, "",

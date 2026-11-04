@@ -49,6 +49,28 @@ class IniTextTest {
     }
 
     @Test
+    fun readsWhatEachChangeLeaves() {
+        val text = IniText(config)
+        assertEquals("cga", text["Video", "gfxcard"])
+        text["Machine", "time_sync"] = "utc"
+        assertEquals("utc", text["Machine", "time_sync"])
+        assertEquals("cga", text["Video", "gfxcard"])
+        text["Machine", "machine"] = null
+        assertNull(text["Machine", "machine"])
+        assertEquals("66666666", text["Machine", "cpu_speed"])
+        text["Sound", "sndcard"] = "sb16"
+        assertEquals("sb16", text["Sound", "sndcard"])
+        assertEquals("cga", text["Video", "gfxcard"])
+    }
+
+    @Test
+    fun readsTheFirstOfARepeatedSectionOrKey() {
+        val text = IniText("[Machine]\nmachine = a\nmachine = b\n\n[Machine]\nmachine = c\ncpu_speed = 1\n")
+        assertEquals("a", text["Machine", "machine"])
+        assertNull(text["Machine", "cpu_speed"])
+    }
+
+    @Test
     fun keepsTheByteOrderMarkOutOfTheFirstHeader() {
         val text = IniText(config)
         text["General", "confirm_exit"] = "1"

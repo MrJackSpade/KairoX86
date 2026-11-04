@@ -10,6 +10,34 @@ class IniText(text: String) {
     private val lines: MutableList<String> = text.removePrefix(BOM).replace("\r\n", "\n").split('\n').toMutableList()
     private val crlf = text.contains("\r\n")
 
+    /**
+     * Where each section starts and where each of its keys is, built when first asked and dropped at
+     * each change: a settings page reads dozens of keys per row, and a scan of the whole file for
+     * each froze the app as a game's page opened (KairoX86#203).
+     */
+    private var index: Map<String, Section>? = null
+
+    /** A section's header line and the line of each key in it, by lowercase name. */
+    private class Section(val header: Int, val keys: Map<String, Int>)
+
+    private fun index(): Map<String, Section> = index ?: buildIndex().also { index = it }
+
+    /** The first section of each name and the first line of each key in it, as the lookups take them. */
+    private fun buildIndex(): Map<String, Section> {
+        val sections = HashMap<String, Section>()
+        var keys: HashMap<String, Int>? = null
+        for ((at, line) in lines.withIndex()) {
+            val trimmed = line.trim()
+            if (trimmed.startsWith("[")) {
+                val name = trimmed.lowercase()
+                keys = if (name in sections) null else HashMap<String, Int>().also { sections[name] = Section(at, it) }
+            } else if (keys != null && line.contains('=')) {
+                keys.putIfAbsent(line.substringBefore('=').trim().lowercase(), at)
+            }
+        }
+        return sections
+    }
+
     /** The value of [key] in [section], or null when the section or key is absent. */
     operator fun get(section: String, key: String): String? {
         val at = find(section, key) ?: return null
@@ -47,6 +75,8 @@ class IniText(text: String) {
                 }
             }
         }
+        // The lines moved: the index is built again at the next lookup.
+        index = null
     }
 
     override fun toString(): String = (if (bom) BOM else "") + lines.joinToString(if (crlf) "\r\n" else "\n")
@@ -55,8 +85,7 @@ class IniText(text: String) {
         const val BOM = "﻿"
     }
 
-    private fun sectionStart(section: String): Int? =
-        lines.indexOfFirst { it.trim().equals("[$section]", ignoreCase = true) }.takeIf { it >= 0 }
+    private fun sectionStart(section: String): Int? = index()["[$section]".lowercase()]?.header
 
     /** The line after [header]'s section: the next header, or the end. */
     private fun sectionEnd(header: Int): Int {
@@ -64,12 +93,6 @@ class IniText(text: String) {
         return lines.size
     }
 
-    private fun find(section: String, key: String): Int? {
-        val header = sectionStart(section) ?: return null
-        for (at in header + 1 until sectionEnd(header)) {
-            val line = lines[at]
-            if (line.contains('=') && line.substringBefore('=').trim().equals(key, ignoreCase = true)) return at
-        }
-        return null
-    }
+    private fun find(section: String, key: String): Int? =
+        index()["[$section]".lowercase()]?.keys?.get(key.trim().lowercase())
 }

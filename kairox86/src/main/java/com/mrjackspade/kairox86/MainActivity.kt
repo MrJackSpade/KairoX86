@@ -79,19 +79,47 @@ class MainActivity : MachineActivity<X86Entry>() {
      * The options of each card [entry]'s machine has (KairoX86#201): a group for each card, named by
      * 86Box, with its own options, kept in its section of the folder's 86box.cfg.
      */
-    override fun machineExtraGroups(entry: X86Entry, enabled: () -> Boolean): List<RowGroup> {
+    override fun machineExtraGroups(entry: X86Entry, enabled: () -> Boolean): List<RowGroup> =
+        chosenCards(entry).mapNotNull { (kind, card) ->
+            val own = X86Hardware.options(kind, card.id)
+            own.options.takeIf { it.isNotEmpty() }?.let { options ->
+                RowGroup(card.name.uppercase(), options.map { option -> machineChoiceRow(entry, X86Settings.cardOption(own.section, option), enabled) })
+            }
+        }
+
+    /**
+     * The cards [entry]'s machine has, each with its kind: those its 86box.cfg chooses or 86Box's
+     * default, other than none or the board's own. A card the machine does not take is left out: the
+     * player is asked for another (askUnfit).
+     */
+    private fun chosenCards(entry: X86Entry): List<Pair<String, X86Hardware.Card>> {
         val machine = configStore.read(entry, X86Settings.machine.option) ?: X86Settings.machine.option.default
         val values = mapOf(X86Settings.machine.option.id to machine)
         val takes = X86Hardware.takes(machine)
         return X86Settings.cards.mapNotNull { (setting, kind) ->
             val chosen = configStore.read(entry, setting.option) ?: setting.option.default(values)
-            // A card the machine does not take has no rows: the player is asked for another (askUnfit).
-            val card = takes.cards.getValue(kind).firstOrNull { it.id == chosen }
-                ?.takeIf { it.id != "none" && it.id != "internal" } ?: return@mapNotNull null
-            val own = X86Hardware.options(kind, card.id)
-            own.options.takeIf { it.isNotEmpty() }?.let { options ->
-                RowGroup(card.name.uppercase(), options.map { option -> machineChoiceRow(entry, X86Settings.cardOption(own.section, option), enabled) })
-            }
+            takes.cards.getValue(kind).firstOrNull { it.id == chosen }
+                ?.takeIf { it.id != "none" && it.id != "internal" }?.let { kind to it }
+        }
+    }
+
+    /** One thread that reads ahead what the library's machine pages show (KairoX86#203). */
+    private val readAhead = java.util.concurrent.Executors.newSingleThreadExecutor { task ->
+        Thread(task, "KairoX86-read-ahead").apply { isDaemon = true }
+    }
+
+    /**
+     * Reads each machine's 86box.cfg and asks 86Box for its hardware and the chosen cards' options
+     * ahead of its page, into the caches the page reads (ConfigStore, X86Hardware): reading them as
+     * the page opened froze the app for a moment (KairoX86#203). A read that fails leaves nothing
+     * cached, so the page reads it again and fails there, as it did before the read-ahead.
+     */
+    override fun libraryLoaded(entries: List<X86Entry>) {
+        super.libraryLoaded(entries)
+        if (tree == null) return
+        readAhead.submit { X86Hardware.machines() }
+        for (entry in entries.filter { !it.disk && it.playable }) readAhead.submit {
+            for ((kind, card) in chosenCards(entry)) X86Hardware.options(kind, card.id)
         }
     }
 
@@ -226,6 +254,11 @@ class MainActivity : MachineActivity<X86Entry>() {
         // The machine settings' hardware choices come from the player's ROM set (Kairo#143).
         X86Hardware.roms = firmwareFolder
         super.onCreate(savedInstanceState)
+    }
+
+    override fun onDestroy() {
+        readAhead.shutdownNow()
+        super.onDestroy()
     }
 
     override fun sessionEnded() {
