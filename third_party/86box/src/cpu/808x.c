@@ -1246,6 +1246,40 @@ irq_pending(int nec_hlt)
     return temp;
 }
 
+/* KairoX86#199: the cycles a halted 8088 spends before the next timer is due, at once. A halted
+   cycle (HLT repeating, nothing to interrupt it) only counts: one cycle off, the bus interface's
+   cycle on (the queue is empty and not prefetching, so pfq_add writes nothing), and tsc on by the
+   multiplier. Nothing can end the halt but a timer (every device raises its interrupts and DMA
+   from one), so every cycle before the one where the next timer is due goes by at once; that cycle,
+   and the last of the slice, still run one at a time. A memory refresh to do, a queue that fetches,
+   a held clock or the newer bus interface take every cycle as before. */
+static void
+halt_skip(void)
+{
+    const uint64_t multi = (uint64_t) xt_cpu_multi >> 32ULL;
+    const int64_t  ahead = (int64_t) (timer_target - (uint64_t) tsc);
+
+    if ((refresh > 0) || is_new_biu || (is80c88 && cpu_clock_gated) || (multi == 0) || (ahead <= 0))
+        return;
+    if ((pfq_pos < pfq_size) && prefetching)
+        return;
+
+    /* The cycle that makes tsc reach the timer's time is the first to run its callbacks. */
+    const uint64_t due  = ((uint64_t) ahead + multi - 1) / multi;
+    int64_t        skip = (int64_t) due - 1;
+
+    if (skip > (int64_t) cycles - 1)
+        skip = (int64_t) cycles - 1;
+    if (skip <= 0)
+        return;
+
+    cycles -= (int) skip;
+    if (pfq_pos < pfq_size)
+        biu_cycles = (int) ((biu_cycles + skip) & 0x03);
+    tsc += (uint64_t) skip * multi;
+    cycdiff = cycles;
+}
+
 static void
 check_interrupts(int nec_hlt)
 {
@@ -3237,6 +3271,7 @@ execx86_instruction(void)
                     completed = 0;
                     CPU_NOTE_HALT(); /* KairoX86 */
                     clock_end();
+                    halt_skip(); /* KairoX86#199 */
                 }
                 break;
             case 0xf5:             /* CMC */

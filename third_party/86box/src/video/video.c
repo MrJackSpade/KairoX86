@@ -528,11 +528,14 @@ video_blend_monitor(int x, int y, int monitor_index)
 void
 video_process_8_monitor(int x, int y, int monitor_index)
 {
+    /* KairoX86#199: the line and the palette read once. 86Box builds without strict aliasing, so
+       read through the monitor at each pixel they were read again after every store. */
+    uint32_t       *pixels  = monitors[monitor_index].target_buffer->line[y];
+    const uint32_t *palette = monitors[monitor_index].mon_pal_lookup;
+
     for (int xx = 0; xx < x; xx++) {
-        if (monitors[monitor_index].target_buffer->line[y][xx] <= 0xff)
-            monitors[monitor_index].target_buffer->line[y][xx] = monitors[monitor_index].mon_pal_lookup[monitors[monitor_index].target_buffer->line[y][xx]];
-        else
-            monitors[monitor_index].target_buffer->line[y][xx] = 0x00000000;
+        const uint32_t index = pixels[xx];
+        pixels[xx] = (index <= 0xff) ? palette[index] : 0x00000000;
     }
 }
 

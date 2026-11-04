@@ -1001,6 +1001,177 @@ ctr_tick(ctr_t *ctr, void *priv)
     }
 }
 
+/* KairoX86#199: the timer runs the counters a half clock at a time, about 2.4 million calls a
+   second on a PC, though between the edges where a counter's output or state changes its edges
+   only count down. pit_schedule sends the timer straight to the first edge any counter does more
+   on (dev->skip_halves halves on), and the edges in between are counted down at once: there
+   (pit_timer_over), or as far as the CPU has run (pit_catch_up) before anything reads or changes
+   a counter. 86Box runs every timer whose time is at or before tsc as tsc moves (the 808x's
+   clock_end), so the edges counted are the ones it would have run by then, edge for edge. */
+#define PIT_PLAIN_MAX  0x10000u
+#define PIT_PLAIN_NONE 0 /* the edge leaves the counter as it is */
+#define PIT_PLAIN_DEC  1 /* ctr_decrease_count, binary */
+#define PIT_PLAIN_DEC2 2 /* the square wave's count by two */
+
+/* How many of the counter's next falling edges only count it down, as [kind]: ctr_tick's cases,
+   each as long as it neither changes the output or state nor reaches the count that does. */
+static uint32_t
+ctr_plain_ticks(const ctr_t *ctr, uint8_t *kind)
+{
+    *kind = PIT_PLAIN_NONE;
+    if (ctr->clock_div > 1)
+        return 0;
+    /* The timer only sets the clock of a counter it does not drive. */
+    if (!ctr->using_timer)
+        return PIT_PLAIN_MAX;
+    if (ctr->latch || ctr->bcd || ((ctr->state & 0x03) == 0x01))
+        return 0;
+
+    switch (ctr->m & 0x07) {
+        case 0:
+            if ((ctr->state == 2) && ctr->gate && (ctr->count >= 1)) {
+                *kind = PIT_PLAIN_DEC;
+                return (uint32_t) (ctr->count - 1);
+            }
+            if (ctr->state == 3)
+                *kind = PIT_PLAIN_DEC;
+            return PIT_PLAIN_MAX;
+        case 1:
+            if ((ctr->state == 2) && (ctr->count >= 1)) {
+                *kind = PIT_PLAIN_DEC;
+                return (uint32_t) (ctr->count - 1);
+            }
+            if ((ctr->state == 3) || (ctr->state == 6))
+                *kind = PIT_PLAIN_DEC;
+            return PIT_PLAIN_MAX;
+        case 2:
+        case 6:
+            if (ctr->state == 3)
+                return 0;
+            if ((ctr->state == 2) && ctr->gate && (ctr->count >= 2)) {
+                *kind = PIT_PLAIN_DEC;
+                return (uint32_t) (ctr->count - 2);
+            }
+            return PIT_PLAIN_MAX;
+        case 3:
+        case 7:
+            if (((ctr->state != 2) && (ctr->state != 3)) || !ctr->gate || (ctr->count < 0))
+                return PIT_PLAIN_MAX;
+            /* The first count after a load, and an odd count, take their own edges. */
+            if (ctr->newcount || (ctr->count & 1) || (ctr->count == 0))
+                return 0;
+            *kind = PIT_PLAIN_DEC2;
+            return (uint32_t) (ctr->count / 2 - 1);
+        case 4:
+        case 5:
+            if ((ctr->gate == 0) && (ctr->m == 4))
+                return PIT_PLAIN_MAX;
+            switch (ctr->state) {
+                case 0:
+                    if (!ctr->null_count)
+                        *kind = PIT_PLAIN_DEC;
+                    return PIT_PLAIN_MAX;
+                case 6:
+                    *kind = PIT_PLAIN_DEC;
+                    return PIT_PLAIN_MAX;
+                case 2:
+                    if (ctr->count >= 1) {
+                        *kind = PIT_PLAIN_DEC;
+                        return (uint32_t) (ctr->count - 1);
+                    }
+                    return PIT_PLAIN_MAX;
+                case 3:
+                    return 0;
+                default:
+                    return PIT_PLAIN_MAX;
+            }
+        default:
+            return PIT_PLAIN_MAX;
+    }
+}
+
+/* The first [halves] edges of the skip: each counter counted down by the falling edges among them,
+   and every clock where the last of them left it. */
+static void
+pit_skip_apply(pit_t *dev, uint32_t halves)
+{
+    const int32_t falls = (int32_t) (dev->skip_clock ? ((halves + 1) >> 1) : (halves >> 1));
+    const int     clock = dev->skip_clock ^ (int) (halves & 1);
+
+    for (uint8_t i = 0; i < NUM_COUNTERS; i++) {
+        ctr_t *ctr = &dev->counters[i];
+
+        if (dev->skip_kind[i] == PIT_PLAIN_DEC)
+            ctr->count = (ctr->count - falls) & 0xffff;
+        else if (dev->skip_kind[i] == PIT_PLAIN_DEC2)
+            ctr->count -= 2 * falls;
+        ctr->clock = clock;
+    }
+    dev->clock = clock;
+}
+
+/* The timer's next edge, after the one it ran: half a clock on, or the first edge past every
+   counter's plain ones. */
+static void
+pit_schedule(pit_t *dev)
+{
+    const uint64_t half  = dev->pit_const >> 1ULL;
+    uint32_t       falls = PIT_PLAIN_MAX;
+    uint8_t        kind[NUM_COUNTERS];
+
+    for (uint8_t i = 0; i < NUM_COUNTERS; i++) {
+        const uint32_t plain = ctr_plain_ticks(&dev->counters[i], &kind[i]);
+        if (plain < falls)
+            falls = plain;
+    }
+
+    if (falls < 2) {
+        timer_advance_u64(&dev->callback_timer, half);
+        return;
+    }
+
+    /* After a rising edge the next is a falling one: the skip ends on the falling edge after the
+       plain ones, which pit_timer_over runs as it would. */
+    dev->skip_halves = 2 * falls + (dev->clock ? 1 : 2);
+    dev->skip_clock  = dev->clock;
+    for (uint8_t i = 0; i < NUM_COUNTERS; i++)
+        dev->skip_kind[i] = kind[i];
+    timer_advance_u64(&dev->callback_timer, half * dev->skip_halves);
+}
+
+/* The skipped edges up to tsc, counted down, and the timer back on the next edge, before anything
+   reads or changes a counter. */
+static void
+pit_catch_up(pit_t *dev)
+{
+    if (!dev->skip_halves)
+        return;
+
+    pc_timer_t       *timer   = &dev->callback_timer;
+    const uint64_t    half    = dev->pit_const >> 1ULL;
+    const uint32_t    halves  = dev->skip_halves;
+    const __uint128_t landing = ((__uint128_t) timer->ts_integer << 32) | timer->ts_frac;
+    const __uint128_t due     = (__uint128_t) ((uint64_t) tsc + 1ULL) << 32;
+    uint32_t          done;
+
+    /* Edge h is at landing - (halves - h) * half; it has run once its whole part is at or before tsc. */
+    if (landing < due)
+        done = halves - 1;
+    else {
+        const __uint128_t ahead = (landing - due) / half;
+        done = (ahead + 1 >= halves) ? 0 : (uint32_t) (halves - 1 - ahead);
+    }
+
+    pit_skip_apply(dev, done);
+    dev->skip_halves = 0;
+
+    const __uint128_t next = landing - (__uint128_t) (halves - done - 1) * half;
+    timer_disable(timer);
+    timer->ts_integer = (uint64_t) (next >> 32);
+    timer->ts_frac    = (uint32_t) next;
+    timer_enable(timer);
+}
+
 void
 ctr_clock(void *data, int counter_id)
 {
@@ -1147,6 +1318,7 @@ void
 pit_ctr_set_gate(void *data, int counter_id, int gate)
 {
     pit_t *pit = (pit_t *) data;
+    pit_catch_up(pit);
     ctr_t *ctr = &pit->counters[counter_id];
 
     int     old  = ctr->gate;
@@ -1213,6 +1385,7 @@ pit_ctr_set_clock_common(ctr_t *ctr, int clock, void *priv)
 void
 pit_ctr_set_clock(ctr_t *ctr, int clock, void *priv)
 {
+    pit_catch_up((pit_t *) priv);
     pit_ctr_set_clock_common(ctr, clock, priv);
 }
 
@@ -1222,6 +1395,7 @@ pit_ctr_set_using_timer(void *data, int counter_id, int using_timer)
     if (tsc > 0)
         timer_process();
     pit_t *pit       = (pit_t *) data;
+    pit_catch_up(pit);
     ctr_t *ctr       = &pit->counters[counter_id];
     ctr->using_timer = using_timer;
 }
@@ -1230,6 +1404,12 @@ static void
 pit_timer_over(void *priv)
 {
     pit_t *dev = (pit_t *) priv;
+
+    /* The skip's plain edges, before the one it ends on. */
+    if (dev->skip_halves) {
+        pit_skip_apply(dev, dev->skip_halves - 1);
+        dev->skip_halves = 0;
+    }
 
     dev->clock ^= 1;
 
@@ -1247,7 +1427,7 @@ pit_timer_over(void *priv)
             pit_ctr_set_clock_common(ctr, dev->clock, dev);
     }
 
-    timer_advance_u64(&dev->callback_timer, dev->pit_const >> 1ULL);
+    pit_schedule(dev);
 }
 
 static void
@@ -1256,6 +1436,8 @@ pit_write(uint16_t addr, uint8_t val, void *priv)
     pit_t *dev = (pit_t *) priv;
     int    t   = (addr & 3);
     ctr_t *ctr;
+
+    pit_catch_up(dev);
 
     if ((dev->flags & (PIT_8254 | PIT_EXT_IO))) {
         pit_log("[%04X:%08X] pit_write(%04X, %02X, %016" PRIX64 ")\n",
@@ -1439,6 +1621,8 @@ pit_read(uint16_t addr, void *priv)
     int     t = (addr & 3);
     ctr_t  *ctr;
 
+    pit_catch_up(dev);
+
     switch (addr & 3) {
         case 3: /* Control. */
             /* This is 8254-only, 8253 returns 0x00. */
@@ -1610,6 +1794,7 @@ ctr_reset(ctr_t *ctr)
 void
 pit_device_reset(pit_t *dev)
 {
+    pit_catch_up(dev);
     dev->clock = 0;
 
     for (uint8_t i = 0; i < NUM_COUNTERS; i++)
@@ -1641,6 +1826,7 @@ pit_set_pit_const(void *data, uint64_t pit_const)
 {
     pit_t *pit = (pit_t *) data;
 
+    pit_catch_up(pit);
     pit->pit_const = pit_const;
 }
 

@@ -81,6 +81,12 @@ typedef struct PIT {
 
     uint64_t   pit_const;
 
+    /* KairoX86#199: the halves the timer skips to its next edge that is more than a count down
+       (0: the next half), the clock before them, and how each counter counts on them (pit.c). */
+    uint32_t   skip_halves;
+    int        skip_clock;
+    uint8_t    skip_kind[NUM_COUNTERS];
+
     void *dev_priv;
 } pit_t;
 

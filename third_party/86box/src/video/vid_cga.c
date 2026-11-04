@@ -343,6 +343,8 @@ cga_sample_luma(bitmap_t* target_buffer, uint32_t x, uint32_t y)
 static void
 cga_render(cga_t *cga, int line)
 {
+    /* KairoX86#199: the line read once, not again after each pixel's store (no strict aliasing). */
+    uint32_t *pixels     = buffer32->line[line];
     uint16_t cursoraddr  = (cga->crtc[CGA_CRTC_CURSOR_ADDR_LOW] | (cga->crtc[CGA_CRTC_CURSOR_ADDR_HIGH] << 8)) & DEVICE_VRAM_MASK;
     int      drawcursor;
     int      x;
@@ -357,11 +359,11 @@ cga_render(cga_t *cga, int line)
     bool     overlay_flag          = ((cga->cgamode & highres_graphics_flag) == highres_graphics_flag);
 
     for (column = 0; column < 8; ++column) {
-        buffer32->line[line][column] = overlay_flag ? 0 : ((cga->cgacol & 0b1111) + 16);
+        pixels[column] = overlay_flag ? 0 : ((cga->cgacol & 0b1111) + 16);
         if (cga->cgamode & CGA_MODE_FLAG_HIGHRES)
-            buffer32->line[line][column + (cga->crtc[CGA_CRTC_HDISP] * 8) + 8] = overlay_flag ? 0 : ((cga->cgacol & 0b1111) + 16);
+            pixels[column + (cga->crtc[CGA_CRTC_HDISP] * 8) + 8] = overlay_flag ? 0 : ((cga->cgacol & 0b1111) + 16);
         else
-            buffer32->line[line][column + (cga->crtc[CGA_CRTC_HDISP] * 16) + 8] = overlay_flag ? 0 : ((cga->cgacol & 0b1111) + 16);
+            pixels[column + (cga->crtc[CGA_CRTC_HDISP] * 16) + 8] = overlay_flag ? 0 : ((cga->cgacol & 0b1111) + 16);
     }
 
     if (cga->cgamode & CGA_MODE_FLAG_HIGHRES) { /* 80-column text */
@@ -381,7 +383,7 @@ cga_render(cga_t *cga, int line)
                 cols[0] = (attr >> 4) + 16;
 
             for (column = 0; column < 8; column++) {
-                buffer32->line[line][(x * 8) + column + 8]
+                pixels[(x * 8) + column + 8]
                     = cols[(fontdat[chr + cga->fontbase][cga->scanline & 7] & (1 << (column ^ 7))) ? 1 : 0] ^ (drawcursor ? 0b1111 : 0);
                 
                 if (cga_lightpen_enabled && !cga->lp_latch_found && mouse_tablet_in_proximity > 0 && cga_is_in_lightpen(cga, (x * 8) + column + 8, line)) {
@@ -411,8 +413,8 @@ cga_render(cga_t *cga, int line)
                 cols[0] = (attr >> 4) + 16;
 
             for (column = 0; column < 8; column++) {
-                buffer32->line[line][(x * 16) + (column << 1) + 8]
-                    = buffer32->line[line][(x * 16) + (column << 1) + 8 + 1]
+                pixels[(x * 16) + (column << 1) + 8]
+                    = pixels[(x * 16) + (column << 1) + 8 + 1]
                     = (cols[(fontdat[chr + cga->fontbase][cga->scanline & 7] & (1 << (column ^ 7))) ? 1 : 0] ^ (drawcursor ? 0b1111 : 0));
 
                 
@@ -449,8 +451,8 @@ cga_render(cga_t *cga, int line)
             else
                 dat = 0;
             for (column = 0; column < 8; column++) {
-                buffer32->line[line][(x * 16) + (column << 1) + 8]
-                    = buffer32->line[line][(x * 16) + (column << 1) + 8 + 1]
+                pixels[(x * 16) + (column << 1) + 8]
+                    = pixels[(x * 16) + (column << 1) + 8 + 1]
                     = cols[dat >> 14];
 
                 if (cga_lightpen_enabled && !cga->lp_latch_found && mouse_tablet_in_proximity > 0 && (cga_is_in_lightpen(cga, (x * 16) + (column << 1) + 8, line) || cga_is_in_lightpen(cga, (x * 16) + (column << 1) + 8 + 1, line))) {
@@ -474,7 +476,7 @@ cga_render(cga_t *cga, int line)
             else
                 dat = 0;
             for (column = 0; column < 16; column++) {
-                buffer32->line[line][(x * 16) + column + 8] = cols[dat >> 15];
+                pixels[(x * 16) + column + 8] = cols[dat >> 15];
                 dat <<= 1;
 
                 if (cga_lightpen_enabled && !cga->lp_latch_found && mouse_tablet_in_proximity > 0 && cga_is_in_lightpen(cga, (x * 16) + column + 8, line)) {
