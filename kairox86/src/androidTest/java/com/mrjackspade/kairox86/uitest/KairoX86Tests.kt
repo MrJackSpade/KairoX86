@@ -2,6 +2,7 @@ package com.mrjackspade.kairox86.uitest
 
 import com.mrjackspade.kairo.frontend.PcKey
 import com.mrjackspade.kairo.uitest.AppUnderTest
+import com.mrjackspade.kairo.uitest.AppUnderTest.BiosSet
 import com.mrjackspade.kairo.uitest.AppUnderTest.MediaSwap
 import com.mrjackspade.kairo.uitest.KairoUiTest
 import com.mrjackspade.kairo.uitest.suites.ControllerTests
@@ -31,15 +32,22 @@ object KairoX86App : AppUnderTest() {
     override val name = "KairoX86"
     override val brand = "KAIROX86"
     override val biosTitle = "IBM PC compatible BIOS"
+    // The ROM set is one row; the test BIOS folder installs the 486 board's BIOS and its S3 card's (KairoX86#90).
+    override val biosSets = listOf(BiosSet(0, 2))
     override val bootGame = "xt"
     override val bootGameFile = "games/xt/86box.cfg"
-    override val otherGame = "dos486"
-    override val defaultOption = "clock"
-    override val searchTerm = "xt"
     // A library entry is the machine folder, not its 86box.cfg.
     override val bootGameEntryFile = "xt"
     // A machine is its folder: launched alone before setup, it asks for the games folder (KairoX86#210).
     override val launchBeforeSetupMessage = "A machine starts from its games folder: choose the folder that holds it first."
+    override val otherGame = "dos486"
+    // The Auto touch mode stand-ins (core/test/input/make_auto.py): a game reading the mouse through its driver, one waiting for BIOS keys.
+    override val mouseGame = "mouse"
+    override val keyboardGame = "keys"
+    override val defaultOption = "clock"
+    // Machine settings are each machine folder's own (its 86box.cfg): no all-games defaults.
+    override val machineDefaults = false
+    override val searchTerm = "xt"
     override val arrowKeys = listOf(PcKey.UP.scanCode, PcKey.DOWN.scanCode, PcKey.LEFT.scanCode, PcKey.RIGHT.scanCode)
     override val returnKey = PcKey.ENTER.scanCode
     override val spaceKey = PcKey.SPACE.scanCode
@@ -114,7 +122,8 @@ class X86Tests : KairoUiTest() {
     /** While it boots, the machine runs flat out: more guest time passes than real time (KairoX86#41, #60). */
     @Test
     fun theBootRunsFasterThanTheRealMachine() {
-        screens.completeFirstRun().open(KairoX86App.otherGame).play()
+        // The XT: a 486 does not run faster than the real machine on the RG DS (docs/core-performance.md).
+        screens.completeFirstRun().open(KairoX86App.bootGame).play()
         val before = driver.probe()
         val started = System.nanoTime()
         driver.waitFrames(600)

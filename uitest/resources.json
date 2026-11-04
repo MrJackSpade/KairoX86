@@ -7,6 +7,12 @@
   "games/xt/fd13-720k.img": "C:\\Users\\Service Account\\Kairo\\KairoX86\\roms\\uitest\\xt\\fd13-720k.img",
   "games/dos486/86box.cfg": "C:\\Users\\Service Account\\Kairo\\KairoX86\\roms\\uitest\\dos486\\86box.cfg",
   "games/dos486/freedos.img": "C:\\Users\\Service Account\\Kairo\\KairoX86\\roms\\uitest\\dos486\\freedos.img",
-  "games/dos486/nvr/486ap4.nvr": "C:\\Users\\Service Account\\Kairo\\KairoX86\\roms\\uitest\\dos486\\nvr\\486ap4.nvr"
+  "games/dos486/nvr/486ap4.nvr": "C:\\Users\\Service Account\\Kairo\\KairoX86\\roms\\uitest\\dos486\\nvr\\486ap4.nvr",
+  "games/keys/86box.cfg": "C:\\Users\\Service Account\\Kairo\\KairoX86\\roms\\uitest\\keys\\86box.cfg",
+  "games/keys/auto-wait.img": "C:\\Users\\Service Account\\Kairo\\KairoX86\\roms\\uitest\\keys\\auto-wait.img",
+  "games/keys/nvr/486ap4.nvr": "C:\\Users\\Service Account\\Kairo\\KairoX86\\roms\\uitest\\keys\\nvr\\486ap4.nvr",
+  "games/mouse/86box.cfg": "C:\\Users\\Service Account\\Kairo\\KairoX86\\roms\\uitest\\mouse\\86box.cfg",
+  "games/mouse/auto-mouse.img": "C:\\Users\\Service Account\\Kairo\\KairoX86\\roms\\uitest\\mouse\\auto-mouse.img",
+  "games/mouse/nvr/486ap4.nvr": "C:\\Users\\Service Account\\Kairo\\KairoX86\\roms\\uitest\\mouse\\nvr\\486ap4.nvr"
  }
 }
