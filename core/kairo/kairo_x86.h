@@ -130,6 +130,9 @@ struct KairoX86Api {
 	 * the host runs such frames flat out. Hard disks and CDs do not count: a game reads them as
 	 * it plays. */
 	bool (*loading)(void);
+	/* Whether the machine has a video card to show anything on: false with none, whose start the
+	 * frontend does not hold for a picture that never comes. Valid once the machine started. */
+	bool (*displays)(void);
 	/* How the guest reads its input, for the Auto touch mode (KairoX86#43). */
 	void (*guest_input)(struct KairoX86GuestInput *input);
 	/* Puts the image at path in slot (KAIRO_X86_MEDIA_SLOTS), or empties it for an empty path: 0

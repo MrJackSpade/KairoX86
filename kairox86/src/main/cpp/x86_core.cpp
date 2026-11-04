@@ -66,6 +66,7 @@ public:
     }
     // A frame a floppy drive worked in: the frame host runs it flat out (KairoX86#41).
     bool loading() override { return machine_->loading(); }
+    bool displays() override { return machine_->displays(); }
     // The guest's BIOS keyboard calls and mouse driver reads, for the Auto touch mode (KairoX86#43),
     // and whether a protected-mode driver (Windows) turned the mouse on (KairoX86#190).
     bool guest_input(GuestInput &input) override {

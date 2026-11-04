@@ -1271,6 +1271,12 @@ api_loading(void)
     return loading_frame;
 }
 
+static bool
+api_displays(void)
+{
+    return gfxcard[0] != VID_NONE;
+}
+
 static int
 api_locks(void)
 {
@@ -1492,6 +1498,7 @@ static const struct KairoX86Api api = {
     .keyboard_model  = api_keyboard_model,
     .started         = api_started,
     .loading         = api_loading,
+    .displays        = api_displays,
     .state           = api_state,
     .guest_input     = api_guest_input,
     .media           = api_media,
