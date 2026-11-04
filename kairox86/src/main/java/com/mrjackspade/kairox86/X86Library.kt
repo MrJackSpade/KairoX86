@@ -60,8 +60,9 @@ data class X86Entry(
  */
 class X86Library(private val context: Context) {
     private val walker = DocumentTreeWalker(context)
-    // Version 2 keeps the games folder's disk images beside the machines (KairoX86#209).
-    private val cache = VersionedLibraryCache(File(context.filesDir, "library-v1.bin"), 2, 8 * 1024 * 1024, 100_000,
+    // Version 2 keeps the games folder's disk images beside the machines (KairoX86#209); version 3
+    // each machine's first catalog ID (KairoX86#213).
+    private val cache = VersionedLibraryCache(File(context.filesDir, "library-v1.bin"), 3, 8 * 1024 * 1024, 100_000,
         ::writeEntry, ::readEntry)
     private val pipeline = LibraryScanPipeline<DocumentTreeWalker.FileEntry, X86Entry>(context, cache,
         entryId = { it.id },
@@ -74,7 +75,9 @@ class X86Library(private val context: Context) {
             })
         },
         inspect = { file, scan -> listOf(inspect(file, scan)) },
-        failed = { file, _, error -> listOf(entryOf(file, null, error.message ?: "Unreadable")) },
+        failed = { file, scan, error ->
+            listOf(entryOf(file, null, error.message ?: "Unreadable", scan.earlier[folderOf(file.path)]?.catalogId))
+        },
         describe = { it.path },
         known = { file, scan -> scan.prior[folderOf(file.path)]?.let { it.size == file.size && it.modified == file.modified } == true },
         sourceOf = { it.uri },
@@ -107,11 +110,15 @@ class X86Library(private val context: Context) {
         scan.hashStarted(file.path)
         val bytes = checkNotNull(context.contentResolver.openInputStream(file.uri)) { context.getString(R.string.machine_open_failed, file.path) }
             .use { it.readBytes() }
-        return entryOf(file, contentIdOf(bytes), null)
+        // A changed 86box.cfg (a setting changed, or 86Box rewriting it) keeps the catalog ID the
+        // machine was first scanned with, so its catalog record still applies (LibraryItem.catalogId,
+        // KairoX86#213). Rechecking every file keeps it too: [scan.earlier] ignores forceHash.
+        val contentId = contentIdOf(bytes)
+        return entryOf(file, contentId, null, scan.earlier[folderOf(file.path)]?.catalogId ?: contentId)
     }
 
-    private fun entryOf(file: DocumentTreeWalker.FileEntry, contentId: String?, error: String?) =
-        X86Entry(folderOf(file.path), file.uri.toString(), folderOf(file.path), file.size, file.modified, contentId, error)
+    private fun entryOf(file: DocumentTreeWalker.FileEntry, contentId: String?, error: String?, catalogId: String? = contentId) =
+        X86Entry(folderOf(file.path), file.uri.toString(), folderOf(file.path), file.size, file.modified, contentId, error, catalogId)
 
     /**
      * Prepares [entry]'s session folder from its folder in [tree] and returns the session, whose
@@ -324,11 +331,21 @@ class X86Library(private val context: Context) {
         output.writeUTF(entry.contentId ?: "")
         output.writeUTF(entry.error ?: "")
         output.writeBoolean(entry.disk)
+        output.writeUTF(entry.catalogId ?: "")
     }
 
-    private fun readEntry(input: DataInputStream) = X86Entry(input.readUTF(), input.readUTF(), input.readUTF(),
-        input.readLong(), input.readLong(), input.readUTF().ifEmpty { null }, input.readUTF().ifEmpty { null },
-        disk = input.readBoolean())
+    private fun readEntry(input: DataInputStream): X86Entry {
+        val id = input.readUTF()
+        val uri = input.readUTF()
+        val path = input.readUTF()
+        val size = input.readLong()
+        val modified = input.readLong()
+        val contentId = input.readUTF().ifEmpty { null }
+        val error = input.readUTF().ifEmpty { null }
+        val disk = input.readBoolean()
+        val catalogId = input.readUTF().ifEmpty { null }
+        return X86Entry(id, uri, path, size, modified, contentId, error, catalogId, disk = disk)
+    }
 
     /** A drive's kind of disk image. */
     enum class DiskKind { FLOPPY, CD }
