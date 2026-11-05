@@ -77,6 +77,68 @@ class ExoWin9xTest {
         assertTrue(config.contains("[Machine]\ncpu_family = pentiumpro\nmachine = 686bx\n"))
     }
 
+    private val hellbender = """
+        [dosbox]
+        machine                   = svga_s3
+        [autoexec]
+        # Lines in this section will be run at startup.
+        echo off
+        vhdmake -f -l .\emulators\dosbox\x98\parent/W98-C.vhd .\emulators\dosbox\x98\W98-C.vhd
+        IMGMOUNT c .\emulators\dosbox\x98\W98-C.vhd
+        IMGMOUNT d ".\eXoWin9x\1996\Hellbender (1996)\Hellbender (1996).vhd"
+        IMGMOUNT e ".\eXoWin9x\1996\Hellbender (1996)\hellbender.cue" ".\eXoWin9x\1996\Hellbender (1996)\disc2.cue" -t cdrom -ide 2m
+        BOOT -l c
+    """.trimIndent()
+
+    private val template = """
+        [General]
+        emu_build_num = 7012
+
+        [Machine]
+        machine = 686bx
+        mem_size = 1048576
+
+        [Hard disks]
+        hdd_01_fn = parent/W98-P.vhd
+        hdd_01_parameters = 255, 16, 32896, 0, ide
+
+        [Floppy and CD-ROM drives]
+        cdrom_01_ide_channel = 1:0
+        cdrom_01_image_path = ../../eXoWin9x/1996/x/y.cue
+        cdrom_01_parameters = 1, atapi
+    """.trimIndent()
+
+    @Test
+    fun aDosboxGameRunsOnTheCollections86BoxMachine() {
+        assertEquals("W98-C.vhd", ExoWin9x.dosboxWindows(hellbender))
+        val mounts = ExoWin9x.dosboxMounts(hellbender)
+        assertEquals(listOf('d', 'e'), mounts.map { it.drive })
+        assertEquals(2, mounts[1].images.size)
+        assertTrue(mounts[1].cdrom)
+        val members = listOf("Hellbender (1996)/Hellbender (1996).vhd", "Hellbender (1996)/HELLBENDER.CUE",
+            "Hellbender (1996)/disc2.cue", "Hellbender (1996)/hellbender.bin")
+        val translation = ExoWin9x.translateDosbox(template, mounts, members, { "/data/exowin9x/$it" }) { 4195296L }
+        assertEquals("W98-P.vhd", translation.parent)
+        assertEquals("686bx", translation.machine)
+        val config = translation.config
+        assertFalse(config.contains("emu_build_num"))
+        assertFalse(config.contains("parent/W98-P.vhd"))
+        assertFalse(config.contains("y.cue"))
+        assertTrue(config.contains("[Machine]\nmachine = 686bx\n"))
+        assertTrue(config.contains("hdd_01_fn = ${ExoWin9x.CHILD}\nhdd_01_vhd_parent = /data/exowin9x/W98-P.vhd\nhdd_01_ide_channel = 0:0\nhdd_01_parameters = 255, 16, 32896, 0, ide\n"))
+        assertTrue(config.contains("hdd_02_fn = Hellbender (1996).vhd\nhdd_02_ide_channel = 0:1\nhdd_02_parameters = 63, 16, 4162, 0, ide\n"))
+        assertTrue(config.contains("cdrom_01_ide_channel = 1:0\ncdrom_01_image_path = HELLBENDER.CUE\n"))
+        // One section of each name: 86Box reads one
+        for (section in listOf("[Hard disks]", "[Floppy and CD-ROM drives]", "[Machine]"))
+            assertEquals(section, 1, Regex(Regex.escape(section)).findAll(config).count())
+    }
+
+    @Test
+    fun aFolderCdIsMarked() {
+        val mounts = ExoWin9x.dosboxMounts("[autoexec]\nIMGMOUNT d \"a.vhd\"\nmount e \".\\eXoWin9x\\1995\\G (1995)\\CD\"\n")
+        assertTrue(mounts.single { it.drive == 'e' }.folder)
+    }
+
     @Test
     fun aMissingFileFails() {
         assertThrows(IllegalStateException::class.java) {

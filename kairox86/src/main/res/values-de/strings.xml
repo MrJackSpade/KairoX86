@@ -28,9 +28,12 @@
     <string name="machine_external">Eine andere App kann ein Disk-Image öffnen, aber KairoX86 führt Maschinen aus: Lege den Ordner der Maschine in den Spieleordner</string>
     <!-- EN: Could not delete %1$s -->
     <string name="machine_delete_failed">%1$s konnte nicht gelöscht werden</string>
+    <!-- %1$s is the game's name in an eXoWin9x collection, %2$s the Windows image it is set up for there (KairoX86#219). -->
+    <!-- EN: %1$s is set up for %2$s, a Windows that KairoX86 can\'t run games on yet -->
+    <string name="exo_windows_unsupported">%1$s is set up for %2$s, a Windows that KairoX86 can\'t run games on yet</string>
     <!-- %1$s is the game's name in an eXoWin9x collection (KairoX86#219). -->
-    <!-- EN: %1$s is set up for DOSBox-X in its collection, which KairoX86 can\'t run yet -->
-    <string name="exo_dosbox_x">%1$s is set up for DOSBox-X in its collection, which KairoX86 can\'t run yet</string>
+    <!-- EN: %1$s reads its CD from a folder, which KairoX86 can\'t put in a drive yet -->
+    <string name="exo_folder_cd">%1$s reads its CD from a folder, which KairoX86 can\'t put in a drive yet</string>
     <!-- EN: Another machine is still running -->
     <string name="machine_still_running">Eine andere Maschine läuft noch</string>
     <!-- EN: The machine\'s working folder could not be prepared -->

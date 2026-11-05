@@ -28,9 +28,12 @@
     <string name="machine_external">يمكن لتطبيق آخر فتح صورة قرص، لكن KairoX86 يشغّل الأجهزة: ضع مجلد الجهاز في مجلد الألعاب</string>
     <!-- EN: Could not delete %1$s -->
     <string name="machine_delete_failed">تعذّر حذف %1$s</string>
+    <!-- %1$s is the game's name in an eXoWin9x collection, %2$s the Windows image it is set up for there (KairoX86#219). -->
+    <!-- EN: %1$s is set up for %2$s, a Windows that KairoX86 can\'t run games on yet -->
+    <string name="exo_windows_unsupported">%1$s is set up for %2$s, a Windows that KairoX86 can\'t run games on yet</string>
     <!-- %1$s is the game's name in an eXoWin9x collection (KairoX86#219). -->
-    <!-- EN: %1$s is set up for DOSBox-X in its collection, which KairoX86 can\'t run yet -->
-    <string name="exo_dosbox_x">%1$s is set up for DOSBox-X in its collection, which KairoX86 can\'t run yet</string>
+    <!-- EN: %1$s reads its CD from a folder, which KairoX86 can\'t put in a drive yet -->
+    <string name="exo_folder_cd">%1$s reads its CD from a folder, which KairoX86 can\'t put in a drive yet</string>
     <!-- EN: Another machine is still running -->
     <string name="machine_still_running">لا يزال جهاز آخر قيد التشغيل</string>
     <!-- EN: The machine\'s working folder could not be prepared -->

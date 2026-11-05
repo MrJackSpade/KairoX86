@@ -332,9 +332,9 @@ class MainActivity : MachineActivity<X86Entry>() {
         // Each step's time, for the start's measure (KairoX86#42) and player reports.
         val began = SystemClock.elapsedRealtime()
         installFreeFirmware(progress)
+        val firmwareReady = SystemClock.elapsedRealtime()
         // An eXoWin9x game's machine folder, made from its collection the first time (KairoX86#219)
         if (entry.exo) machines.makeExoDisks(entry, tree, cancelled, progress)
-        val firmwareReady = SystemClock.elapsedRealtime()
         val prepared = machines.prepare(entry, tree, cancelled)
         session = prepared
         val folderReady = SystemClock.elapsedRealtime()

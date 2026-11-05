@@ -32,7 +32,25 @@ class X86Exo(private val context: Context, private val docs: X86Documents) {
         val folder = docs.makeFolders(tree, game.folder)
         if (docs.children(tree, folder).any { it.name == X86Library.CONFIG && !it.folder }) return
         val members = gameArchive(tree, game).use { archive -> archive.members.map { it.name } }
-        val translation = ExoWin9x.translate(playConfig(tree, game), members) { parent -> parentFile(game, parent).absolutePath }
+        val (kind, text) = gameConfig(tree, game)
+        val translation = if (kind == ExoWin9x.PLAY_86BOX) {
+            ExoWin9x.translate(text, members) { parent -> parentFile(game, parent).absolutePath }
+        } else {
+            // A DOSBox-X game runs on eXo's 86Box machine and Windows (KairoX86#219)
+            val windows = ExoWin9x.dosboxWindows(text)
+            check(windows == null || windows.lowercase() in ExoWin9x.DOSBOX_ENGLISH_98) {
+                context.getString(R.string.exo_windows_unsupported, game.name, windows)
+            }
+            val mounts = ExoWin9x.dosboxMounts(text)
+            check(mounts.none { it.folder }) { context.getString(R.string.exo_folder_cd, game.name) }
+            val template = checkNotNull(emulatorFile(tree, game, ExoWin9x.EMULATOR_CONFIG)) {
+                "${game.name}'s collection has no ${ExoWin9x.EMULATOR_FOLDER}/${ExoWin9x.EMULATOR_CONFIG}"
+            }.use { it.readBytes().toString(Charsets.UTF_8) }
+            ExoWin9x.translateDosbox(template, mounts, members, { parent -> parentFile(game, parent).absolutePath }) { disk ->
+                // A hard disk's geometry comes from its size: it is unpacked now, as its start would
+                vhdSectors(tree, unpackMember(tree, game, folder, disk, AtomicBoolean(false)))
+            }
+        }
         val nvr = docs.makeFolders(tree, "${game.folder}/${X86Library.NVR}")
         for (name in listOf("${translation.machine}.nvr", "${translation.machine}.bin")) {
             if (docs.children(tree, nvr).any { it.name == name }) continue
@@ -66,6 +84,30 @@ class X86Exo(private val context: Context, private val docs: X86Documents) {
             unpackParent(tree, game, parent, cancelled)
         }
     }
+
+    /** The game's own file [name] in its machine folder [folder], unpacked from its ZIP when it is not there yet. */
+    private fun unpackMember(tree: Uri, game: ExoWin9x.Game, folder: String, name: String, cancelled: AtomicBoolean): Uri {
+        docs.children(tree, folder).firstOrNull { it.name == name && !it.folder }?.let { return docs.uri(tree, it.id) }
+        return gameArchive(tree, game).use { archive ->
+            val member = checkNotNull(archive.members.firstOrNull { DiskArchive.safeName(it.name).substringAfterLast('/') == name }) {
+                context.getString(FrontendR.string.kairo_disk_member_missing, name)
+            }
+            docs.writeWhole(tree, folder, name) { output -> archive.copy(member, output) { checkCancelled(cancelled) } }
+        }
+    }
+
+    /** The size in sectors of the VHD [uri], as its footer gives it (its current size, at 40 + 8). */
+    private fun vhdSectors(tree: Uri, uri: Uri): Long =
+        checkNotNull(context.contentResolver.openFileDescriptor(uri, "r")) { context.getString(R.string.machine_open_failed, uri.toString()) }
+            .use { descriptor ->
+                val channel = FileInputStream(descriptor.fileDescriptor).channel
+                val footer = ByteBuffer.allocate(512)
+                while (footer.hasRemaining()) check(channel.read(footer, descriptor.statSize - 512 + footer.position()) > 0) {
+                    context.getString(R.string.machine_open_failed, uri.toString())
+                }
+                check(String(footer.array(), 0, 8, Charsets.US_ASCII) == "conectix") { "$uri has no VHD footer" }
+                footer.order(java.nio.ByteOrder.BIG_ENDIAN).getLong(48) / 512
+            }
 
     /** Where the Windows image [name] of [game]'s collection is kept, by the collection's path. */
     private fun parentFile(game: ExoWin9x.Game, name: String): File {
@@ -128,26 +170,28 @@ class X86Exo(private val context: Context, private val docs: X86Documents) {
         }
     }
 
-    /** [game]'s Play.cfg, unpacked by eXo's setup or still in the metadata archive. */
-    private fun playConfig(tree: Uri, game: ExoWin9x.Game): String {
-        docs.find(tree, "${game.metadataPath}/${ExoWin9x.PLAY_86BOX}")?.takeIf { !it.folder }?.let { file ->
-            return checkNotNull(context.contentResolver.openInputStream(docs.uri(tree, file.id))) {
-                context.getString(R.string.machine_open_failed, ExoWin9x.PLAY_86BOX)
-            }.use { it.readBytes().toString(Charsets.UTF_8) }
+    /**
+     * [game]'s configuration, unpacked by eXo's setup or still in the metadata archive: its name
+     * (Play.cfg for 86Box, Play.conf for DOSBox-X) and its text.
+     */
+    private fun gameConfig(tree: Uri, game: ExoWin9x.Game): Pair<String, String> {
+        for (name in listOf(ExoWin9x.PLAY_86BOX, ExoWin9x.PLAY_DOSBOX_X)) {
+            docs.find(tree, "${game.metadataPath}/$name")?.takeIf { !it.folder }?.let { file ->
+                return name to checkNotNull(context.contentResolver.openInputStream(docs.uri(tree, file.id))) {
+                    context.getString(R.string.machine_open_failed, name)
+                }.use { it.readBytes().toString(Charsets.UTF_8) }
+            }
         }
         val metadata = docs.find(tree, game.metadataArchive)?.takeIf { !it.folder } ?: error("${game.name}'s collection has no ${ExoWin9x.METADATA}")
         checkNotNull(context.contentResolver.openFileDescriptor(docs.uri(tree, metadata.id), "r")) {
             context.getString(R.string.machine_open_failed, ExoWin9x.METADATA)
         }.use { descriptor ->
             ZipFile.builder().setSeekableByteChannel(FileInputStream(descriptor.fileDescriptor).channel).get().use { zip ->
-                val play = zip.getEntry("${game.metadataFolder}/${ExoWin9x.PLAY_86BOX}")
-                    ?: zip.getEntry("eXo/${game.metadataFolder}/${ExoWin9x.PLAY_86BOX}")
-                if (play == null) {
-                    val dosbox = zip.getEntry("${game.metadataFolder}/${ExoWin9x.PLAY_DOSBOX_X}") ?: zip.getEntry("eXo/${game.metadataFolder}/${ExoWin9x.PLAY_DOSBOX_X}")
-                    check(dosbox == null) { context.getString(R.string.exo_dosbox_x, game.name) }
-                    error("${ExoWin9x.METADATA} has no configuration for ${game.name}")
+                for (name in listOf(ExoWin9x.PLAY_86BOX, ExoWin9x.PLAY_DOSBOX_X)) {
+                    val entry = zip.getEntry("${game.metadataFolder}/$name") ?: zip.getEntry("eXo/${game.metadataFolder}/$name") ?: continue
+                    return name to zip.getInputStream(entry).use { it.readBytes().toString(Charsets.UTF_8) }
                 }
-                return zip.getInputStream(play).use { it.readBytes().toString(Charsets.UTF_8) }
+                error("${ExoWin9x.METADATA} has no configuration for ${game.name}")
             }
         }
     }

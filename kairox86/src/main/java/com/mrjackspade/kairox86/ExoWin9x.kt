@@ -128,4 +128,105 @@ object ExoWin9x {
 
     /** The differencing disk 86Box makes over the parent in the session, so every start begins from the parent. */
     const val CHILD = "windows.vhd"
+
+    /** eXo's 86Box machine for its own Windows 98, which a DOSBox-X game runs on here ([translateDosbox]). */
+    const val EMULATOR_CONFIG = "86box.cfg"
+
+    /**
+     * What a DOSBox-X game's Play.conf mounts before it boots: drive [drive]'s [images] (a CD's
+     * several, the first in the drive), [cdrom] or a hard disk; [folder] when it mounts a folder of
+     * the host as the drive, not an image.
+     */
+    data class Mount(val drive: Char, val images: List<String>, val cdrom: Boolean, val folder: Boolean)
+
+    /** The DOSBox-X Windows image a Play.conf boots (its parent, `vhdmake -f -l <parent> <child>`), by name. */
+    fun dosboxWindows(playConf: String): String? = autoexec(playConf)
+        .firstOrNull { it.startsWith("vhdmake", ignoreCase = true) }
+        ?.let { tokens(it).getOrNull(3) }?.replace('\\', '/')?.substringAfterLast('/')
+
+    /** The drives a Play.conf mounts besides C: (eXo's DOSBox-X Windows image). */
+    fun dosboxMounts(playConf: String): List<Mount> = autoexec(playConf).mapNotNull { line ->
+        val words = tokens(line)
+        val command = words.firstOrNull()?.lowercase()
+        if ((command != "imgmount" && command != "mount") || words.size < 3) return@mapNotNull null
+        val drive = words[1].single().lowercaseChar()
+        if (drive == 'c') return@mapNotNull null
+        val images = words.drop(2).takeWhile { !it.startsWith("-") }.map { it.replace('\\', '/') }
+        val type = words.indexOf("-t").takeIf { it >= 0 }?.let { words.getOrNull(it + 1)?.lowercase() }
+        Mount(drive, images, cdrom = type == "cdrom", folder = command == "mount")
+    }
+
+    /** The DOSBox-X Windows images whose 86Box counterpart is eXo's 86Box Windows 98 ([PARENT_86BOX]). */
+    val DOSBOX_ENGLISH_98 = setOf("w98-c.vhd", "w98-c-net.vhd", "w98-c-net2.vhd")
+    const val PARENT_86BOX = "W98-P.vhd"
+
+    /**
+     * A DOSBox-X game as an 86Box machine (KairoX86#219): eXo's own 86Box machine for its Windows 98
+     * ([template], its emulator folder's 86box.cfg) with the game's drives from its Play.conf. The
+     * Windows disk is the session's child over the parent ([parentPath] of [PARENT_86BOX]), the
+     * game's hard disk images follow (each by its size in sectors, [sectors], at eXo's 63 x 16
+     * geometry), and its CDs take the IDE channels after them, each holding the first of its images.
+     */
+    fun translateDosbox(template: String, mounts: List<Mount>, members: Collection<String>, parentPath: (String) -> String,
+                        sectors: (String) -> Long): Translation {
+        val byName = members.associateBy { it.substringAfterLast('/').lowercase() }
+        fun member(path: String): String = checkNotNull(byName[path.substringAfterLast('/').lowercase()]) {
+            "$PLAY_DOSBOX_X mounts ${path.substringAfterLast('/')}, which is not in the game's archive"
+        }.substringAfterLast('/')
+        val disks = mounts.filter { !it.cdrom && !it.folder }.map { member(it.images.single()) }
+        val cds = mounts.filter { it.cdrom }.map { member(it.images.first()) }
+        val ini = IniText(template)
+        val machine = checkNotNull(ini["Machine", "machine"]) { "$EMULATOR_CONFIG names no machine" }
+        val windows = checkNotNull(ini["Hard disks", "hdd_01_parameters"]) { "$EMULATOR_CONFIG names no Windows disk" }
+        val out = StringBuilder()
+        // The template's drives (besides its CDs) go into the one drives section written below: 86Box
+        // reads one section of a name
+        val drives = StringBuilder()
+        var section = ""
+        for (raw in template.lines()) {
+            val line = raw.trimEnd()
+            if (line.startsWith("[") && line.endsWith("]")) {
+                section = line.substring(1, line.length - 1)
+                if (section !in setOf("General", "Hard disks", DRIVES)) out.append(line).append('\n')
+                continue
+            }
+            when (section) {
+                "General", "Hard disks" -> {}
+                DRIVES -> if (line.isNotBlank() && !line.trimStart().startsWith("cdrom_")) drives.append(line).append('\n')
+                else -> out.append(line).append('\n')
+            }
+        }
+        out.append("\n[Hard disks]\n")
+        out.append("hdd_01_fn = $CHILD\nhdd_01_vhd_parent = ${parentPath(PARENT_86BOX)}\nhdd_01_ide_channel = 0:0\n")
+        out.append("hdd_01_parameters = $windows\nhdd_01_speed = ramdisk\n")
+        disks.forEachIndexed { index, disk ->
+            val n = "%02d".format(index + 2)
+            val cylinders = sectors(disk) / (63 * 16)
+            check(cylinders > 0) { "$disk is smaller than a cylinder" }
+            out.append("hdd_${n}_fn = $disk\nhdd_${n}_ide_channel = ${channel(index + 1)}\nhdd_${n}_parameters = 63, 16, $cylinders, 0, ide\nhdd_${n}_speed = ramdisk\n")
+        }
+        out.append("\n[$DRIVES]\n").append(drives)
+        cds.forEachIndexed { index, cd ->
+            val n = "%02d".format(index + 1)
+            out.append("cdrom_${n}_ide_channel = ${channel(disks.size + 1 + index)}\ncdrom_${n}_image_path = $cd\ncdrom_${n}_parameters = 1, atapi\n")
+        }
+        return Translation(out.toString(), PARENT_86BOX, machine)
+    }
+
+    private const val DRIVES = "Floppy and CD-ROM drives"
+
+    /** The [index]th IDE channel, the primary master's first. */
+    private fun channel(index: Int): String {
+        check(index < 8) { "More drives than the IDE channels hold" }
+        return "${index / 2}:${index % 2}"
+    }
+
+    private fun autoexec(playConf: String): List<String> {
+        val lines = playConf.lines().map { it.trim() }
+        val start = lines.indexOfFirst { it.equals("[autoexec]", ignoreCase = true) }
+        return if (start < 0) emptyList() else lines.drop(start + 1).filter { it.isNotEmpty() && !it.startsWith("#") }
+    }
+
+    /** A command line's words, a quoted one with its spaces. */
+    private fun tokens(line: String): List<String> = Regex("\"([^\"]*)\"|(\\S+)").findAll(line).map { it.groupValues[1].ifEmpty { it.groupValues[2] } }.toList()
 }
