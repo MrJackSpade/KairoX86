@@ -46,13 +46,13 @@ object Win9xMachine {
 
     /**
      * PCem's Award 430VX PCI: 86Box's 430vx with the original PIIX (kairox86-pcem-430vx), a Pentium
-     * MMX 166, 64 MB, and its own floppy controller (the Super I/O's, which eXo's 686BX machine turns
+     * MMX 166 (86Box's cpu_speed is the processor's own, 166666666, at 2.5 times the bus), 64 MB, and its own floppy controller (the Super I/O's, which eXo's 686BX machine turns
      * off) with PCem's 1.44 MB drive A: its CMOS, the BIOS's defaults saved by 86Box
      * (assets/exowin9x/nvr), has that drive, and the BIOS stops at "Floppy disk(s) fail" without it
      * (86Box's default drive A is a 360K one).
      */
     val PCEM_430VX = Board("430vx", listOf("VEN_8086&DEV_7030" to 0x00, "VEN_8086&DEV_122E" to 0x07), listOf(0x11, 0x12, 0x13, 0x14), agp = false,
-        settings = listOf(Setting("Machine", "cpu_family", "pentium_p55c"), Setting("Machine", "cpu_speed", "66666666"),
+        settings = listOf(Setting("Machine", "cpu_family", "pentium_p55c"), Setting("Machine", "cpu_speed", "166666666"),
             Setting("Machine", "cpu_multi", "2.5"), Setting("Machine", "mem_size", "65536"), Setting("KairoX86", "pcem_piix", "1"),
             Setting("Storage controllers", "fdc", null), Setting("Floppy and CD-ROM drives", "fdd_01_type", "35_2hd")),
         cmosAsset = "exowin9x/nvr/430vx.nvr")

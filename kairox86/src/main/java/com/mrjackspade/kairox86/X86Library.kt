@@ -62,6 +62,8 @@ data class X86Entry(
     val diskName: String get() = zipEntry ?: path
     override val displayName: String get() = (zipEntry ?: path).substringAfterLast('/').ifEmpty { "86Box" }
     override val playable: Boolean get() = contentId != null && error == null
+    /** A machine is its folder, whose name is all title ("Dr. Sulfur's Night Lab (1996)"); a disk is a file. */
+    override val isFolder: Boolean get() = !disk
     override val mediaLabel: UiText get() = UiText.res(if (disk) R.string.media_disk else R.string.media_machine)
 }
 

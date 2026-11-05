@@ -119,6 +119,7 @@ class Win9xMachineTest {
         assertEquals("1", machine.value("KairoX86", "pcem_piix"))
         assertEquals("pentium_p55c", machine.value("Machine", "cpu_family"))
         assertEquals("65536", machine.value("Machine", "mem_size"))
+        assertEquals("166666666", machine.value("Machine", "cpu_speed"))
         // Its own floppy controller (eXo's 686BX machine turns its off) and PCem's 1.44 MB drive A, which its CMOS has
         assertTrue(machine.settings.any { it.key == "fdc" && it.value == null })
         assertEquals("35_2hd", machine.value("Floppy and CD-ROM drives", "fdd_01_type"))
