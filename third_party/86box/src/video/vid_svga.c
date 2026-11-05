@@ -2001,6 +2001,32 @@ svga_write_common(uint32_t addr, uint8_t val, uint8_t linear, void *priv)
 
     cycles -= svga->monitor->mon_video_timing_write_b;
 
+    /* KairoX86#214: the plain planar write, as the general path below makes it */
+    if (linear && !(svga->adv_flags & (FLAG_ADDR_BY8 | FLAG_ADDR_BY16 | FLAG_LATCH8 | FLAG_EXT_WRITE)) &&
+        (svga->writemode == 0) && !svga->chain4 && !svga->chain2_write && !svga->fb_only &&
+        (svga->gdcreg[8] == 0xff) && !(svga->gdcreg[3] & 0x18) && (!svga->gdcreg[1] || svga->set_reset_disabled) &&
+        (svga->translate_address == NULL)) {
+        if (!(svga->gdcreg[6] & 1))
+            svga->fullchange = 2;
+        if (!writemask2)
+            return;
+        addr = (addr << 2) & svga->decode_mask;
+        if (addr >= svga->vram_max)
+            return;
+        addr &= svga->vram_mask;
+        svga->changedvram[addr >> 12] = svga->monitor->mon_changeframecount;
+        val = ((val >> (svga->gdcreg[3] & 7)) | (val << (8 - (svga->gdcreg[3] & 7))));
+        if (writemask2 & 1)
+            svga->vram[addr] = val;
+        if (writemask2 & 2)
+            svga->vram[addr | 1] = val;
+        if (writemask2 & 4)
+            svga->vram[addr | 2] = val;
+        if (writemask2 & 8)
+            svga->vram[addr | 3] = val;
+        return;
+    }
+
     if (!linear) {
         xga_write_test(addr, val, svga);
         addr = svga_decode_addr(svga, addr, 1);

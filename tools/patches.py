@@ -2117,6 +2117,48 @@ KAIROX86_OPL3_THREAD = [
      'extern void kairo_nuked_advance(int is_48k, int pos);\n'),
 ]
 
+# KairoX86#214: the planar byte write a card that decodes its own addresses makes (the S3's, in
+# DOOM's unchained 256-colour mode) in its plainest form: write mode 0, every bit taken, no logic
+# operation, no set/reset, plain planar addressing. svga_write_common's general path worked out the
+# planes with clz/ctz and tested its flags for each one; this does the same steps in the same order:
+# the timing, fullchange, a zero write mask's return, the address, the changed page, the rotation, and
+# the planes the mask names.
+KAIROX86_PLAIN_PLANAR_WRITE = [
+    ('86box/src/video/vid_svga.c',
+     '        writemask2 = svga->seqregs[2];\n'
+     '\n'
+     '    cycles -= svga->monitor->mon_video_timing_write_b;\n',
+     '        writemask2 = svga->seqregs[2];\n'
+     '\n'
+     '    cycles -= svga->monitor->mon_video_timing_write_b;\n'
+     '\n'
+     '    /* KairoX86#214: the plain planar write, as the general path below makes it */\n'
+     '    if (linear && !(svga->adv_flags & (FLAG_ADDR_BY8 | FLAG_ADDR_BY16 | FLAG_LATCH8 | FLAG_EXT_WRITE)) &&\n'
+     '        (svga->writemode == 0) && !svga->chain4 && !svga->chain2_write && !svga->fb_only &&\n'
+     '        (svga->gdcreg[8] == 0xff) && !(svga->gdcreg[3] & 0x18) && (!svga->gdcreg[1] || svga->set_reset_disabled) &&\n'
+     '        (svga->translate_address == NULL)) {\n'
+     '        if (!(svga->gdcreg[6] & 1))\n'
+     '            svga->fullchange = 2;\n'
+     '        if (!writemask2)\n'
+     '            return;\n'
+     '        addr = (addr << 2) & svga->decode_mask;\n'
+     '        if (addr >= svga->vram_max)\n'
+     '            return;\n'
+     '        addr &= svga->vram_mask;\n'
+     '        svga->changedvram[addr >> 12] = svga->monitor->mon_changeframecount;\n'
+     '        val = ((val >> (svga->gdcreg[3] & 7)) | (val << (8 - (svga->gdcreg[3] & 7))));\n'
+     '        if (writemask2 & 1)\n'
+     '            svga->vram[addr] = val;\n'
+     '        if (writemask2 & 2)\n'
+     '            svga->vram[addr | 1] = val;\n'
+     '        if (writemask2 & 4)\n'
+     '            svga->vram[addr | 2] = val;\n'
+     '        if (writemask2 & 8)\n'
+     '            svga->vram[addr | 3] = val;\n'
+     '        return;\n'
+     '    }\n'),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -2144,6 +2186,7 @@ PATCHES = {
     'kairox86-densel-once': KAIROX86_DENSEL_ONCE,
     'kairox86-lowres-8bpp': KAIROX86_LOWRES_8BPP,
     'kairox86-opl3-thread': KAIROX86_OPL3_THREAD,
+    'kairox86-plain-planar-write': KAIROX86_PLAIN_PLANAR_WRITE,
 }
 
 ADDED = [
