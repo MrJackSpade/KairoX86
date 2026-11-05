@@ -215,6 +215,7 @@ struct _opl3_chip {
     uint32_t      writebuf_last;
     uint64_t      writebuf_lasttime;
     opl3_writebuf writebuf[OPL3_WRITEBUF_SIZE];
+    uint32_t      k_applied105; /* KairoX86#214: 0x105 writes the chip has applied */
 };
 
 typedef struct {
@@ -235,6 +236,12 @@ typedef struct {
     int32_t buffer[MUSICBUFLEN * 2];
 
     int32_t *(*update)(void *priv);
+
+    /* KairoX86#214: the synthesis thread (snd_opl3_nuked.c), and what newm is once every 0x105
+       write queued to it (sent105 of them) is applied */
+    void    *synth;
+    uint32_t sent105;
+    uint8_t  newm;
 } nuked_opl3_drv_t;
 
 enum {

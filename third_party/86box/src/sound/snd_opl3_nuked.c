@@ -53,6 +53,8 @@
 #include <86box/video.h>
 #include <86box/snd_opl.h>
 #include <86box/snd_opl3_nuked.h>
+#include <86box/thread.h>
+#include <stdatomic.h>
 
 #if OPL3_WF_TABLE_RUNTIME
 
@@ -1598,6 +1600,7 @@ OPL3_WriteReg(void *priv, uint16_t reg, uint8_t val)
                         OPL3_ChannelSet4Op(chip, val);
                         break;
                     case 0x05:
+                        chip->k_applied105++; /* KairoX86#214 */
                         chip->newm = val & 0x01;
 #if OPL3_ENABLE_STEREOEXT
                         chip->stereoext = (val >> 1) & 0x01;
@@ -1857,44 +1860,191 @@ nuked_opl3_drv_set_do_cycles(void *priv, int8_t do_cycles)
         dev->flags &= ~FLAG_CYCLES;
 }
 
+/* KairoX86#214: the synthesis thread. The emulation thread queues what the chip is told, each at
+   the sample it happens at; the thread generates up to that sample, then applies it. */
+#define SYNTH_OPS   4096 /* a power of 2 */
+#define SYNTH_BATCH 16   /* operations queued before a sleeping thread is woken */
+
+enum { SYNTH_ADVANCE, SYNTH_WRITE, SYNTH_NEWM, SYNTH_RESET };
+
+typedef struct synth_op_t {
+    int      pos;
+    uint16_t kind;
+    uint16_t reg;
+    uint8_t  val;
+} synth_op_t;
+
+typedef struct nuked_synth_t {
+    thread_t   *thread;
+    event_t    *wake;
+    event_t    *idle;
+    atomic_uint head;       /* next operation queued, emulation thread */
+    atomic_uint tail;       /* next operation applied, synthesis thread */
+    atomic_uint applied105; /* the chip's k_applied105 as of tail */
+    atomic_int  quit;
+    int         pos;        /* the next sample of the buffer to generate, synthesis thread */
+    synth_op_t  ops[SYNTH_OPS];
+} nuked_synth_t;
+
+/* The samples up to [to], as the catch-up generated them. */
+static void
+nuked_opl3_generate(nuked_opl3_drv_t *dev, int *pos, int to)
+{
+    if (*pos >= to)
+        return;
+    if (dev->is_48k)
+        OPL3_GenerateResampledStream(&dev->opl, &dev->buffer[*pos * 2], to - *pos);
+    else
+        OPL3_GenerateStream(&dev->opl, &dev->buffer[*pos * 2], to - *pos);
+    for (; *pos < to; (*pos)++) {
+        dev->buffer[*pos * 2] /= 2;
+        dev->buffer[(*pos * 2) + 1] /= 2;
+    }
+}
+
+static void
+nuked_synth_thread(void *priv)
+{
+    nuked_opl3_drv_t *dev = (nuked_opl3_drv_t *) priv;
+    nuked_synth_t    *s   = (nuked_synth_t *) dev->synth;
+
+    for (;;) {
+        thread_wait_event(s->wake, -1);
+        thread_reset_event(s->wake);
+        for (;;) {
+            const unsigned tail = atomic_load_explicit(&s->tail, memory_order_relaxed);
+
+            if (tail == atomic_load_explicit(&s->head, memory_order_acquire))
+                break;
+            const synth_op_t *op = &s->ops[tail & (SYNTH_OPS - 1)];
+            switch (op->kind) {
+                case SYNTH_RESET:
+                    s->pos = 0;
+                    break;
+                case SYNTH_WRITE:
+                    nuked_opl3_generate(dev, &s->pos, op->pos);
+                    OPL3_WriteRegBuffered(&dev->opl, op->reg, op->val);
+                    break;
+                case SYNTH_NEWM:
+                    nuked_opl3_generate(dev, &s->pos, op->pos);
+                    dev->opl.newm = op->val;
+                    break;
+                default:
+                    nuked_opl3_generate(dev, &s->pos, op->pos);
+                    break;
+            }
+            atomic_store_explicit(&s->applied105, dev->opl.k_applied105, memory_order_relaxed);
+            atomic_store_explicit(&s->tail, tail + 1, memory_order_release);
+        }
+        thread_set_event(s->idle);
+        if (atomic_load_explicit(&s->quit, memory_order_acquire))
+            return;
+    }
+}
+
+/* Waits until the thread has applied everything queued: then the chip and the buffer are as the
+   catch-up would have left them now. */
+static void
+nuked_synth_wait(nuked_synth_t *s)
+{
+    while (atomic_load_explicit(&s->tail, memory_order_acquire) != atomic_load_explicit(&s->head, memory_order_relaxed)) {
+        thread_reset_event(s->idle);
+        if (atomic_load_explicit(&s->tail, memory_order_acquire) == atomic_load_explicit(&s->head, memory_order_relaxed))
+            break;
+        thread_set_event(s->wake);
+        thread_wait_event(s->idle, -1);
+    }
+}
+
+static void
+nuked_synth_push(nuked_opl3_drv_t *dev, uint16_t kind, uint16_t reg, uint8_t val)
+{
+    nuked_synth_t *s    = (nuked_synth_t *) dev->synth;
+    const unsigned head = atomic_load_explicit(&s->head, memory_order_relaxed);
+
+    if ((head - atomic_load_explicit(&s->tail, memory_order_acquire)) == SYNTH_OPS)
+        nuked_synth_wait(s);
+    synth_op_t *op = &s->ops[head & (SYNTH_OPS - 1)];
+    op->pos  = dev->is_48k ? sound_pos_global : music_pos_global;
+    op->kind = kind;
+    op->reg  = reg;
+    op->val  = val;
+    /* A thread still working finds it itself; a sleeping one is woken once SYNTH_BATCH wait
+       (while it sleeps nothing is taken, so the count reaches it), and by nuked_synth_wait() */
+    const unsigned waiting = head + 1 - atomic_load_explicit(&s->tail, memory_order_acquire);
+    atomic_store_explicit(&s->head, head + 1, memory_order_release);
+    if (waiting == SYNTH_BATCH)
+        thread_set_event(s->wake);
+}
+
+#define SYNTH_CHIPS 4   /* chips at once */
+#define SYNTH_STEP  128 /* samples between the present told to the thread, a power of 2 */
+
+static nuked_opl3_drv_t *synth_chips[SYNTH_CHIPS];
+
+static void
+nuked_synth_register(nuked_opl3_drv_t *dev, int on)
+{
+    for (int c = 0; c < SYNTH_CHIPS; c++) {
+        if (on ? (synth_chips[c] == NULL) : (synth_chips[c] == dev)) {
+            synth_chips[c] = on ? dev : NULL;
+            return;
+        }
+    }
+    if (on)
+        fatal("Nuked OPL3: more than %i chips\n", SYNTH_CHIPS);
+}
+
+/* sound.c: the sample count [pos] of the 48 kHz stream ([is_48k]) or the music stream moved on. */
+void
+kairo_nuked_advance(int is_48k, int pos)
+{
+    if (pos & (SYNTH_STEP - 1))
+        return;
+    for (int c = 0; c < SYNTH_CHIPS; c++) {
+        nuked_opl3_drv_t *dev = synth_chips[c];
+
+        if ((dev != NULL) && (dev->is_48k == !!is_48k)) {
+            nuked_synth_push(dev, SYNTH_ADVANCE, 0, 0);
+            thread_set_event(((nuked_synth_t *) dev->synth)->wake);
+        }
+    }
+}
+
+/* The buffer up to the present: the thread generates the rest of it. */
 static int32_t *
 nuked_opl3_drv_update(void *priv)
 {
     nuked_opl3_drv_t *dev = (nuked_opl3_drv_t *) priv;
 
-    if (dev->pos >= music_pos_global)
-        return dev->buffer;
-
-    OPL3_GenerateStream(&dev->opl,
-                        &dev->buffer[dev->pos * 2],
-                        music_pos_global - dev->pos);
-
-    for (; dev->pos < music_pos_global; dev->pos++) {
-        dev->buffer[dev->pos * 2] /= 2;
-        dev->buffer[(dev->pos * 2) + 1] /= 2;
-    }
-
+    nuked_synth_push(dev, SYNTH_ADVANCE, 0, 0);
+    nuked_synth_wait((nuked_synth_t *) dev->synth);
     return dev->buffer;
 }
 
 static int32_t *
 nuked_opl3_drv_update_48k(void *priv)
 {
-    nuked_opl3_drv_t *dev = (nuked_opl3_drv_t *) priv;
+    return nuked_opl3_drv_update(priv);
+}
 
-    if (dev->pos >= sound_pos_global)
-        return dev->buffer;
+/* The register an address write selects. The bank depends on the chip's newm: the last 0x105
+   value written once the chip has applied every 0x105 write, and the chip's own, read at the
+   present, while one is still in its write buffer. */
+static uint16_t
+nuked_opl3_drv_addr(nuked_opl3_drv_t *dev, uint16_t port, uint8_t val)
+{
+    nuked_synth_t *s    = (nuked_synth_t *) dev->synth;
+    uint16_t       addr = val;
 
-    OPL3_GenerateResampledStream(&dev->opl,
-                                 &dev->buffer[dev->pos * 2],
-                                 sound_pos_global - dev->pos);
-
-    for (; dev->pos < sound_pos_global; dev->pos++) {
-        dev->buffer[dev->pos * 2] /= 2;
-        dev->buffer[(dev->pos * 2) + 1] /= 2;
+    if (atomic_load_explicit(&s->applied105, memory_order_acquire) != dev->sent105) {
+        nuked_synth_push(dev, SYNTH_ADVANCE, 0, 0);
+        nuked_synth_wait(s);
+        return nuked_opl3_write_addr(&dev->opl, port, val);
     }
-
-    return dev->buffer;
+    if ((port & 0x0002) && ((addr == 0x0005) || dev->newm))
+        addr |= 0x0100;
+    return addr;
 }
 
 static uint8_t
@@ -1905,8 +2055,7 @@ nuked_opl3_drv_read(uint16_t port, void *priv)
     if (dev->flags & FLAG_CYCLES)
         cycles -= ((int) (isa_timing * 8));
 
-    dev->update(dev);
-
+    /* KairoX86#214: what a read returns is the driver's, not the samples': no catch-up */
     uint8_t ret = 0xff;
 
     if ((port & 0x0003) == 0x0000) {
@@ -1925,10 +2074,12 @@ nuked_opl3_drv_write(uint16_t port, uint8_t val, void *priv)
 {
     nuked_opl3_drv_t *dev = (nuked_opl3_drv_t *) priv;
 
-    dev->update(dev);
-
     if ((port & 0x0001) == 0x0001) {
-        OPL3_WriteRegBuffered(&dev->opl, dev->port, val);
+        nuked_synth_push(dev, SYNTH_WRITE, dev->port, val); /* KairoX86#214 */
+        if (dev->port == 0x105) {
+            dev->sent105++;
+            dev->newm = val & 0x01;
+        }
 
         switch (dev->port) {
             case 0x002: // Timer 1
@@ -1954,14 +2105,14 @@ nuked_opl3_drv_write(uint16_t port, uint8_t val, void *priv)
                 break;
 
             case 0x105:
-                dev->opl.newm = val & 0x01;
+                nuked_synth_push(dev, SYNTH_NEWM, 0, val & 0x01); /* KairoX86#214 */
                 break;
 
             default:
                 break;
         }
     } else {
-        dev->port = nuked_opl3_write_addr(&dev->opl, port, val) & 0x01ff;
+        dev->port = nuked_opl3_drv_addr(dev, port, val) & 0x01ff; /* KairoX86#214 */
 
         if (!(dev->flags & FLAG_OPL3))
             dev->port &= 0x00ff;
@@ -1973,14 +2124,24 @@ nuked_opl3_drv_reset_buffer(void *priv)
 {
     nuked_opl3_drv_t *dev = (nuked_opl3_drv_t *) priv;
 
-    dev->pos = 0;
+    nuked_synth_push(dev, SYNTH_RESET, 0, 0); /* KairoX86#214 */
 }
 
 static void
 nuked_opl3_drv_close(void *priv)
 {
     nuked_opl3_drv_t *dev = (nuked_opl3_drv_t *) priv;
+    nuked_synth_t    *s   = (nuked_synth_t *) dev->synth;
 
+    /* KairoX86#214: the thread ends with the chip, everything queued applied */
+    nuked_synth_register(dev, 0);
+    nuked_synth_wait(s);
+    atomic_store_explicit(&s->quit, 1, memory_order_release);
+    thread_set_event(s->wake);
+    thread_wait(s->thread);
+    thread_destroy_event(s->wake);
+    thread_destroy_event(s->idle);
+    free(s);
     free(dev);
 }
 
@@ -2008,6 +2169,14 @@ nuked_opl3_drv_init(const device_t *info)
 
     timer_add(&dev->timers[0], nuked_opl3_timer_1, dev, 0);
     timer_add(&dev->timers[1], nuked_opl3_timer_2, dev, 0);
+
+    /* KairoX86#214: the synthesis thread */
+    nuked_synth_t *s = (nuked_synth_t *) calloc(1, sizeof(nuked_synth_t));
+    s->wake    = thread_create_event();
+    s->idle    = thread_create_event();
+    dev->synth = s;
+    s->thread  = thread_create(nuked_synth_thread, dev);
+    nuked_synth_register(dev, 1);
 
     return dev;
 }

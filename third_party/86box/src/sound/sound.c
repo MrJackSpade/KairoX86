@@ -58,6 +58,8 @@ int  sound_card_current[SOUND_CARD_MAX] = { 0, 0, 0, 0 };
 int  sound_pos_global                   = 0;
 static int sound_buf_len                = SOUNDBUFLEN;
 int  music_pos_global                   = 0;
+/* KairoX86#214: Nuked OPL3's synthesis thread is told the present (snd_opl3_nuked.c) */
+extern void kairo_nuked_advance(int is_48k, int pos);
 int  ym2151_pos_global                  = 0;
 int  wavetable_pos_global               = 0;
 int  sound_gain                         = 0;
@@ -883,6 +885,7 @@ sound_poll(UNUSED(void *priv))
     timer_advance_u64(&sound_poll_timer, sound_poll_latch);
 
     sound_pos_global++;
+    kairo_nuked_advance(1, sound_pos_global); /* KairoX86#214 */
     if (sound_pos_global == sound_buf_len) {
         memset(outbuffer, 0x00, sound_buf_len * 2 * sizeof(int32_t));
 
@@ -995,6 +998,7 @@ music_poll(UNUSED(void *priv))
     timer_advance_u64(&music_poll_timer, music_poll_latch);
 
     music_pos_global++;
+    kairo_nuked_advance(0, music_pos_global); /* KairoX86#214 */
     if (music_pos_global == MUSICBUFLEN) {
         memset(outbuffer_m, 0x00, MUSICBUFLEN * 2 * sizeof(int32_t));
 
