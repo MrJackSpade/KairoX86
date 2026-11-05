@@ -2,7 +2,7 @@
 
 [← KairoX86](../README.md)
 
-Every change to the core that touches the guest's path is exact or it does not go in. The standard is KairoX86's own (`tools/exact.ps1`, [development](development.md#the-core)): the core of the base revision and the changed core run the same machines on the RG DS, and every frame's picture and sound hash and the guest's state at the end (registers, tsc and all RAM) must match; a change to the recompiler must also match its own run with block linking off (`-Unlinked`).
+Every change to the core that touches the guest's path is exact or it does not go in. The standard is KairoX86's own (`tools/exact.ps1`, [development](development.md#the-core)): the core of the base revision and the changed core run the same machines on the RG DS (or the PC, `-Local`, for a change that is not about the device's speed or its ARM64 code), and every frame's picture and sound hash and the guest's state at the end (registers, tsc and all RAM) must match; a change to the recompiler must also match its own run with block linking off (`-Unlinked`).
 
 The record below began in the Kairo9X proof of concept, whose speed fixes are the `kairo9x-*` patch groups of this core ([source import](source-import.md)). Those entries were measured with that work's harness: Windows 98 booting from the reference disks now kept for KairoX86's standard (the `win98-486` and `win98-pentium` machines), a fingerprint of every register and all RAM at a fixed emulated time, gated against the same binary with block linking off. Their file names (`86Box.*` builds) and fingerprints are that harness's.
 

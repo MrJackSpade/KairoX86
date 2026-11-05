@@ -1,7 +1,8 @@
 <#
 .SYNOPSIS
-The device's core as the app's release build makes it, for the tools that run it over adb
-(tools/exact.ps1, tools/pgo-train.ps1): the NDK, CMake and adb they use, and the build itself.
+The core as the app's release build makes it, for the tools that run it over adb (tools/exact.ps1,
+tools/pgo-train.ps1), and as this PC's build (tools/exact.ps1 -Local): the NDK, CMake and adb they
+use, and the builds themselves.
 #>
 $ErrorActionPreference = 'Stop'
 $sdk = [Environment]::GetEnvironmentVariable('ANDROID_HOME', 'User')
@@ -49,10 +50,33 @@ function Build-Core([string]$Source, [string]$Build, [ValidateSet('use', 'off', 
     return $out
 }
 
+<#
+Builds game_profile and the 86Box library of the tree at $Source for this PC (llvm-mingw, as
+shared\tools\test-core.ps1 builds the core) into $Build\out and returns that folder: the checks that
+are about what the guest does, not the device's speed, run here (tools/exact.ps1 -Local).
+#>
+function Build-LocalCore([string]$Source, [string]$Build, [string[]]$Options = @()) {
+    $out = Join-Path $Build 'out'
+    $env:PATH = "$($script:LocalToolchain.Replace('/', '\'));$env:PATH"
+    if (-not (Test-Path (Join-Path $Build 'build.ninja'))) {
+        & $script:CMake -S "$Source\kairox86\src\main\cpp" -B $Build -G Ninja -DCMAKE_BUILD_TYPE=Release `
+            "-DCMAKE_MAKE_PROGRAM=$($script:Ninja.Replace('\', '/'))" "-DCMAKE_C_COMPILER=$script:LocalToolchain/clang.exe" `
+            "-DCMAKE_CXX_COMPILER=$script:LocalToolchain/clang++.exe" -DKAIRO_PGO=OFF -DKAIRO_SHADERS=OFF @Options `
+            "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=$out" "-DCMAKE_RUNTIME_OUTPUT_DIRECTORY=$out" | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "CMake could not configure the core in $Build" }
+    }
+    & $script:Ninja -C $Build game_profile 86Box | Select-Object -Last 1 | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw "The core in $Build did not build" }
+    # The library's target writes it at the build's root; game_profile loads it from its own folder.
+    Copy-Item (Join-Path $Build 'libkairox86_86box.dll') $out -Force
+    return $out
+}
+$script:LocalToolchain = 'G:/tools/llvm-mingw-20261006-ucrt-x86_64/bin'
+
 # Pushes $Local to $Remote on $Device, failing at once if adb couldn't (a full device, a dropped link).
 function Push-ToDevice([string]$Device, [string]$Local, [string]$Remote) {
     & $script:Adb -s $Device push $Local $Remote | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "adb could not push $Local to $Remote on $Device" }
 }
 
-Export-ModuleMember -Function Get-CoreTools, Build-Core, Push-ToDevice
+Export-ModuleMember -Function Get-CoreTools, Build-Core, Build-LocalCore, Push-ToDevice
