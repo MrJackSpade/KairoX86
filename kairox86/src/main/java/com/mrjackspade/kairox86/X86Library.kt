@@ -51,7 +51,12 @@ data class X86Entry(
     override val member: String? = null,
     val disk: Boolean = false,
     /** The disk image's path inside its archive, or null for any other entry. */
-    override val zipEntry: String? = null
+    override val zipEntry: String? = null,
+    /**
+     * An eXoWin9x game (KairoX86#219, [ExoWin9x]): [uri] is its ZIP's document, and [path] the
+     * machine folder KairoX86 makes for it in the collection, where its machine runs from.
+     */
+    val exo: Boolean = false
 ) : LibraryItem {
     /** The disk image's own file name, by which a drive takes it: its member's in an archive. */
     val diskName: String get() = zipEntry ?: path
@@ -68,10 +73,14 @@ data class X86Entry(
  */
 class X86Library(private val context: Context) {
     private val walker = DocumentTreeWalker(context)
+    private val docs = X86Documents(context)
+    /** eXoWin9x games' machine folders (KairoX86#219). */
+    private val exoBuilder = X86Exo(context, docs)
     // Version 2 keeps the games folder's disk images beside the machines (KairoX86#209); version 3
-    // each machine's first catalog ID (KairoX86#213); version 4 the disk images inside archives (KairoX86#217).
-    private val cache = VersionedLibraryCache(File(context.filesDir, "library-v1.bin"), 4, 8 * 1024 * 1024, 100_000,
-        ::writeEntry, ::readEntry, earlierRecords = mapOf(3 to ::readEntryV3))
+    // each machine's first catalog ID (KairoX86#213); version 4 the disk images inside archives (KairoX86#217);
+    // version 5 eXoWin9x games (KairoX86#219).
+    private val cache = VersionedLibraryCache(File(context.filesDir, "library-v1.bin"), 5, 8 * 1024 * 1024, 100_000,
+        ::writeEntry, ::readEntry, earlierRecords = mapOf(3 to ::readEntryV3, 4 to ::readEntryV4))
     private val pipeline = LibraryScanPipeline<DocumentTreeWalker.FileEntry, X86Entry>(context, cache,
         entryId = { it.id },
         enumerate = { tree, depth, cancelled, progress ->
@@ -84,15 +93,32 @@ class X86Library(private val context: Context) {
                 X86Entry(file.path, file.uri.toString(), file.path, file.size, file.modified, DISK, disk = true)
             })
         },
-        inspect = { file, scan -> if (isConfig(file.path)) listOf(inspect(file, scan)) else inspectArchive(file, scan) },
+        inspect = { file, scan ->
+            val exo = ExoWin9x.game(file.path)
+            when {
+                // An eXoWin9x game's machine folder (KairoX86#219): its game's entry is the library's
+                isConfig(file.path) -> if (ExoWin9x.isMachineFolder(file.path)) emptyList() else listOf(inspect(file, scan))
+                exo != null -> listOf(exoEntry(file, exo))
+                ExoWin9x.isCollectionFile(file.path) -> emptyList()
+                else -> inspectArchive(file, scan)
+            }
+        },
         failed = { file, scan, error ->
             val message = error.message ?: "Unreadable"
-            if (isConfig(file.path)) listOf(entryOf(file, null, message, scan.earlier[folderOf(file.path)]?.catalogId))
-            else listOf(archiveOf(file, message))
+            val exo = ExoWin9x.game(file.path)
+            when {
+                isConfig(file.path) -> listOf(entryOf(file, null, message, scan.earlier[folderOf(file.path)]?.catalogId))
+                exo != null -> listOf(exoEntry(file, exo).copy(error = message))
+                else -> listOf(archiveOf(file, message))
+            }
         },
         describe = { it.path },
-        known = { file, scan -> if (isConfig(file.path)) scan.prior[folderOf(file.path)]?.let { it.size == file.size && it.modified == file.modified } == true
-            else knownArchive(file, scan) != null },
+        known = { file, scan -> when {
+            isConfig(file.path) -> scan.prior[folderOf(file.path)]?.let { it.size == file.size && it.modified == file.modified } == true
+            // Nothing is read for a collection's files: they are listed afresh
+            ExoWin9x.game(file.path) != null || ExoWin9x.isCollectionFile(file.path) -> false
+            else -> knownArchive(file, scan) != null
+        } },
         sourceOf = { it.uri },
         displayOrder = { entries -> entries.sortedBy { it.displayName.lowercase() } })
 
@@ -130,6 +156,17 @@ class X86Library(private val context: Context) {
         val contentId = contentIdOf(bytes)
         return entryOf(file, contentId, null, scan.earlier[folderOf(file.path)]?.catalogId ?: contentId)
     }
+
+    /** An eXoWin9x game's entry (KairoX86#219): its machine folder, keyed by it; nothing is read. */
+    private fun exoEntry(file: DocumentTreeWalker.FileEntry, game: ExoWin9x.Game) =
+        X86Entry(game.folder, file.uri.toString(), game.folder, file.size, file.modified, "exowin9x-v1:${game.year}/${game.name}", exo = true)
+
+    /** The game [entry] is of its eXoWin9x collection. */
+    private fun exoGame(entry: X86Entry): ExoWin9x.Game = checkNotNull(ExoWin9x.gameOfFolder(entry.path)) { "${entry.path} is no eXoWin9x game's folder" }
+
+    /** Makes the files an eXoWin9x game's machine needs before it starts (KairoX86#219). */
+    fun makeExoDisks(entry: X86Entry, tree: Uri, cancelled: AtomicBoolean, progress: (String) -> Unit) =
+        exoBuilder.makeDisks(tree, exoGame(entry), cancelled, progress)
 
     private fun entryOf(file: DocumentTreeWalker.FileEntry, contentId: String?, error: String?, catalogId: String? = contentId) =
         X86Entry(folderOf(file.path), file.uri.toString(), folderOf(file.path), file.size, file.modified, contentId, error, catalogId)
@@ -189,26 +226,9 @@ class X86Library(private val context: Context) {
     }
 
     /** The document ID of the folder [path] in [tree], by name from its root. */
-    private fun findFolder(tree: Uri, path: String): String {
-        var id = DocumentsContract.getTreeDocumentId(tree)
-        for (name in path.split('/').filter { it.isNotEmpty() }) {
-            id = children(tree, id).firstOrNull { it.name == name && it.folder }?.id
-                ?: error(context.getString(R.string.machine_folder_missing, path))
-        }
-        return id
-    }
+    private fun findFolder(tree: Uri, path: String): String = docs.findFolder(tree, path)
 
-    private data class Child(val id: String, val name: String, val folder: Boolean)
-
-    private fun children(tree: Uri, parent: String): List<Child> {
-        val query = DocumentsContract.buildChildDocumentsUriUsingTree(tree, parent)
-        return checkNotNull(context.contentResolver.query(query,
-            arrayOf(Document.COLUMN_DOCUMENT_ID, Document.COLUMN_DISPLAY_NAME, Document.COLUMN_MIME_TYPE), null, null, null)) {
-            context.getString(R.string.machine_list_failed)
-        }.use { cursor ->
-            buildList { while (cursor.moveToNext()) add(Child(cursor.getString(0), cursor.getString(1), cursor.getString(2) == Document.MIME_TYPE_DIR)) }
-        }
-    }
+    private fun children(tree: Uri, parent: String): List<X86Documents.Child> = docs.children(tree, parent)
 
     /**
      * Where in its machine's folder the disk [entry] inside an archive is unpacked to (KairoX86#217):
@@ -279,14 +299,7 @@ class X86Library(private val context: Context) {
      * The document [uri] a provider made as [name], failing when it made none or gave it another
      * name, as a provider does for a name that is taken ("Game (1)").
      */
-    private fun created(uri: Uri?, name: String): Uri {
-        checkNotNull(uri) { context.getString(R.string.machine_create_failed, name) }
-        val made = checkNotNull(context.contentResolver.query(uri, arrayOf(Document.COLUMN_DISPLAY_NAME), null, null, null)) {
-            context.getString(R.string.machine_create_failed, name)
-        }.use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
-        check(made == name) { context.getString(R.string.machine_create_failed, name) }
-        return uri
-    }
+    private fun created(uri: Uri?, name: String): Uri = docs.created(uri, name)
 
     /**
      * A machine's session: its folder in the games folder ([folder]), the session folder 86Box runs
@@ -512,7 +525,12 @@ class X86Library(private val context: Context) {
         return DocumentsContract.buildDocumentUriUsingTree(tree, config.id)
     }
 
-    private fun readConfig(tree: Uri, entry: X86Entry): String =
+    private fun readConfig(tree: Uri, entry: X86Entry): String {
+        if (entry.exo) exoBuilder.makeConfig(tree, exoGame(entry))
+        return readConfigFile(tree, entry)
+    }
+
+    private fun readConfigFile(tree: Uri, entry: X86Entry): String =
         checkNotNull(context.contentResolver.openInputStream(configUri(tree, entry))) { context.getString(R.string.machine_open_failed, "${entry.path}/$CONFIG") }
             .use { it.readBytes().toString(Charsets.UTF_8) }
 
@@ -542,9 +560,13 @@ class X86Library(private val context: Context) {
         output.writeBoolean(entry.disk)
         output.writeUTF(entry.catalogId ?: "")
         output.writeUTF(entry.zipEntry ?: "")
+        output.writeBoolean(entry.exo)
     }
 
-    private fun readEntry(input: DataInputStream): X86Entry =
+    private fun readEntry(input: DataInputStream): X86Entry = readEntryV4(input).copy(exo = input.readBoolean())
+
+    /** A record of version 4, before eXoWin9x games. */
+    private fun readEntryV4(input: DataInputStream): X86Entry =
         readEntryV3(input).copy(zipEntry = input.readUTF().ifEmpty { null })
 
     /** A record of version 3, before disks inside archives. */
@@ -605,7 +627,9 @@ class X86Library(private val context: Context) {
         fun missingMedium(config: IniText, inFolder: (String) -> Boolean): UiText? = MEDIA.firstNotNullOfOrNull { medium ->
             medium.label.takeIf {
                 config.entries(medium.section).any { (key, value) ->
-                    medium.key.matches(key) && value.isNotEmpty() && !folderHas(value.removePrefix("wp://"), inFolder)
+                    medium.key.matches(key) && value.isNotEmpty() && !folderHas(value.removePrefix("wp://"), inFolder) &&
+                        // 86Box makes a differencing disk over its parent when it is missing (KairoX86#219)
+                        !(medium.section == HARD_DISKS && config[HARD_DISKS, key.removeSuffix("_fn") + "_vhd_parent"] != null)
                 }
             }
         }

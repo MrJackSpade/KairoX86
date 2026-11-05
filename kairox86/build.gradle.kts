@@ -27,5 +27,7 @@ android.sourceSets.getByName("main").assets.srcDir(freeFirmwareAssets)
 tasks.named("preBuild") { dependsOn(stageFreeFirmware) }
 
 dependencies {
+    // eXoWin9x collections (KairoX86#219): their nested and ZIP64 archives. The frontend's version.
+    implementation("org.apache.commons:commons-compress:1.27.1")
     testImplementation("junit:junit:4.13.2")
 }

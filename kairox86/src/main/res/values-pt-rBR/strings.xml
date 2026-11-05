@@ -10,13 +10,11 @@
     <!-- %1$s is the machine's name, IBM PC compatible; %2$s the app's name, KairoX86. -->
     <!-- EN: Select the folder for your %1$s machines. %2$s finds every folder in it that holds an 86box.cfg, with its disks. -->
     <string name="folder_description">Selecione a pasta das suas máquinas %1$s. O %2$s encontra nela cada pasta que tem um 86box.cfg, com seus discos.</string>
-
     <!-- EN: The game port\'s two joysticks. -->
     <string name="joystick_help">Os dois joysticks da porta de jogos.</string>
     <!-- A joystick button: %1$d is its number. -->
     <!-- EN: Button %1$d -->
     <string name="joystick_button">Botão %1$d</string>
-
     <!-- What a library entry is, on its chip: a PC set up in a folder. -->
     <!-- EN: Machine -->
     <string name="media_machine">Máquina</string>
@@ -30,6 +28,9 @@
     <string name="machine_external">Outro app pode abrir uma imagem de disco, mas o KairoX86 executa máquinas: coloque a pasta da máquina na pasta de jogos</string>
     <!-- EN: Could not delete %1$s -->
     <string name="machine_delete_failed">Não foi possível apagar %1$s</string>
+    <!-- %1$s is the game's name in an eXoWin9x collection (KairoX86#219). -->
+    <!-- EN: %1$s is set up for DOSBox-X in its collection, which KairoX86 can\'t run yet -->
+    <string name="exo_dosbox_x">%1$s is set up for DOSBox-X in its collection, which KairoX86 can\'t run yet</string>
     <!-- EN: Another machine is still running -->
     <string name="machine_still_running">Outra máquina ainda está em execução</string>
     <!-- EN: The machine\'s working folder could not be prepared -->
@@ -50,7 +51,6 @@
     <string name="machine_unsafe_name">%1$s não é um nome que um arquivo de máquina possa ter</string>
     <!-- EN: The machine\'s settings and CMOS could not be saved to its folder -->
     <string name="machine_write_back_failed">Não foi possível salvar as configurações e o CMOS da máquina na pasta dela</string>
-
     <!-- What a disk image is, on its chip on the Disks page. -->
     <!-- EN: Disk -->
     <string name="media_disk">Disco</string>
@@ -68,6 +68,7 @@
     <!-- %1$s is the file's name. -->
     <!-- EN: %1$s is no floppy or CD image -->
     <string name="machine_not_disk">%1$s não é uma imagem de disquete nem de CD</string>
+    <!-- A machine's 86box.cfg opened from another app before its games folder is chosen (KairoX86#210). -->
     <!-- EN: A machine starts from its games folder: choose the folder that holds it first. -->
     <string name="machine_external_config">Uma máquina é iniciada pela sua pasta de jogos: escolha primeiro a pasta que a contém.</string>
     <!-- EN: A disk goes in a running machine -->

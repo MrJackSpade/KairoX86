@@ -22,6 +22,8 @@
     <string name="machine_folder_missing">The folder %1$s is gone</string>
     <string name="machine_external">Another app can open a disk image, but KairoX86 runs machines: put the machine\'s folder in the games folder</string>
     <string name="machine_delete_failed">Could not delete %1$s</string>
+    <!-- %1$s is the game's name in an eXoWin9x collection (KairoX86#219). -->
+    <string name="exo_dosbox_x">%1$s is set up for DOSBox-X in its collection, which KairoX86 can\'t run yet</string>
     <string name="machine_still_running">Another machine is still running</string>
     <string name="machine_session_failed">The machine\'s working folder could not be prepared</string>
     <string name="machine_list_failed">A folder of the games folder could not be read</string>
