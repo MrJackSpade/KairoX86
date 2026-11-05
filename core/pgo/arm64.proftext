@@ -64,7 +64,7 @@
 4
 # Counter Values:
 124031936
-30962552
+30966392
 7751996
 18490
 
@@ -196,10 +196,10 @@
 # Num Counters:
 8
 # Counter Values:
-4090
+3851
 4096
-2044
-7604
+2043
+7603
 8
 5232
 0
@@ -211,7 +211,7 @@
 # Num Counters:
 4
 # Counter Values:
-1843
+1707
 2724
 2724
 2723
@@ -273,7 +273,7 @@
 4
 # Counter Values:
 0
-8192
+10240
 2837
 4
 
@@ -3076,7 +3076,7 @@ spd_write_drbs:28
 # Num Counters:
 2
 # Counter Values:
-17692
+17671
 0
 
 @KAIRO_SOURCE@/third_party/86box/src/codegen/codegen_backend_arm64_uops.c;codegen_ADD
@@ -19100,9 +19100,9 @@ spd_write_drbs:28
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_w_seg_a16:3175
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opNOP:2965
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_SP_imm:1478
-@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_r_l_a32:1
-@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opINT:1
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opRETF_a16_imm:1
+@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opINT:1
+@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_r_l_a32:1
 
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;fastreadl_fetch
 # Func Hash:
@@ -19900,8 +19900,8 @@ spd_write_drbs:28
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opBT_w_r_a32:50
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opLGS_w_a32:37
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opSHLD_w_i_a32:20
-@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opBTS_w_r_a32:20
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opBTR_w_r_a32:20
+@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opBTS_w_r_a32:20
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opLSS_w_a32:15
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opLFS_w_a32:14
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opBSR_w_a32:10
@@ -24735,8 +24735,8 @@ spd_write_drbs:28
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opSUB_l_rm_a16:12
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opPOPL_a16:11
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_EAX_a16:11
-@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opADD_l_rm_a16:4
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opCMP_l_rm_a16:4
+@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opADD_l_rm_a16:4
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opXCHG_l_a16:2
 
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opCS_l_a32
@@ -24806,18 +24806,18 @@ spd_write_drbs:28
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opADD_w_rm_a16:153
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opSUB_w_rm_a16:133
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opCMP_b_rm_a16:127
-@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;op83_w_a16:104
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_w_seg_a16:104
+@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;op83_w_a16:104
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_w_imm_a16:83
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;op0F_w_a16:24
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opCMP_w_rmw_a16:21
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opADD_w_rmw_a16:20
-@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opLDS_w_a16:8
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opTEST_b_a16:8
+@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opLDS_w_a16:8
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_b_r_a16:3
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opADD_b_rm_a16:2
-@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opLES_w_a16:2
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opCMP_b_rmw_a16:2
+@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opLES_w_a16:2
 
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opCS_w_a32
 # Func Hash:
@@ -26903,8 +26903,8 @@ spd_write_drbs:28
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_r_w_a16:10
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_r_b_a16:6
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opCMP_b_rm_a16:4
-@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_w_r_a16:2
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_w_seg_a16:2
+@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_w_r_a16:2
 
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opDS_w_a32
 # Func Hash:
@@ -27026,9 +27026,9 @@ spd_write_drbs:28
 5
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opFLD1:6
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opFSTCW_a16:6
+@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opFLD:4
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opFCHS:4
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opFLDZ:4
-@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opFLD:4
 
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opESCAPE_d9_a32
 # Func Hash:
@@ -27513,14 +27513,14 @@ spd_write_drbs:28
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opCMP_w_rmw_a32:49
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opF7_w_a32:34
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opFF_w_a32:34
-@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_seg_w_a32:33
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_r_b_a32:33
+@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_seg_w_a32:33
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;op80_a32:32
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_b_r_a32:25
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;op83_w_a32:20
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_b_imm_a32:18
-@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_a32_AX:12
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opF6_a32:12
+@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_a32_AX:12
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opXCHG_w_a32:5
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;op81_w_a32:4
 
@@ -29437,9 +29437,9 @@ spd_write_drbs:28
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_l_r_a16:12
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_l_imm_a16:11
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opLES_l_a16:6
+@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opCMP_l_rmw_a16:4
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opSUB_l_rmw_a16:4
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opLDS_l_a16:4
-@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opCMP_l_rmw_a16:4
 
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opFS_l_a32
 # Func Hash:
@@ -29511,16 +29511,16 @@ spd_write_drbs:28
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opLDS_w_a16:14
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opADD_w_rm_a16:12
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_a16_AX:8
-@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opXCHG_b_a16:6
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_b_imm_a16:6
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opCMP_b_rmw_a16:6
+@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opXCHG_b_a16:6
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opCMP_w_rmw_a16:4
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opCMP_w_rm_a16:3
-@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opPOPW_a16:2
-@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_AL_a16:2
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_a16_AL:2
-@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opSETALC:1
+@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_AL_a16:2
+@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opPOPW_a16:2
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_w_seg_a16:1
+@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opSETALC:1
 
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opFS_w_a32
 # Func Hash:
@@ -29549,8 +29549,8 @@ spd_write_drbs:28
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_seg_w_a32:22
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;op83_w_a32:15
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_AX_a32:7
-@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_w_imm_a32:4
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_r_b_a32:4
+@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_w_imm_a32:4
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;op0F_w_a32:4
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opF7_w_a32:2
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_a32_AX:2
@@ -29606,8 +29606,8 @@ spd_write_drbs:28
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;op81_l_a16:19
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opCMP_l_rm_a16:18
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_EAX_a16:15
-@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opADD_l_rm_a16:10
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_a16_EAX:10
+@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opADD_l_rm_a16:10
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opXCHG_l_a16:6
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opF7_l_a16:6
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;op83_l_a16:4
@@ -29637,14 +29637,14 @@ spd_write_drbs:28
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opCMP_l_rmw_a32:22
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opXCHG_l_a32:12
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opFF_l_a32:12
+@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_r_b_a32:10
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_EAX_a32:10
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;op83_l_a32:10
-@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_r_b_a32:10
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opD1_l_a32:8
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opF6_a32:6
-@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opTEST_b_a32:4
-@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_l_imm_a32:4
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opF7_l_a32:4
+@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_l_imm_a32:4
+@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opTEST_b_a32:4
 
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opGS_w_a16
 # Func Hash:
@@ -29674,8 +29674,8 @@ spd_write_drbs:28
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opF6_a16:20
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_AX_a16:20
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opF7_w_a16:12
-@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;op0F_w_a16:10
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opFF_w_a16:10
+@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;op0F_w_a16:10
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_b_r_a16:7
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_w_r_a16:6
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_b_imm_a16:5
@@ -29702,8 +29702,8 @@ spd_write_drbs:28
 4
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOVSB_a32:11
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;op83_w_a32:10
-@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_r_w_a32:2
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_AX_a32:2
+@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_r_w_a32:2
 
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opIMUL_l_ib_a32
 # Func Hash:
@@ -35671,13 +35671,13 @@ spd_write_drbs:28
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_w_r_a16:14
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_w_seg_a16:12
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_AL_imm:4
-@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opCALL_r16:2
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opADD_w_rm_a16:2
-@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;op81_w_a16:2
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;op_67:2
-@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opIN_AL_imm:1
-@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opLEA_w_a16:1
+@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;op81_w_a16:2
+@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opCALL_r16:2
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opSTI:1
+@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opLEA_w_a16:1
+@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opIN_AL_imm:1
 
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_seg_w_a32
 # Func Hash:
@@ -37571,9 +37571,9 @@ spd_write_drbs:28
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opREP_SCASW_a16_E:14
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opREP_SCASL_a32_E:11
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opREP_LODSW_a16:10
+@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opREP_SCASB_a32_E:8
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opREP_OUTSW_a16:8
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opFS_REPE_l_a32:8
-@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opREP_SCASB_a32_E:8
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opREP_INSL_a32:6
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opREP_OUTSL_a32:5
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opGS_REPE_l_a32:4
@@ -42856,13 +42856,13 @@ spd_write_drbs:28
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_EAX_a32:18
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_l_imm_a32:16
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opF6_a32:16
-@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opADD_l_rm_a32:10
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opXCHG_l_a32:10
+@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opADD_l_rm_a32:10
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;op83_l_a32:8
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opSUB_l_rm_a32:5
-@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_b_imm_a32:4
-@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opCMP_l_rm_a32:4
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opOR_b_rmw_a32:4
+@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opCMP_l_rm_a32:4
+@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_b_imm_a32:4
 
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opSS_w_a16
 # Func Hash:
@@ -42936,9 +42936,9 @@ spd_write_drbs:28
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_a32_AX:8
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;op0F_w_a32:7
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opADD_w_rm_a32:4
+@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;op83_w_a32:4
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_seg_w_a32:4
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_b_imm_a32:4
-@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;op83_w_a32:4
 
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opSTC
 # Func Hash:
@@ -44642,10 +44642,10 @@ spd_write_drbs:28
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opINCDEC_b_a32:53
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_seg_w_a32:34
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;op81_w_a32:23
+@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opREPE:16
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opPOPW_a32:16
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opNOP:16
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opLES_w_a32:16
-@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opREPE:16
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opSS_w_a32:15
 
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;op_67_REPE
@@ -44674,9 +44674,9 @@ spd_write_drbs:28
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opREP_MOVSW_a32:25
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opREP_STOSW_a32:19
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opREP_CMPSW_a32_E:8
+@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opCS_REPE_l_a16:4
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opREP_MOVSB_a16:4
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opREP_STOSB_a32:4
-@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opCS_REPE_l_a16:4
 0
 
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;op_67_REPNE
@@ -50484,38 +50484,38 @@ spd_write_drbs:28
 @KAIRO_SOURCE@/third_party/86box/src/device/lpt.c;lpt_init:12
 @KAIRO_SOURCE@/third_party/86box/src/floppy/fdc.c;fdc_init:4
 port_6x_init:3
-@KAIRO_SOURCE@/third_party/86box/src/device/kbc_at.c;kbc_at_init:3
-@KAIRO_SOURCE@/third_party/86box/src/apm.c;apm_init:3
+@KAIRO_SOURCE@/third_party/86box/src/nvr_at.c;nvr_at_init:3
 mouse_ps2_init:3
-@KAIRO_SOURCE@/third_party/86box/src/sound/snd_speaker.c;speaker_init:3
+@KAIRO_SOURCE@/third_party/86box/src/disk/hdc_ide.c;ide_init:3
 port_92_init:3
 keyboard_at_init:3
+@KAIRO_SOURCE@/third_party/86box/src/apm.c;apm_init:3
+@KAIRO_SOURCE@/third_party/86box/src/device/kbc_at.c;kbc_at_init:3
 @KAIRO_SOURCE@/third_party/86box/src/video/vid_s3.c;s3_init:3
-@KAIRO_SOURCE@/third_party/86box/src/disk/hdc_ide.c;ide_init:3
-@KAIRO_SOURCE@/third_party/86box/src/nvr_at.c;nvr_at_init:3
-@KAIRO_SOURCE@/third_party/86box/src/sound/snd_opl_ymfm.cpp;_ZL13ymfm_drv_initPK8_device_:2
-@KAIRO_SOURCE@/third_party/86box/src/device/hwm_lm75.c;lm75_init:2
-@KAIRO_SOURCE@/third_party/86box/src/chipset/intel_420ex.c;i420ex_init:2
-@KAIRO_SOURCE@/third_party/86box/src/disk/hdc_ide_sff8038i.c;sff_init:2
+@KAIRO_SOURCE@/third_party/86box/src/sound/snd_speaker.c;speaker_init:3
 @KAIRO_SOURCE@/third_party/86box/src/pit_fast.c;pitf_init:2
+@KAIRO_SOURCE@/third_party/86box/src/chipset/intel_420ex.c;i420ex_init:2
+@KAIRO_SOURCE@/third_party/86box/src/device/hwm_lm75.c;lm75_init:2
 @KAIRO_SOURCE@/third_party/86box/src/sound/snd_sb.c;sb_16_init:2
-@KAIRO_SOURCE@/third_party/86box/src/device/keyboard_xt.c;kbd_init:1
-@KAIRO_SOURCE@/third_party/86box/src/sound/snd_opl2_nuked.c;nuked_opl2_drv_init:1
-adlib_init:1
-@KAIRO_SOURCE@/third_party/86box/src/ddma.c;ddma_init:1
-@KAIRO_SOURCE@/third_party/86box/src/chipset/intel_piix.c;piix_init:1
-@KAIRO_SOURCE@/third_party/86box/src/chipset/intel_4x0.c;i4x0_init:1
-cga_standalone_init:1
-@KAIRO_SOURCE@/third_party/86box/src/pit.c;pit_init:1
+@KAIRO_SOURCE@/third_party/86box/src/disk/hdc_ide_sff8038i.c;sff_init:2
+@KAIRO_SOURCE@/third_party/86box/src/sound/snd_opl_ymfm.cpp;_ZL13ymfm_drv_initPK8_device_:2
 @KAIRO_SOURCE@/third_party/86box/src/acpi.c;acpi_init:1
-@KAIRO_SOURCE@/third_party/86box/src/usb.c;usb_init:1
-@KAIRO_SOURCE@/third_party/86box/src/device/ibm_5161.c;ibm_5161_init:1
-@KAIRO_SOURCE@/third_party/86box/src/device/kbc_xt.c;kbd_init:1
-@KAIRO_SOURCE@/third_party/86box/src/sio/sio_w83877.c;w83877_init:1
+adlib_init:1
 @KAIRO_SOURCE@/third_party/86box/src/mem/intel_flash.c;intel_flash_init:1
+@KAIRO_SOURCE@/third_party/86box/src/chipset/intel_piix.c;piix_init:1
+@KAIRO_SOURCE@/third_party/86box/src/device/kbc_xt.c;kbd_init:1
+@KAIRO_SOURCE@/third_party/86box/src/chipset/intel_4x0.c;i4x0_init:1
+@KAIRO_SOURCE@/third_party/86box/src/device/keyboard_xt.c;kbd_init:1
 @KAIRO_SOURCE@/third_party/86box/src/device/hwm_lm78.c;lm78_init:1
+@KAIRO_SOURCE@/third_party/86box/src/pit.c;pit_init:1
 @KAIRO_SOURCE@/third_party/86box/src/device/smbus_piix4.c;smbus_piix4_init:1
+@KAIRO_SOURCE@/third_party/86box/src/usb.c;usb_init:1
+cga_standalone_init:1
 @KAIRO_SOURCE@/third_party/86box/src/mem/spd.c;spd_init:1
+@KAIRO_SOURCE@/third_party/86box/src/sound/snd_opl2_nuked.c;nuked_opl2_drv_init:1
+@KAIRO_SOURCE@/third_party/86box/src/ddma.c;ddma_init:1
+@KAIRO_SOURCE@/third_party/86box/src/sio/sio_w83877.c;w83877_init:1
+@KAIRO_SOURCE@/third_party/86box/src/device/ibm_5161.c;ibm_5161_init:1
 
 @KAIRO_SOURCE@/third_party/86box/src/device.c;device_get_bios
 # Func Hash:
@@ -57208,7 +57208,7 @@ _ZN8YMFMChipIN4ymfm6ymf262EE6updateEv:4026
 # Counter Values:
 4
 17
-21421
+21518
 0
 0
 4
@@ -57221,7 +57221,7 @@ _ZN8YMFMChipIN4ymfm6ymf262EE6updateEv:4026
 # Counter Values:
 4
 17
-21421
+21518
 0
 0
 4
@@ -57254,9 +57254,9 @@ _ZN8YMFMChipIN4ymfm6ymf262EE6updateEv:4026
 # NumValueSites:
 1
 7
+@KAIRO_SOURCE@/third_party/86box/src/video/video.c;blit_thread:4
 @KAIRO_SOURCE@/third_party/86box/src/sound/sound.c;sound_hdd_thread:4
 @KAIRO_SOURCE@/third_party/86box/src/sound/sound.c;sound_fdd_thread:4
-@KAIRO_SOURCE@/third_party/86box/src/video/video.c;blit_thread:4
 @KAIRO_SOURCE@/third_party/86box/src/video/vid_s3.c;mach64_fifo_thread:3
 @KAIRO_SOURCE@/third_party/86box/src/sound/snd_sb.c;sb16_mix_thread:3
 @KAIRO_SOURCE@/third_party/86box/src/disk/hdc_ide.c;ide_async_read_worker:2
@@ -57957,7 +57957,7 @@ _ZN8YMFMChipIN4ymfm6ymf262EE6updateEv:4026
 0
 0
 0
-3210
+3209
 3
 
 @KAIRO_SOURCE@/third_party/86box/src/video/vid_s3.c;s3_accel_in
@@ -58147,7 +58147,7 @@ _ZN8YMFMChipIN4ymfm6ymf262EE6updateEv:4026
 0
 0
 0
-335
+305
 0
 0
 0
@@ -61292,8 +61292,8 @@ _ZN8YMFMChipIN4ymfm6ymf262EE6updateEv:4026
 # Num Counters:
 4
 # Counter Values:
-6440
-940404
+6469
+924873
 7107
 2062
 
@@ -62052,7 +62052,7 @@ _ZN8YMFMChipIN4ymfm6ymf262EE6updateEv:4026
 7
 # Counter Values:
 12708
-8799
+8824
 0
 1095
 12708
@@ -62083,8 +62083,8 @@ _ZN8YMFMChipIN4ymfm6ymf262EE6updateEv:4026
 # Num Counters:
 3
 # Counter Values:
-364
-824892
+365
+832425
 3109470
 
 @KAIRO_SOURCE@/third_party/86box/src/video/vid_s3.c;s3_reset
@@ -62393,17 +62393,20 @@ svga_render_blank:25484
 
 @KAIRO_SOURCE@/third_party/86box/src/video/vid_svga.c;svga_write_common
 # Func Hash:
-285567596971552966
+248336591188785805
 # Num Counters:
-75
+93
 # Counter Values:
 0
-13784538
+0
+696246
 0
 0
 0
 0
 0
+0
+13791774
 0
 0
 0
@@ -62421,12 +62424,10 @@ svga_render_blank:25484
 0
 0
 0
+696246
 0
-777574
 0
-0
-52028474
-0
+687290
 0
 0
 0
@@ -62440,38 +62441,55 @@ svga_render_blank:25484
 0
 0
 7236
+13791774
 0
-52028474
+687290
 0
 7236
 0
 0
 0
-13775582
-13775582
+687290
+687290
 0
-13775582
+687290
+0
 0
 680054
 7236
+13791774
+0
+0
+16192
+0
+0
+0
+0
+0
+13784538
+687290
+687290
+0
+0
 0
 0
 13104484
+13104484
+13088292
+13088292
+0
+13088292
+13088292
+81328
+13088292
+12814964
+12814964
+12896292
+12814964
 0
 0
 0
-0
-0
-13775582
-13775582
-0
-0
-0
-0
-0
-0
-0
-13775582
+687290
 # Num Value Kinds:
 1
 # ValueKind = IPVK_IndirectCallTarget:
@@ -62487,27 +62505,28 @@ svga_render_blank:25484
 # Num Counters:
 3
 # Counter Values:
-165535
+376903
 0
 2
 
 @KAIRO_SOURCE@/third_party/86box/src/video/vid_svga_render.c;render_thread_func
 # Func Hash:
-287486624911328693
+93478049850707103
 # Num Counters:
-5
+6
 # Counter Values:
-146348
+13101
+16909440
 26485600
-165535
-146348
+376903
+13101
 2
 
 @KAIRO_SOURCE@/third_party/86box/src/video/vid_svga_render.c;svga_render_indexed_gfx
 # Func Hash:
-448589517910539578
+409568688947682994
 # Num Counters:
-89
+94
 # Counter Values:
 0
 0
@@ -62515,21 +62534,21 @@ svga_render_blank:25484
 0
 0
 0
-136966464
+0
 0
 0
 1585037
 0
 0
 0
-68483232
 0
-17120808
+0
+0
 2139267
 2139267
-17120808
+0
 2139267
-342862
+554230
 0
 0
 2139267
@@ -62545,27 +62564,28 @@ svga_render_blank:25484
 2139267
 0
 0
-211368
+0
 0
 1915393
 0
 655
 3325
-342862
+554230
 0
 1898063
+211368
 28715182
-342862
-342862
-342862
-26485600
-342862
-342862
-342862
-166190
-165535
-165535
-146261
+554230
+554230
+554230
+43395040
+554230
+554230
+554230
+377558
+376903
+376903
+9776
 1340815
 798452
 2139267
@@ -62589,14 +62609,18 @@ svga_render_blank:25484
 0
 0
 0
+376903
+376903
 165535
 165535
+342862
+29058044
 0
 0
 0
 0
 0
-68483232
+0
 0
 # Num Value Kinds:
 1
@@ -64866,7 +64890,7 @@ codeblock_allocator_get_ptr
 # Num Counters:
 1
 # Counter Values:
-298164
+298143
 
 codegen_accumulate
 # Func Hash:
@@ -64914,7 +64938,7 @@ codegen_alloc
 2
 # Counter Values:
 288482
-1729
+1747
 
 codegen_allocator_allocate
 # Func Hash:
@@ -64924,10 +64948,10 @@ codegen_allocator_allocate
 # Counter Values:
 0
 0
-8330
+8319
 139860
 0
-9362
+9352
 0
 0
 139757
@@ -64949,9 +64973,9 @@ codegen_allocator_can_branch_imm19
 # Num Counters:
 3
 # Counter Values:
-766416
-766416
-766416
+766293
+766293
+766293
 
 codegen_allocator_can_branch_imm26
 # Func Hash:
@@ -64959,9 +64983,9 @@ codegen_allocator_can_branch_imm26
 # Num Counters:
 3
 # Counter Values:
-769681
-769681
-769681
+769659
+769659
+769659
 
 codegen_allocator_clean_blocks
 # Func Hash:
@@ -64969,7 +64993,7 @@ codegen_allocator_clean_blocks
 # Num Counters:
 2
 # Counter Values:
-17692
+17671
 139765
 
 codegen_allocator_contains_host_ptr
@@ -64988,7 +65012,7 @@ codegen_allocator_free
 # Num Counters:
 4
 # Counter Values:
-7597
+7595
 68995
 68995
 68995
@@ -64999,7 +65023,7 @@ codegen_allocator_free_version
 # Num Counters:
 3
 # Counter Values:
-2905
+2899
 10735
 10735
 
@@ -65045,12 +65069,12 @@ codegen_allocator_veneer
 # Num Counters:
 6
 # Counter Values:
-312399
-257503
-257503
-257491
-257263
-257503
+312279
+257389
+257389
+257380
+257140
+257389
 
 codegen_backend_epilogue
 # Func Hash:
@@ -65581,7 +65605,7 @@ codegen_direct_write_32_imm
 # Counter Values:
 1399870
 0
-1651135
+1651179
 332
 403891
 403891
@@ -66876,8 +66900,8 @@ codegen_ir_compile
 @KAIRO_SOURCE@/third_party/86box/src/codegen/codegen_backend_arm64_uops.c;codegen_MEM_LOAD_ABS:2498
 @KAIRO_SOURCE@/third_party/86box/src/codegen/codegen_backend_arm64_uops.c;codegen_CMP_JNB_DEST:2299
 @KAIRO_SOURCE@/third_party/86box/src/codegen/codegen_backend_arm64_uops.c;codegen_AND:384
-@KAIRO_SOURCE@/third_party/86box/src/codegen/codegen_backend_arm64_uops.c;codegen_CMP_JBE_DEST:1
 @KAIRO_SOURCE@/third_party/86box/src/codegen/codegen_backend_arm64_uops.c;codegen_MEM_STORE_IMM_32:1
+@KAIRO_SOURCE@/third_party/86box/src/codegen/codegen_backend_arm64_uops.c;codegen_CMP_JBE_DEST:1
 
 codegen_ir_init
 # Func Hash:
@@ -70389,34 +70413,34 @@ device_close_all
 @KAIRO_SOURCE@/third_party/86box/src/sound/snd_speaker.c;speaker_close:4
 @KAIRO_SOURCE@/third_party/86box/src/device/keyboard_at.c;keyboard_at_close:3
 @KAIRO_SOURCE@/third_party/86box/src/apm.c;apm_close:3
-@KAIRO_SOURCE@/third_party/86box/src/video/vid_s3.c;s3_close:3
 @KAIRO_SOURCE@/third_party/86box/src/sound/snd_opl_ymfm.cpp;_ZL14ymfm_drv_closePv:3
-@KAIRO_SOURCE@/third_party/86box/src/port_92.c;port_92_close:3
-@KAIRO_SOURCE@/third_party/86box/src/disk/hdc_ide.c;ide_close:3
 @KAIRO_SOURCE@/third_party/86box/src/device/kbc_at.c;kbc_at_close:3
-@KAIRO_SOURCE@/third_party/86box/src/nvr_at.c;nvr_at_close:3
+@KAIRO_SOURCE@/third_party/86box/src/port_92.c;port_92_close:3
+@KAIRO_SOURCE@/third_party/86box/src/video/vid_s3.c;s3_close:3
 @KAIRO_SOURCE@/third_party/86box/src/pit_fast.c;pitf_close:3
+@KAIRO_SOURCE@/third_party/86box/src/disk/hdc_ide.c;ide_close:3
+@KAIRO_SOURCE@/third_party/86box/src/nvr_at.c;nvr_at_close:3
 sb_close:3
-@KAIRO_SOURCE@/third_party/86box/src/port_6x.c;port_6x_close:2
-@KAIRO_SOURCE@/third_party/86box/src/disk/hdc_ide_sff8038i.c;sff_close:2
-@KAIRO_SOURCE@/third_party/86box/src/chipset/intel_420ex.c;i420ex_close:2
-@KAIRO_SOURCE@/third_party/86box/src/device/mouse_ps2.c;ps2_close:2
 @KAIRO_SOURCE@/third_party/86box/src/device/hwm_lm75.c;lm75_close:2
+@KAIRO_SOURCE@/third_party/86box/src/device/mouse_ps2.c;ps2_close:2
+@KAIRO_SOURCE@/third_party/86box/src/port_6x.c;port_6x_close:2
+@KAIRO_SOURCE@/third_party/86box/src/chipset/intel_420ex.c;i420ex_close:2
+@KAIRO_SOURCE@/third_party/86box/src/disk/hdc_ide_sff8038i.c;sff_close:2
+@KAIRO_SOURCE@/third_party/86box/src/device/smbus_piix4.c;smbus_piix4_close:1
+@KAIRO_SOURCE@/third_party/86box/src/usb.c;usb_close:1
+@KAIRO_SOURCE@/third_party/86box/src/mem/spd.c;spd_close:1
+@KAIRO_SOURCE@/third_party/86box/src/mem/intel_flash.c;intel_flash_close:1
+@KAIRO_SOURCE@/third_party/86box/src/sio/sio_w83877.c;w83877_close:1
 @KAIRO_SOURCE@/third_party/86box/src/pit.c;pit_close:1
-@KAIRO_SOURCE@/third_party/86box/src/device/keyboard_xt.c;kbd_close:1
-@KAIRO_SOURCE@/third_party/86box/src/device/hwm_lm78.c;lm78_close:1
-@KAIRO_SOURCE@/third_party/86box/src/ddma.c;ddma_close:1
 adlib_close:1
 @KAIRO_SOURCE@/third_party/86box/src/device/kbc_xt.c;kbd_close:1
-@KAIRO_SOURCE@/third_party/86box/src/mem/intel_flash.c;intel_flash_close:1
-@KAIRO_SOURCE@/third_party/86box/src/device/ibm_5161.c;ibm_5161_close:1
-@KAIRO_SOURCE@/third_party/86box/src/mem/spd.c;spd_close:1
-@KAIRO_SOURCE@/third_party/86box/src/device/smbus_piix4.c;smbus_piix4_close:1
-@KAIRO_SOURCE@/third_party/86box/src/sio/sio_w83877.c;w83877_close:1
-@KAIRO_SOURCE@/third_party/86box/src/usb.c;usb_close:1
 cga_close:1
-@KAIRO_SOURCE@/third_party/86box/src/sound/snd_opl2_nuked.c;nuked_opl2_drv_close:1
 @KAIRO_SOURCE@/third_party/86box/src/acpi.c;acpi_close:1
+@KAIRO_SOURCE@/third_party/86box/src/device/hwm_lm78.c;lm78_close:1
+@KAIRO_SOURCE@/third_party/86box/src/device/ibm_5161.c;ibm_5161_close:1
+@KAIRO_SOURCE@/third_party/86box/src/ddma.c;ddma_close:1
+@KAIRO_SOURCE@/third_party/86box/src/device/keyboard_xt.c;kbd_close:1
+@KAIRO_SOURCE@/third_party/86box/src/sound/snd_opl2_nuked.c;nuked_opl2_drv_close:1
 
 device_context
 # Func Hash:
@@ -70550,15 +70574,15 @@ device_reset_all
 1
 11
 @KAIRO_SOURCE@/third_party/86box/src/apm.c;apm_reset:3
+@KAIRO_SOURCE@/third_party/86box/src/device/kbc_at.c;kbc_at_reset:3
 @KAIRO_SOURCE@/third_party/86box/src/disk/hdc_ide.c;ide_reset:3
 @KAIRO_SOURCE@/third_party/86box/src/video/vid_s3.c;s3_reset:3
-@KAIRO_SOURCE@/third_party/86box/src/device/kbc_at.c;kbc_at_reset:3
 @KAIRO_SOURCE@/third_party/86box/src/chipset/intel_420ex.c;i420ex_reset:2
 @KAIRO_SOURCE@/third_party/86box/src/disk/hdc_ide_sff8038i.c;sff_reset:2
-@KAIRO_SOURCE@/third_party/86box/src/chipset/intel_piix.c;piix_reset:1
 @KAIRO_SOURCE@/third_party/86box/src/usb.c;usb_reset:1
-@KAIRO_SOURCE@/third_party/86box/src/acpi.c;acpi_reset:1
+@KAIRO_SOURCE@/third_party/86box/src/chipset/intel_piix.c;piix_reset:1
 @KAIRO_SOURCE@/third_party/86box/src/chipset/intel_4x0.c;i4x0_reset:1
+@KAIRO_SOURCE@/third_party/86box/src/acpi.c;acpi_reset:1
 @KAIRO_SOURCE@/third_party/86box/src/mem/intel_flash.c;intel_flash_reset:1
 
 device_set_context
@@ -70605,8 +70629,8 @@ sb_speed_changed:3
 @KAIRO_SOURCE@/third_party/86box/src/acpi.c;acpi_speed_changed:2
 @KAIRO_SOURCE@/third_party/86box/src/chipset/intel_420ex.c;i420ex_speed_changed:2
 @KAIRO_SOURCE@/third_party/86box/src/chipset/intel_piix.c;piix_speed_changed:2
-cga_speed_changed:1
 @KAIRO_SOURCE@/third_party/86box/src/pit.c;pit_speed_changed:1
+cga_speed_changed:1
 
 divl
 # Func Hash:
@@ -71313,11 +71337,11 @@ exec386_dynarec
 ** External Symbol **:97160
 ** External Symbol **:77143
 ** External Symbol **:25937
-** External Symbol **:15900
+** External Symbol **:15902
 ** External Symbol **:6771
-** External Symbol **:6421
+** External Symbol **:6420
 ** External Symbol **:4874
-** External Symbol **:4554
+** External Symbol **:4553
 ** External Symbol **:3229
 ** External Symbol **:2727
 ** External Symbol **:2554
@@ -71361,9 +71385,9 @@ exec386_dynarec
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opOUT_AL_DX:207
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opINC_BX:179
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opADD_b_rm_a16:112
-@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opTEST_w_a16:1
-@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opRET_l_imm:1
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opJMP_r8:1
+@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opRET_l_imm:1
+@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opTEST_w_a16:1
 36
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;op_66:69830
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opJE:56909
@@ -71399,8 +71423,8 @@ exec386_dynarec
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opOUT_AL_imm:288
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opADD_b_rm_a16:132
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opMOV_w_r_a16:4
-@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opINT:1
 @KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opJMP_r8:1
+@KAIRO_SOURCE@/third_party/86box/src/cpu/386_dynarec.c;opINT:1
 
 execx86
 # Func Hash:
@@ -72801,15 +72825,11 @@ fdd_audio_callback
 0
 0
 0
-1370944
+1377152
 0
 0
 0
-1370944
-0
-0
-0
-0
+1377152
 0
 0
 0
@@ -72826,9 +72846,13 @@ fdd_audio_callback
 0
 0
 0
-171368
-21421
-171368
+0
+0
+0
+0
+172144
+21518
+172144
 0
 0
 0
@@ -73821,13 +73845,13 @@ givealbuffer_common
 # Num Counters:
 8
 # Counter Values:
-56632307
-24896636
-56909454
+56818547
+25079036
+57095694
 0
 16
-56725
-56731
+56922
+56925
 0
 
 hdc_get_from_internal_name
@@ -73878,7 +73902,7 @@ hdd_audio_callback
 0
 0
 0
-41128320
+41314560
 0
 0
 0
@@ -73910,7 +73934,7 @@ hdd_audio_callback
 0
 0
 0
-21421
+21518
 0
 0
 0
@@ -74409,13 +74433,13 @@ host_arm64_ADD_IMM
 767
 1550
 494542
+0
 1
-2
 717
-559
+542
 4856
 0
-9
+7
 
 host_arm64_ADD_REG
 # Func Hash:
@@ -74424,7 +74448,7 @@ host_arm64_ADD_REG
 2
 # Counter Values:
 681968
-495
+496
 
 host_arm64_ADD_REG_LSR
 # Func Hash:
@@ -74433,7 +74457,7 @@ host_arm64_ADD_REG_LSR
 2
 # Counter Values:
 154
-0
+1
 
 host_arm64_ADR
 # Func Hash:
@@ -74452,7 +74476,7 @@ host_arm64_ANDS_IMM
 # Counter Values:
 2057
 0
-0
+1
 0
 
 host_arm64_AND_IMM
@@ -74463,8 +74487,8 @@ host_arm64_AND_IMM
 # Counter Values:
 633020
 51566
-891
-85
+900
+76
 
 host_arm64_AND_REG
 # Func Hash:
@@ -74520,7 +74544,7 @@ host_arm64_BCC_
 4
 # Counter Values:
 5507
-59
+51
 0
 0
 
@@ -74531,7 +74555,7 @@ host_arm64_BCS_
 4
 # Counter Values:
 4592
-31
+27
 0
 0
 
@@ -74541,10 +74565,10 @@ host_arm64_BEQ
 # Num Counters:
 9
 # Counter Values:
-378
-2255
+370
+2277
 0
-55118
+55096
 0
 0
 0
@@ -74558,7 +74582,7 @@ host_arm64_BEQ_
 4
 # Counter Values:
 69318
-296
+289
 0
 0
 
@@ -74578,7 +74602,7 @@ host_arm64_BFI
 2
 # Counter Values:
 527926
-622
+624
 
 host_arm64_BGE_
 # Func Hash:
@@ -74587,7 +74611,7 @@ host_arm64_BGE_
 4
 # Counter Values:
 1726
-13
+10
 0
 0
 
@@ -74618,7 +74642,7 @@ host_arm64_BHI_
 4
 # Counter Values:
 238522
-899
+903
 0
 0
 
@@ -74629,7 +74653,7 @@ host_arm64_BLE_
 4
 # Counter Values:
 981
-6
+8
 0
 0
 
@@ -74649,7 +74673,7 @@ host_arm64_BLS_
 4
 # Counter Values:
 5389
-17
+18
 0
 0
 
@@ -74660,7 +74684,7 @@ host_arm64_BLT_
 4
 # Counter Values:
 1796
-7
+8
 0
 0
 
@@ -74671,7 +74695,7 @@ host_arm64_BNE_
 4
 # Counter Values:
 84513
-441
+471
 0
 0
 
@@ -74739,13 +74763,13 @@ host_arm64_CBNZ
 # Num Counters:
 13
 # Counter Values:
-96
-2572
-35490
+104
+2593
+35469
 0
 0
 0
-35490
+35469
 0
 0
 0
@@ -74778,7 +74802,7 @@ host_arm64_CCMP_REG_CS
 2
 # Counter Values:
 234672
-282
+302
 
 host_arm64_CLZ
 # Func Hash:
@@ -74809,7 +74833,7 @@ host_arm64_CMN_IMM
 0
 49983
 0
-60
+57
 
 host_arm64_CMPX_IMM
 # Func Hash:
@@ -74841,7 +74865,7 @@ host_arm64_CMP_IMM
 162622
 0
 49867
-206
+231
 0
 
 host_arm64_CMP_REG_LSL
@@ -74851,7 +74875,7 @@ host_arm64_CMP_REG_LSL
 2
 # Counter Values:
 272426
-342
+333
 
 host_arm64_CMP_X_W_SXTW
 # Func Hash:
@@ -74887,7 +74911,7 @@ host_arm64_CSET
 2
 # Counter Values:
 16282
-33
+31
 
 host_arm64_CSET_NE
 # Func Hash:
@@ -74906,8 +74930,8 @@ host_arm64_EOR_IMM
 # Counter Values:
 3844
 1159
-8
-2
+7
+1
 
 host_arm64_EOR_REG
 # Func Hash:
@@ -74916,7 +74940,7 @@ host_arm64_EOR_REG
 2
 # Counter Values:
 27855
-37
+38
 
 host_arm64_FCVTMS_W_D
 # Func Hash:
@@ -75064,7 +75088,7 @@ host_arm64_LDRB_IMM_W
 # Counter Values:
 37001
 0
-13
+19
 
 host_arm64_LDRB_POSTIDX
 # Func Hash:
@@ -75093,7 +75117,7 @@ host_arm64_LDRH_IMM
 # Counter Values:
 52977
 0
-86
+96
 
 host_arm64_LDRH_POSTIDX
 # Func Hash:
@@ -75131,7 +75155,7 @@ host_arm64_LDR_IMM_W
 # Counter Values:
 1369818
 0
-893
+898
 
 host_arm64_LDR_IMM_X
 # Func Hash:
@@ -75141,7 +75165,7 @@ host_arm64_LDR_IMM_X
 # Counter Values:
 36036
 0
-99
+75
 
 host_arm64_LDR_POSTIDX_W
 # Func Hash:
@@ -75196,7 +75220,7 @@ host_arm64_LSL
 2
 # Counter Values:
 754
-1
+2
 
 host_arm64_LSLX
 # Func Hash:
@@ -75214,7 +75238,7 @@ host_arm64_LSR
 2
 # Counter Values:
 801
-4
+6
 
 host_arm64_LSR64_32
 # Func Hash:
@@ -75242,7 +75266,7 @@ host_arm64_MOVK_IMM
 # Counter Values:
 698612
 0
-452
+492
 690612
 690612
 
@@ -75252,19 +75276,19 @@ host_arm64_MOVX_IMM
 # Num Counters:
 15
 # Counter Values:
-556607
-584437
-556607
+556806
+584636
+556806
 0
 0
-59
+61
 0
-209
-556607
+192
+556806
 0
 0
 0
-556607
+520826
 0
 0
 
@@ -75286,7 +75310,7 @@ host_arm64_MOVZ_IMM
 # Counter Values:
 1672620
 0
-1611
+1566
 1747
 1747
 
@@ -75298,7 +75322,7 @@ host_arm64_MOV_REG
 # Counter Values:
 696721
 696721
-746
+762
 
 host_arm64_MOV_REG_ASR
 # Func Hash:
@@ -75316,7 +75340,7 @@ host_arm64_MOV_REG_LSR
 2
 # Counter Values:
 47576
-124
+111
 
 host_arm64_MOV_REG_ROR
 # Func Hash:
@@ -75325,7 +75349,7 @@ host_arm64_MOV_REG_ROR
 2
 # Counter Values:
 2935
-0
+1
 
 host_arm64_MUL
 # Func Hash:
@@ -75334,7 +75358,7 @@ host_arm64_MUL
 2
 # Counter Values:
 1906
-5
+6
 
 host_arm64_MUL_W
 # Func Hash:
@@ -75362,7 +75386,7 @@ host_arm64_ORR_IMM
 # Counter Values:
 6439
 860
-1
+2
 0
 
 host_arm64_ORR_REG
@@ -75372,7 +75396,7 @@ host_arm64_ORR_REG
 2
 # Counter Values:
 53471
-81
+77
 
 host_arm64_PRFM_IMM
 # Func Hash:
@@ -75427,7 +75451,7 @@ host_arm64_SBFX
 2
 # Counter Values:
 4326
-10
+8
 
 host_arm64_SMULL
 # Func Hash:
@@ -75436,7 +75460,7 @@ host_arm64_SMULL
 2
 # Counter Values:
 907
-2
+3
 
 host_arm64_STP_POSTIDX_X
 # Func Hash:
@@ -75482,7 +75506,7 @@ host_arm64_STRB_IMM
 # Counter Values:
 41553
 0
-73
+81
 
 host_arm64_STRB_POSTIDX
 # Func Hash:
@@ -75511,7 +75535,7 @@ host_arm64_STRH_IMM
 # Counter Values:
 40359
 0
-55
+63
 
 host_arm64_STRH_POSTIDX
 # Func Hash:
@@ -75540,7 +75564,7 @@ host_arm64_STR_IMM_Q
 # Counter Values:
 41585
 0
-79
+84
 
 host_arm64_STR_IMM_W
 # Func Hash:
@@ -75550,7 +75574,7 @@ host_arm64_STR_IMM_W
 # Counter Values:
 3260027
 0
-3899
+3808
 
 host_arm64_STR_POSTIDX_W
 # Func Hash:
@@ -75609,13 +75633,13 @@ host_arm64_SUB_IMM
 13924
 5791
 733458
-24
-8
-957
-628
-3380
-2
+21
 4
+957
+624
+3380
+1
+5
 
 host_arm64_SUB_REG
 # Func Hash:
@@ -75624,7 +75648,7 @@ host_arm64_SUB_REG
 2
 # Counter Values:
 57955
-108
+118
 
 host_arm64_SUB_REG_LSR
 # Func Hash:
@@ -75633,7 +75657,7 @@ host_arm64_SUB_REG_LSR
 2
 # Counter Values:
 697
-1
+0
 
 host_arm64_TBNZ
 # Func Hash:
@@ -75680,7 +75704,7 @@ host_arm64_UBFX
 2
 # Counter Values:
 10301
-8
+9
 
 host_arm64_UDIV
 # Func Hash:
@@ -75698,7 +75722,7 @@ host_arm64_UMULL
 2
 # Counter Values:
 171
-1
+0
 
 host_arm64_branch_set_offset
 # Func Hash:
@@ -75706,18 +75730,18 @@ host_arm64_branch_set_offset
 # Num Counters:
 13
 # Counter Values:
-552
+561
 413718
 264
 264
-222013
-191705
+221920
+191798
 264
-221773
-221773
+221671
+221671
 414294
 413718
-816
+825
 264
 
 host_arm64_call
@@ -75726,11 +75750,11 @@ host_arm64_call
 # Num Counters:
 5
 # Counter Values:
-600
-653861
-32541
+623
+653662
+32740
 0
-28
+36
 
 host_arm64_find_imm
 # Func Hash:
@@ -75765,7 +75789,7 @@ host_arm64_mov_imm
 978471
 48657
 334
-133
+124
 683271
 0
 354
@@ -77433,6 +77457,18 @@ k9x_link_timer
 1
 # Counter Values:
 26271562
+
+kairo_nuked_advance
+# Func Hash:
+798733565871040853
+# Num Counters:
+5
+# Counter Values:
+114684
+458736
+0
+0
+15784072
 
 kairo_observe_int
 # Func Hash:
@@ -87919,7 +87955,7 @@ plat_get_ticks
 # Num Counters:
 2
 # Counter Values:
-42883
+43078
 4
 
 plat_get_vmm_dir
@@ -88032,21 +88068,21 @@ plat_mmap_os
 # Num Counters:
 16
 # Counter Values:
-4
-8
-8
+6
+10
+10
 0
 0
-4
+6
 0
-4
+5
 16
 4
 12
 0
 12
 12
-4
+5
 0
 
 plat_mouse_capture
@@ -105936,8 +105972,8 @@ sound_stream_rate
 6
 # Counter Values:
 8075
-21421
-50848
+21518
+51094
 0
 5814
 0
@@ -106783,9 +106819,9 @@ svga_render_drain
 # Num Counters:
 4
 # Counter Values:
-3079
-105
-105
+5279
+3330
+3329
 9559
 
 svga_render_overscan_left
@@ -107078,7 +107114,7 @@ thread_reset_event
 # Num Counters:
 1
 # Counter Values:
-260225
+130403
 
 thread_set_event
 # Func Hash:
@@ -107086,7 +107122,7 @@ thread_set_event
 # Num Counters:
 1
 # Counter Values:
-2122578
+1848077
 
 thread_wait
 # Func Hash:
@@ -107103,16 +107139,16 @@ thread_wait_event
 # Num Counters:
 11
 # Counter Values:
-175641
-41824
-42026
-42767
-41769
-1994752
-1951856
-1808491
-1994173
-41785
+44682
+42938
+42940
+42984
+42984
+1856732
+1813647
+1800649
+1856683
+42967
 0
 
 thread_wait_mutex
@@ -107925,7 +107961,7 @@ video_wait_for_blit_monitor
 # Num Counters:
 2
 # Counter Values:
-4924
+4772
 20727
 
 video_wait_for_buffer_monitor
