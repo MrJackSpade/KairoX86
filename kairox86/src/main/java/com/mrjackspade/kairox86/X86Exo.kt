@@ -27,37 +27,67 @@ import java.util.zip.CRC32
  * the player's settings and what the game wrote. The collection's own files are only read.
  */
 class X86Exo(private val context: Context, private val docs: X86Documents) {
-    /** The machine folder of [game], with its 86box.cfg and CMOS, made when it is missing. */
-    fun makeConfig(tree: Uri, game: ExoWin9x.Game) {
+    /**
+     * The machine folder of [game], with its 86box.cfg and CMOS, made when it is missing. A DOSBox-X
+     * game's machine is the one its Windows image knows (KairoX86#224), so that image is unpacked
+     * first when it is not yet ([makeDisks] would unpack it at the start).
+     */
+    fun makeConfig(tree: Uri, game: ExoWin9x.Game, cancelled: AtomicBoolean, progress: (String) -> Unit) {
         val folder = docs.makeFolders(tree, game.folder)
         if (docs.children(tree, folder).any { it.name == X86Library.CONFIG && !it.folder }) return
         val members = gameArchive(tree, game).use { archive -> archive.members.map { it.name } }
         val (kind, text) = gameConfig(tree, game)
+        var cmosAsset: String? = null
         val translation = if (kind == ExoWin9x.PLAY_86BOX) {
             ExoWin9x.translate(text, members) { parent -> parentFile(game, parent).absolutePath }
         } else {
-            // A DOSBox-X game runs on eXo's 86Box machine and Windows (KairoX86#219)
-            val windows = ExoWin9x.dosboxWindows(text)
-            check(windows == null || windows.lowercase() in ExoWin9x.DOSBOX_ENGLISH_98) {
-                context.getString(R.string.exo_windows_unsupported, game.name, windows)
-            }
+            // A DOSBox-X game runs on the machine its Windows image knows (KairoX86#219, #224)
+            val windows = windows(tree, game, ExoWin9x.dosboxParent(ExoWin9x.dosboxWindows(text)), cancelled, progress)
+            cmosAsset = windows.machine.board.cmosAsset
             // An archive DOSBox-X mounts as a drive is a CD image of its files here (KairoX86#223)
             val images = mounts(tree, game, folder, ExoWin9x.dosboxMounts(text), members)
             val mounts = images.first
-            val template = checkNotNull(emulatorFile(tree, game, ExoWin9x.EMULATOR_CONFIG)) {
-                "${game.name}'s collection has no ${ExoWin9x.EMULATOR_FOLDER}/${ExoWin9x.EMULATOR_CONFIG}"
+            val template = checkNotNull(emulatorFile(tree, game, "${ExoWin9x.EMULATOR_FOLDER}/${ExoWin9x.EMULATOR_CONFIG}")) {
+                "${game.name}'s collection has no ${ExoWin9x.EMULATORS_ROOT}/${ExoWin9x.EMULATOR_FOLDER}/${ExoWin9x.EMULATOR_CONFIG}"
             }.use { it.readBytes().toString(Charsets.UTF_8) }
-            ExoWin9x.translateDosbox(template, mounts, images.second, { parent -> parentFile(game, parent).absolutePath }) { disk ->
+            ExoWin9x.translateDosbox(template, windows, mounts, images.second, { parent -> parentFile(game, parent).absolutePath }) { disk ->
                 // A hard disk's geometry comes from its size: it is unpacked now, as its start would
-                vhdSectors(tree, unpackMember(tree, game, folder, disk, AtomicBoolean(false)))
+                vhdSectors(tree, unpackMember(tree, game, folder, disk, cancelled))
             }
         }
         val nvr = docs.makeFolders(tree, "${game.folder}/${X86Library.NVR}")
-        for (name in listOf("${translation.machine}.nvr", "${translation.machine}.bin")) {
+        val cmos = cmosAsset
+        if (cmos != null) {
+            // A board eXo has no machine of: the CMOS its BIOS saved with its defaults, which KairoX86 ships
+            val name = "${translation.machine}.nvr"
+            if (docs.children(tree, nvr).none { it.name == name }) context.assets.open(cmos).use { input -> docs.writeWhole(tree, nvr, name) { input.copyTo(it) } }
+        } else for (name in listOf("${translation.machine}.nvr", "${translation.machine}.bin")) {
             if (docs.children(tree, nvr).any { it.name == name }) continue
-            emulatorFile(tree, game, "nvr/$name")?.use { input -> docs.writeWhole(tree, nvr, name) { input.copyTo(it) } }
+            emulatorFile(tree, game, "${ExoWin9x.EMULATOR_FOLDER}/nvr/$name")?.use { input -> docs.writeWhole(tree, nvr, name) { input.copyTo(it) } }
         }
         docs.writeWhole(tree, folder, X86Library.CONFIG) { it.write(translation.config.toByteArray(Charsets.UTF_8)) }
+    }
+
+    /**
+     * The Windows image [name] a DOSBox-X game runs on, unpacked into the app's storage when it is not
+     * there yet: its geometry and the machine its registry (WINDOWS/SYSTEM.DAT) knows.
+     */
+    private fun windows(tree: Uri, game: ExoWin9x.Game, asked: String, cancelled: AtomicBoolean, progress: (String) -> Unit): ExoWin9x.Windows {
+        // The image by the name the collection gives it, however the Play.conf spells it
+        val name = checkNotNull(emulatorName(tree, game, ExoWin9x.parentSource(asked))) {
+            "${game.name}'s collection has no ${ExoWin9x.EMULATORS_ROOT}/${ExoWin9x.parentSource(asked)}"
+        }.substringAfterLast('/')
+        val image = parentFile(game, name)
+        if (!image.isFile) {
+            progress(context.getString(FrontendR.string.kairo_disk_preparing, name))
+            unpackParent(tree, game, image, cancelled)
+        }
+        return Vhd.open(image).use { disk ->
+            val volume = FatVolume(disk)
+            val hive = checkNotNull(volume.find(SYSTEM_HIVE)) { "$name has no $SYSTEM_HIVE" }
+            val machine = Win9xMachine.of(Win9xRegistry.read(volume.read(hive)))
+            ExoWin9x.Windows(name, disk.footer.cylinders, disk.footer.heads, disk.footer.sectorsPerTrack, machine)
+        }
     }
 
     /**
@@ -66,7 +96,7 @@ class X86Exo(private val context: Context, private val docs: X86Documents) {
      * once into the app's storage, where 86Box opens it read-only beneath each start's own disk.
      */
     fun makeDisks(tree: Uri, game: ExoWin9x.Game, cancelled: AtomicBoolean, progress: (String) -> Unit) {
-        makeConfig(tree, game)
+        makeConfig(tree, game, cancelled, progress)
         val folder = docs.findFolder(tree, game.folder)
         gameArchive(tree, game).use { archive ->
             for (member in archive.members) {
@@ -212,7 +242,7 @@ class X86Exo(private val context: Context, private val docs: X86Documents) {
         check(target.parentFile!!.isDirectory || target.parentFile!!.mkdirs()) { context.getString(R.string.machine_create_failed, target.path) }
         val partial = File(target.path + ".part")
         try {
-            val (input, crc) = checkNotNull(emulatorEntry(tree, game, "parent/${target.name}")) { "${game.name}'s collection has no ${target.name}" }
+            val (input, crc) = checkNotNull(emulatorEntry(tree, game, ExoWin9x.parentSource(target.name))) { "${game.name}'s collection has no ${target.name}" }
             input.use { source ->
                 val sum = CRC32()
                 partial.outputStream().use { output -> copy(source, output, sum, cancelled) }
@@ -225,40 +255,88 @@ class X86Exo(private val context: Context, private val docs: X86Documents) {
         }
     }
 
-    /** A file of eXo's 86Box folder ([relative] under it), unpacked by eXo's setup or still in its archive; null when there is none. */
+    /** A file of eXo's emulators folder ([relative] under it), unpacked by eXo's setup or still in its archive; null when there is none. */
     private fun emulatorFile(tree: Uri, game: ExoWin9x.Game, relative: String): InputStream? = emulatorEntry(tree, game, relative)?.first
 
     /** The file and its CRC-32 (-1 when it comes unpacked, with none to check). */
     private fun emulatorEntry(tree: Uri, game: ExoWin9x.Game, relative: String): Pair<InputStream, Long>? {
-        docs.find(tree, "${game.emulatorFolder}/$relative")?.takeIf { !it.folder }?.let { unpacked ->
+        docs.find(tree, "${game.emulatorsFolder}/$relative")?.takeIf { !it.folder }?.let { unpacked ->
             return checkNotNull(context.contentResolver.openInputStream(docs.uri(tree, unpacked.id))) {
                 context.getString(R.string.machine_open_failed, relative)
             } to -1L
         }
-        val util = docs.find(tree, game.utilArchive)?.takeIf { !it.folder } ?: error("${game.name}'s collection has no ${ExoWin9x.UTIL}")
-        val descriptor = checkNotNull(context.contentResolver.openFileDescriptor(docs.uri(tree, util.id), "r")) {
-            context.getString(R.string.machine_open_failed, ExoWin9x.UTIL)
-        }
+        val archive = EmulatorsArchive(tree, game)
         try {
-            val channel = FileInputStream(descriptor.fileDescriptor).channel
-            val outer = ZipFile.builder().setSeekableByteChannel(channel).get()
-            // EXTWin9x.zip is stored in utilWin9x.zip: it is read where it lies, nothing unpacked
-            val emulators = checkNotNull(outer.getEntry(ExoWin9x.EMULATORS)) { "${ExoWin9x.UTIL} has no ${ExoWin9x.EMULATORS}" }
-            check(emulators.method == ZipArchiveEntry.STORED) { "${ExoWin9x.EMULATORS} is compressed in ${ExoWin9x.UTIL}" }
-            val inner = ZipFile.builder().setSeekableByteChannel(RangeChannel(channel, emulators.dataOffset, emulators.size)).get()
-            val entry = inner.getEntry("${ExoWin9x.EMULATOR_FOLDER}/$relative") ?: run {
-                inner.close(); outer.close(); descriptor.close()
+            val entry = archive.zip.getEntry("${ExoWin9x.EMULATORS_ROOT}/$relative") ?: run {
+                archive.close()
                 return null
             }
-            val stream = inner.getInputStream(entry)
+            val stream = archive.zip.getInputStream(entry)
             return object : java.io.FilterInputStream(stream) {
                 override fun close() {
-                    try { super.close() } finally { try { inner.close() } finally { try { outer.close() } finally { descriptor.close() } } }
+                    try { super.close() } finally { archive.close() }
                 }
             } to entry.crc
         } catch (failure: Exception) {
-            try { descriptor.close() } catch (cleanup: Exception) { failure.addSuppressed(cleanup) }
+            try { archive.close() } catch (cleanup: Exception) { failure.addSuppressed(cleanup) }
             throw failure
+        }
+    }
+
+    /**
+     * [relative] as eXo's emulators folder spells it, whatever the case it is asked in, or null when
+     * the folder has no such file: a Play.conf names the files of its DOS drives as DOSBox-X finds
+     * them, case aside ("win98jap.vhd" for `win98Jap.vhd`).
+     */
+    private fun emulatorName(tree: Uri, game: ExoWin9x.Game, relative: String): String? {
+        docs.find(tree, game.emulatorsFolder)?.takeIf { it.folder }?.let { root ->
+            var id = root.id
+            val names = ArrayList<String>()
+            for (part in relative.split('/')) {
+                val child = docs.children(tree, id).firstOrNull { it.name.equals(part, ignoreCase = true) } ?: break
+                names += child.name
+                id = child.id
+            }
+            if (names.size == relative.split('/').size) return names.joinToString("/")
+        }
+        return EmulatorsArchive(tree, game).use { archive ->
+            archive.zip.entries.asSequence().map { it.name }
+                .firstOrNull { it.equals("${ExoWin9x.EMULATORS_ROOT}/$relative", ignoreCase = true) }
+                ?.removePrefix("${ExoWin9x.EMULATORS_ROOT}/")
+        }
+    }
+
+    /** eXo's emulators archive ([ExoWin9x.EMULATORS]), read where it lies: stored in utilWin9x.zip, nothing unpacked. */
+    private inner class EmulatorsArchive(tree: Uri, game: ExoWin9x.Game) : AutoCloseable {
+        private val descriptor = run {
+            val util = docs.find(tree, game.utilArchive)?.takeIf { !it.folder } ?: error("${game.name}'s collection has no ${ExoWin9x.UTIL}")
+            checkNotNull(context.contentResolver.openFileDescriptor(docs.uri(tree, util.id), "r")) {
+                context.getString(R.string.machine_open_failed, ExoWin9x.UTIL)
+            }
+        }
+        private val outer: ZipFile
+        val zip: ZipFile
+
+        init {
+            try {
+                val channel = FileInputStream(descriptor.fileDescriptor).channel
+                outer = ZipFile.builder().setSeekableByteChannel(channel).get()
+                try {
+                    val emulators = checkNotNull(outer.getEntry(ExoWin9x.EMULATORS)) { "${ExoWin9x.UTIL} has no ${ExoWin9x.EMULATORS}" }
+                    check(emulators.method == ZipArchiveEntry.STORED) { "${ExoWin9x.EMULATORS} is compressed in ${ExoWin9x.UTIL}" }
+                    zip = ZipFile.builder().setSeekableByteChannel(RangeChannel(channel, emulators.dataOffset, emulators.size)).get()
+                } catch (failure: Exception) {
+                    try { outer.close() } catch (cleanup: Exception) { failure.addSuppressed(cleanup) }
+                    throw failure
+                }
+            } catch (failure: Exception) {
+                try { descriptor.close() } catch (cleanup: Exception) { failure.addSuppressed(cleanup) }
+                throw failure
+            }
+        }
+
+        override fun close() {
+            try { zip.close() } finally { try { outer.close() } finally { descriptor.close() } }
         }
     }
 
@@ -345,5 +423,7 @@ class X86Exo(private val context: Context, private val docs: X86Documents) {
     private companion object {
         /** 86Box's hard disk count (HDD_NUM). */
         const val MAX_DISKS = 88
+        /** The registry hive of an installed Windows 9x that holds what it knows of the hardware. */
+        const val SYSTEM_HIVE = "WINDOWS/SYSTEM.DAT"
     }
 }

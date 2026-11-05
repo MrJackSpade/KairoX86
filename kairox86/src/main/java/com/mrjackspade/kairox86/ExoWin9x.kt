@@ -8,8 +8,8 @@ package com.mrjackspade.kairox86
  *    with its emulator configuration, `Play.cfg` for a game set up for 86Box (or, once eXo's setup
  *    has run, the same folder unpacked under the collection);
  *  - `eXo/util/utilWin9x.zip`, holding `EXTWin9x.zip` (stored, so it is read where it lies) with
- *    the Windows images games start from (`emulators/86Box98/parent/W98-P.vhd`) and the CMOS and
- *    flash of eXo's machines (`emulators/86Box98/nvr/`).
+ *    the Windows images games start from (`emulators/86Box98/parent/W98-P.vhd`, and DOSBox-X's in
+ *    `emulators/dosbox/x98/parent/`) and the CMOS and flash of eXo's machines (`emulators/86Box98/nvr/`).
  *
  * A game is a library entry whose machine is a folder KairoX86 makes for it in the collection,
  * `KairoX86/<year>/<Game (year)>/`: its 86box.cfg (the game's configuration in KairoX86's terms,
@@ -28,8 +28,8 @@ object ExoWin9x {
         val metadataPath get() = "$prefix$metadataFolder"
         val metadataArchive get() = "${prefix}Content/$METADATA"
         val utilArchive get() = "${prefix}eXo/util/$UTIL"
-        /** eXo's 86Box folder, once its setup has unpacked it under the collection. */
-        val emulatorFolder get() = "${prefix}eXo/emulators/86Box98"
+        /** eXo's emulators folder, once its setup has unpacked it under the collection. */
+        val emulatorsFolder get() = "${prefix}eXo/$EMULATORS_ROOT"
     }
 
     /** The folder of every game's machine, at the collection's root. */
@@ -38,7 +38,10 @@ object ExoWin9x {
     const val UTIL = "utilWin9x.zip"
     /** The archive inside [UTIL] holding the emulators' files. */
     const val EMULATORS = "EXTWin9x.zip"
-    const val EMULATOR_FOLDER = "emulators/86Box98"
+    /** The emulators' folder in [EMULATORS] (and unpacked, under eXo/). */
+    const val EMULATORS_ROOT = "emulators"
+    /** eXo's 86Box, in [EMULATORS_ROOT]. */
+    const val EMULATOR_FOLDER = "86Box98"
     const val PLAY_86BOX = "Play.cfg"
     const val PLAY_DOSBOX_X = "Play.conf"
 
@@ -196,21 +199,39 @@ object ExoWin9x {
             target[0].lowercaseChar(), target.substring(2).trim('/'))
     }
 
-    /** The DOSBox-X Windows images whose 86Box counterpart is eXo's 86Box Windows 98 ([PARENT_86BOX]). */
+    /**
+     * The DOSBox-X Windows images whose 86Box counterpart is eXo's 86Box Windows 98 ([PARENT_86BOX]):
+     * the same installation (its product ID, owner and install time), which eXo moved to 86Box. Their
+     * own registries know only DOSBox-X's PCI devices, which no board places as DOSBox-X does.
+     */
     val DOSBOX_ENGLISH_98 = setOf("w98-c.vhd", "w98-c-net.vhd", "w98-c-net2.vhd")
     const val PARENT_86BOX = "W98-P.vhd"
 
+    /** The Windows image a DOSBox-X game's Play.conf boots ([dosboxWindows]) as the image it runs on here. */
+    fun dosboxParent(windows: String?): String = if (windows == null || windows.lowercase() in DOSBOX_ENGLISH_98) PARENT_86BOX else windows
+
+    /** Where the Windows image [name] is in eXo's emulators folder: eXo's 86Box image, or a DOSBox-X one. */
+    fun parentSource(name: String): String = if (name == PARENT_86BOX) "$EMULATOR_FOLDER/parent/$name" else "dosbox/x98/parent/$name"
+
     /**
-     * A DOSBox-X game as an 86Box machine (KairoX86#219): eXo's own 86Box machine for its Windows 98
-     * ([template], its emulator folder's 86box.cfg) with the game's drives from its Play.conf. The
-     * Windows disk is the session's child over the parent ([parentPath] of [PARENT_86BOX]); the game's
-     * hard disk images (each by its size in sectors, [sectors], at eXo's 63 x 16 geometry) and CDs
-     * (each holding the first of its images) take the IDE positions DOSBox-X gives them, in the
-     * Play.conf's order: the one `-ide` names, or else the first free (IDE_Auto: each controller's
-     * master, then its slave). The disks DOSBox-X makes of its mounted archives at BOOT
-     * ([Mount.converted]) come last, each the start's child ([startChild]) over its image.
+     * The Windows image a DOSBox-X game runs on: its name ([dosboxParent]), its geometry (its VHD
+     * footer's cylinders, heads and sectors a track) and the machine its registry knows ([Win9xMachine]).
      */
-    fun translateDosbox(template: String, mounts: List<Mount>, members: Collection<String>, parentPath: (String) -> String,
+    data class Windows(val name: String, val cylinders: Int, val heads: Int, val sectorsPerTrack: Int, val machine: Win9xMachine.Machine)
+
+    /**
+     * A DOSBox-X game as an 86Box machine (KairoX86#219, #224): eXo's own 86Box machine for its
+     * Windows 98 ([template], its emulator folder's 86box.cfg) made the machine the game's Windows
+     * image knows ([Windows.machine]), with the game's drives from its Play.conf. The Windows disk is
+     * the session's child over the image ([parentPath] of its name); the game's hard disk images (each
+     * by its size in sectors, [sectors], at eXo's 63 x 16 geometry) and CDs (each holding the first
+     * of its images) take the IDE positions DOSBox-X gives them, in the Play.conf's order: the one
+     * `-ide` names, or else the first free (IDE_Auto: each controller's master, then its slave). The
+     * disks DOSBox-X makes of its mounted archives at BOOT ([Mount.converted]) come last, each the
+     * start's child ([startChild]) over its image. A drive on the tertiary or quaternary controller
+     * needs the machine to have it.
+     */
+    fun translateDosbox(template: String, windows: Windows, mounts: List<Mount>, members: Collection<String>, parentPath: (String) -> String,
                         sectors: (String) -> Long): Translation {
         val byName = members.associateBy { it.substringAfterLast('/').lowercase() }
         fun member(path: String): String = checkNotNull(byName[path.substringAfterLast('/').lowercase()]) {
@@ -233,9 +254,13 @@ object ExoWin9x {
         val placed = (mounts.filter { !it.converted } + mounts.filter { it.converted }).map { it to position(it) }
         val disks = placed.filter { !it.first.cdrom }.map { Triple(member(it.first.images.single()), it.second, it.first.converted) }
         val cds = placed.filter { it.first.cdrom }.map { member(it.first.images.first()) to it.second }
-        val ini = IniText(template.removePrefix("﻿"))
-        val machine = checkNotNull(ini["Machine", "machine"]) { "$EMULATOR_CONFIG names no machine" }
-        val windows = checkNotNull(ini["Hard disks", "hdd_01_parameters"]) { "$EMULATOR_CONFIG names no Windows disk" }
+        // The tertiary and quaternary controllers' positions need the controller
+        for ((at, controller) in listOf(2 to "ide_ter", 3 to "ide_qua")) {
+            val used = placed.firstOrNull { it.second / 2 == at } ?: continue
+            check(windows.machine.settings.any { it.key == controller && it.value != null }) {
+                "$PLAY_DOSBOX_X puts drive ${used.first.drive}: at IDE position ${channel(used.second)}, on a controller ${windows.name}'s machine has not"
+            }
+        }
         val out = StringBuilder()
         // The template's drives (besides its CDs) go into the one drives section written below: 86Box
         // reads one section of a name
@@ -255,8 +280,8 @@ object ExoWin9x {
             }
         }
         out.append("\n[Hard disks]\n")
-        out.append("hdd_01_fn = $CHILD\nhdd_01_vhd_parent = ${parentPath(PARENT_86BOX)}\nhdd_01_ide_channel = 0:0\n")
-        out.append("hdd_01_parameters = $windows\nhdd_01_speed = ramdisk\n")
+        out.append("hdd_01_fn = $CHILD\nhdd_01_vhd_parent = ${parentPath(windows.name)}\nhdd_01_ide_channel = 0:0\n")
+        out.append("hdd_01_parameters = ${windows.sectorsPerTrack}, ${windows.heads}, ${windows.cylinders}, 0, ide\nhdd_01_speed = ramdisk\n")
         disks.forEachIndexed { index, (disk, at, converted) ->
             val n = "%02d".format(index + 2)
             val cylinders = sectors(disk) / (63 * 16)
@@ -269,7 +294,11 @@ object ExoWin9x {
             val n = "%02d".format(index + 1)
             out.append("cdrom_${n}_ide_channel = ${channel(at)}\ncdrom_${n}_image_path = $cd\ncdrom_${n}_parameters = 1, atapi\n")
         }
-        return Translation(out.toString(), PARENT_86BOX, machine)
+        // The machine the image knows, over eXo's
+        val config = IniText(out.toString())
+        config["Machine", "machine"] = windows.machine.board.machine
+        for (setting in windows.machine.settings) config[setting.section, setting.key] = setting.value
+        return Translation(config.toString(), windows.name, windows.machine.board.machine)
     }
 
     private const val DRIVES = "Floppy and CD-ROM drives"

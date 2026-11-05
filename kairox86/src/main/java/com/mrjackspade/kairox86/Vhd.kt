@@ -51,6 +51,10 @@ object Vhd {
         val size: Long get() = buffer.getLong(48)
         val type: Int get() = buffer.getInt(60)
         val uuid: ByteArray get() = bytes.copyOfRange(68, 84)
+        /** The disk's geometry (cylinders at 56, heads at 58, sectors a track at 59). */
+        val cylinders: Int get() = buffer.getShort(56).toInt() and 0xffff
+        val heads: Int get() = bytes[58].toInt() and 0xff
+        val sectorsPerTrack: Int get() = bytes[59].toInt() and 0xff
     }
 
     /** An open image: fixed or dynamic, read-only. */

@@ -528,7 +528,8 @@ class X86Library(private val context: Context) {
     }
 
     private fun readConfig(tree: Uri, entry: X86Entry): String {
-        if (entry.exo) exoBuilder.makeConfig(tree, exoGame(entry))
+        // Made here when the config is read before the game's first start, with nothing to show its progress
+        if (entry.exo) exoBuilder.makeConfig(tree, exoGame(entry), AtomicBoolean(false)) {}
         return readConfigFile(tree, entry)
     }
 

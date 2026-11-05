@@ -108,6 +108,52 @@ class ExoWin9xTest {
         cdrom_01_parameters = 1, atapi
     """.trimIndent()
 
+    /** eXo's 86Box Windows 98 (W98-P.vhd) as its registry knows its machine. */
+    private val english = ExoWin9x.Windows("W98-P.vhd", 32896, 16, 255, Win9xMachine.Machine(Win9xMachine.GA686BX, listOf(
+        Win9xMachine.Setting("Video", "gfxcard", "voodoo3_3k_agp"), Win9xMachine.Setting("Video", "voodoo", null),
+        Win9xMachine.Setting("Sound", "sndcard", "sbawe32_pnp"),
+        Win9xMachine.Setting("Storage controllers", "ide_ter", "1"), Win9xMachine.Setting("Storage controllers", "ide_qua", null))))
+
+    @Test
+    fun aDosboxGameRunsOnTheMachineItsWindowsKnows() {
+        assertEquals("W98-P.vhd", ExoWin9x.dosboxParent("W98-C.vhd"))
+        assertEquals("W98-P.vhd", ExoWin9x.dosboxParent(null))
+        assertEquals("win98Jap.vhd", ExoWin9x.dosboxParent("win98Jap.vhd"))
+        assertEquals("dosbox/x98/parent/win98Jap.vhd", ExoWin9x.parentSource("win98Jap.vhd"))
+        assertEquals("86Box98/parent/W98-P.vhd", ExoWin9x.parentSource("W98-P.vhd"))
+        val japanese = ExoWin9x.Windows("win98Jap.vhd", 16645, 16, 63, Win9xMachine.Machine(Win9xMachine.GA686BX, listOf(
+            Win9xMachine.Setting("Video", "gfxcard", "s3_trio64_pci"), Win9xMachine.Setting("Video", "voodoo", "1"),
+            Win9xMachine.Setting("3Dfx Voodoo Graphics", "type", "voodoo"), Win9xMachine.Setting("Sound", "sndcard", "sb16"),
+            Win9xMachine.Setting("Sound Blaster 16 #1", "irq", "5"))))
+        val withVoodoo = template + "\n[Video]\ngfxcard = voodoo3_3k_agp\n\n[Storage controllers]\nide_qua = 1\nide_ter = 1\n"
+        val members = listOf("G/G.vhd")
+        val mounts = ExoWin9x.dosboxMounts("[autoexec]\nIMGMOUNT d \"G.vhd\"\n")
+        val translation = ExoWin9x.translateDosbox(withVoodoo, japanese, mounts, members, { "/data/exowin9x/$it" }) { 1008L * 10 }
+        assertEquals("win98Jap.vhd", translation.parent)
+        val config = IniText(translation.config)
+        assertEquals("/data/exowin9x/win98Jap.vhd", config["Hard disks", "hdd_01_vhd_parent"])
+        assertEquals("63, 16, 16645, 0, ide", config["Hard disks", "hdd_01_parameters"])
+        assertEquals("s3_trio64_pci", config["Video", "gfxcard"])
+        assertEquals("1", config["Video", "voodoo"])
+        assertEquals("voodoo", config["3Dfx Voodoo Graphics", "type"])
+        assertEquals("sb16", config["Sound", "sndcard"])
+        assertEquals("5", config["Sound Blaster 16 #1", "irq"])
+        // The board's own settings over eXo's
+        val board = ExoWin9x.Windows("Win95DX8.vhd", 511, 16, 63, Win9xMachine.Machine(Win9xMachine.PCEM_430VX, Win9xMachine.PCEM_430VX.settings))
+        val pcem = IniText(ExoWin9x.translateDosbox(withVoodoo, board, mounts, members, { it }) { 1008L * 10 }.config)
+        assertEquals("430vx", pcem["Machine", "machine"])
+        assertEquals("65536", pcem["Machine", "mem_size"])
+        assertEquals("1", pcem["KairoX86", "pcem_piix"])
+        // A machine without the quaternary controller has no IDE position 4
+        val english = IniText(ExoWin9x.translateDosbox(withVoodoo, english, mounts, members, { it }) { 1008L * 10 }.config)
+        assertEquals(null, english["Storage controllers", "ide_qua"])
+        assertEquals("1", english["Storage controllers", "ide_ter"])
+        val failure = assertThrows(IllegalStateException::class.java) {
+            ExoWin9x.translateDosbox(withVoodoo, this.english, ExoWin9x.dosboxMounts("[autoexec]\nIMGMOUNT d \"G.vhd\" -ide 4m\n"), members, { it }) { 1008L * 10 }
+        }
+        assertTrue(failure.message, failure.message!!.contains("4:0") || failure.message!!.contains("3:0"))
+    }
+
     @Test
     fun aDosboxGameRunsOnTheCollections86BoxMachine() {
         assertEquals("W98-C.vhd", ExoWin9x.dosboxWindows(hellbender))
@@ -117,7 +163,7 @@ class ExoWin9xTest {
         assertTrue(mounts[1].cdrom)
         val members = listOf("Hellbender (1996)/Hellbender (1996).vhd", "Hellbender (1996)/HELLBENDER.CUE",
             "Hellbender (1996)/disc2.cue", "Hellbender (1996)/hellbender.bin")
-        val translation = ExoWin9x.translateDosbox(template, mounts, members, { "/data/exowin9x/$it" }) { 4195296L }
+        val translation = ExoWin9x.translateDosbox(template, english, mounts, members, { "/data/exowin9x/$it" }) { 4195296L }
         assertEquals("W98-P.vhd", translation.parent)
         assertEquals("686bx", translation.machine)
         val config = translation.config
@@ -139,21 +185,21 @@ class ExoWin9xTest {
         // A CD naming -ide 2m sits at 1:0 even with no hard disk before it; a hard disk takes the first free
         val cdFirst = ExoWin9x.dosboxMounts("[autoexec]\nIMGMOUNT e \"G.cue\" -t cdrom -ide 2m\nIMGMOUNT d \"G.vhd\"\n")
         assertEquals("2m", cdFirst[0].ide)
-        val config = ExoWin9x.translateDosbox(template, cdFirst, members, { it }) { 1008L * 10 }.config
+        val config = ExoWin9x.translateDosbox(template, english, cdFirst, members, { it }) { 1008L * 10 }.config
         assertTrue(config, config.contains("cdrom_01_ide_channel = 1:0\n"))
         assertTrue(config, config.contains("hdd_02_fn = G.vhd\nhdd_02_ide_channel = 0:1\n"))
         // A mounted archive becomes, at BOOT, a disk at the first position free after every mount: here 1:1
         val mounts = ExoWin9x.dosboxMounts("[autoexec]\nIMGMOUNT d \"G.vhd\"\nmount f \"G v1.zip\"\nIMGMOUNT e \"G.cue\" -t cdrom -ide 2m\n")
             .map { if (it.folder) ExoWin9x.Mount(it.drive, listOf("G (zip).vhd"), cdrom = false, folder = true, converted = true) else it }
-        val withZip = ExoWin9x.translateDosbox(template, mounts, members, { it }) { 1008L * 10 }.config
+        val withZip = ExoWin9x.translateDosbox(template, english, mounts, members, { it }) { 1008L * 10 }.config
         assertTrue(withZip, withZip.contains("hdd_02_fn = G.vhd\nhdd_02_ide_channel = 0:1\n"))
         assertTrue(withZip, withZip.contains("hdd_03_fn = G (zip).start.vhd\nhdd_03_vhd_parent = G (zip).vhd\nhdd_03_ide_channel = 1:1\nhdd_03_parameters = 63, 16, 10, 0, ide\n"))
         assertTrue(withZip, withZip.contains("cdrom_01_ide_channel = 1:0\n"))
         // eXo's 86box.cfg starts with a byte order mark: its [General] still goes
-        assertFalse(ExoWin9x.translateDosbox("﻿" + template, mounts, members, { it }) { 1008L * 10 }.config.contains("emu_build_num"))
+        assertFalse(ExoWin9x.translateDosbox("﻿" + template, english, mounts, members, { it }) { 1008L * 10 }.config.contains("emu_build_num"))
         // Two drives at one position fail
         assertThrows(IllegalStateException::class.java) {
-            ExoWin9x.translateDosbox(template, ExoWin9x.dosboxMounts("[autoexec]\nIMGMOUNT d \"G.vhd\" -ide 1s\nIMGMOUNT e \"G.cue\" -t cdrom -ide 1s\n"), members, { it }) { 1008L * 10 }
+            ExoWin9x.translateDosbox(template, english, ExoWin9x.dosboxMounts("[autoexec]\nIMGMOUNT d \"G.vhd\" -ide 1s\nIMGMOUNT e \"G.cue\" -t cdrom -ide 1s\n"), members, { it }) { 1008L * 10 }
         }
     }
 
