@@ -1657,6 +1657,103 @@ KAIROX86_DENSEL_ONCE = [
      'fdd_type_invert_densel(int type)\n{\n    /* KairoX86#206: whether the machine is a PS/1, PS/2 or PS/55, worked out once for each machine:\n       the floppy poll asks for every bit, and the name search was a fortieth of a 486\'s time. */\n    static int ps_machine = -1;\n    static int ps_answer  = 0;\n    int ret;\n\n    if (drive_types[type].flags & FLAG_PS2) {\n        if (ps_machine != machine) {\n            /* The Model 25/30 planar also belongs to the 7690, whose display\n               name does not contain "PS/2". Its drive wiring is unchanged. */\n            ps_answer  = (machines[machine].init == machine_ps2_8086_init) ||\n                         (!!strstr(machine_getname(machine), "PS/1")) ||\n                         (!!strstr(machine_getname(machine), "PS/2")) ||\n                         (!!strstr(machine_getname(machine), "PS/55"));\n            ps_machine = machine;\n        }\n        ret = ps_answer;\n    } else\n'),
 ]
 
+# KairoX86#214: 320-wide packed 8bpp (VGA mode 13h and its unchained form, DOOM's) took the generic
+# renderer's slow loop on the emulation thread, a seventh of DOOM's time. The fast path and the drawing
+# thread (kairo9x-video, kairox86-raster) took only lines of a dot per pixel. A lowres line is the same
+# line with each pixel drawn twice across, so they take it too: each VRAM byte through map8 into two
+# pixels, a dword to eight, the dwords wholly left of hdisp on the drawing thread.
+_F = '86box/src/video/vid_svga_render.c'
+KAIROX86_LOWRES_8BPP = [
+    (_F,
+     '    int       dwords;\n    uint32_t  map8[256];\n',
+     '    int       dwords;\n    int       wide; /* KairoX86#214: each pixel drawn twice across */\n    uint32_t  map8[256];\n'),
+    (_F,
+     '        memcpy(&dat, &job->line[4 * c], 4);\n'
+     '        p[0]    = job->map8[dat & job->dac];\n'
+     '        p[1]    = job->map8[(dat >> 8) & job->dac];\n'
+     '        p[2]    = job->map8[(dat >> 16) & job->dac];\n'
+     '        p[3]    = job->map8[(dat >> 24) & job->dac];\n'
+     '        p += 4;\n',
+     '        memcpy(&dat, &job->line[4 * c], 4);\n'
+     '        if (job->wide) {\n'
+     '            p[0] = p[1] = job->map8[dat & job->dac];\n'
+     '            p[2] = p[3] = job->map8[(dat >> 8) & job->dac];\n'
+     '            p[4] = p[5] = job->map8[(dat >> 16) & job->dac];\n'
+     '            p[6] = p[7] = job->map8[(dat >> 24) & job->dac];\n'
+     '            p += 8;\n'
+     '            continue;\n'
+     '        }\n'
+     '        p[0]    = job->map8[dat & job->dac];\n'
+     '        p[1]    = job->map8[(dat >> 8) & job->dac];\n'
+     '        p[2]    = job->map8[(dat >> 16) & job->dac];\n'
+     '        p[3]    = job->map8[(dat >> 24) & job->dac];\n'
+     '        p += 4;\n'),
+    (_F,
+     '    if (combine8bits && highres && !svga->packed_4bpp && !svga->half_pixel && !svga->ati_4color &&\n',
+     '    /* KairoX86#214: lowres too, each pixel twice across (dotwidth 2, a dword to eight pixels) */\n'
+     '    if (combine8bits && !svga->packed_4bpp && !svga->half_pixel && !svga->ati_4color &&\n'),
+    (_F,
+     '            render_job_t *job    = render_slot();\n'
+     '            const int     dwords = svga->hdisp / 4;\n'
+     '\n'
+     '            job->p      = p;\n'
+     '            job->dac    = dac;\n'
+     '            job->dwords = dwords;\n',
+     '            render_job_t *job    = render_slot();\n'
+     '            const int     dwords = svga->hdisp / (highres ? 4 : 8);\n'
+     '\n'
+     '            job->p      = p;\n'
+     '            job->dac    = dac;\n'
+     '            job->dwords = dwords;\n'
+     '            job->wide   = !highres;\n'),
+    (_F,
+     '            render_commit();\n'
+     '            p += 4 * dwords;\n'
+     '            x = 4 * dwords;\n'
+     '        }\n'
+     '\n'
+     '        for (; x <= end; x += 4) {\n',
+     '            render_commit();\n'
+     '            p += (highres ? 4 : 8) * dwords;\n'
+     '            x = (highres ? 4 : 8) * dwords;\n'
+     '        }\n'
+     '\n'
+     '        for (; !highres && (x <= end); x += 8) {\n'
+     '            const uint32_t dat = *(const uint32_t *) &vram[memaddr & mask];\n'
+     '\n'
+     '            memaddr = (memaddr + 4) & mask;\n'
+     '            p[0] = p[1] = map8[dat & dac];\n'
+     '            p[2] = p[3] = map8[(dat >> 8) & dac];\n'
+     '            p[4] = p[5] = map8[(dat >> 16) & dac];\n'
+     '            p[6] = p[7] = map8[(dat >> 24) & dac];\n'
+     '            col = p[7];\n'
+     '            p += 8;\n'
+     '        }\n'
+     '        for (; highres && (x <= end); x += 4) {\n'),
+    # The thread drew each line before the next was queued, so it slept again and every line woke it:
+    # a futex wake per line, a twentieth of the emulation thread's time in DOOM. A job holds its line's
+    # bytes and palette (kairox86-raster), so when it is drawn changes nothing; svga_render_drain still
+    # draws every one before a frame is shown. The thread is woken once RENDER_BATCH lines wait.
+    (_F,
+     '    /* A thread still drawing finds the job itself; one that found the queue\n'
+     '       empty is woken */\n'
+     '    const int was_empty = (head == atomic_load_explicit(&render_tail, memory_order_acquire));\n'
+     '    atomic_store_explicit(&render_head, head + 1, memory_order_release);\n'
+     '    if (was_empty)\n'
+     '        thread_set_event(render_wake);\n',
+     '    /* KairoX86#214: a thread still drawing finds the job itself; a sleeping one is woken once\n'
+     '       RENDER_BATCH lines wait (while it sleeps nothing is drawn, so the count reaches it), and\n'
+     '       svga_render_drain() wakes it for the rest */\n'
+     '    const unsigned waiting = head + 1 - atomic_load_explicit(&render_tail, memory_order_acquire);\n'
+     '    atomic_store_explicit(&render_head, head + 1, memory_order_release);\n'
+     '    if (waiting == RENDER_BATCH)\n'
+     '        thread_set_event(render_wake);\n'),
+    (_F,
+     '#define RENDER_JOBS 2048 /* a power of 2, more lines than a frame has */\n',
+     '#define RENDER_JOBS 2048 /* a power of 2, more lines than a frame has */\n'
+     '#define RENDER_BATCH 32 /* KairoX86#214: lines queued before a sleeping drawing thread is woken */\n'),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -1682,6 +1779,7 @@ PATCHES = {
     'kairox86-halt-skip': KAIROX86_HALT_SKIP,
     'kairox86-halt-skip-vx0': KAIROX86_HALT_SKIP_VX0,
     'kairox86-densel-once': KAIROX86_DENSEL_ONCE,
+    'kairox86-lowres-8bpp': KAIROX86_LOWRES_8BPP,
 }
 
 ADDED = [

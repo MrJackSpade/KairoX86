@@ -765,11 +765,13 @@ typedef struct render_job_t {
     uint32_t *p;
     uint32_t  dac;
     int       dwords;
+    int       wide; /* KairoX86#214: each pixel drawn twice across */
     uint32_t  map8[256];
     uint8_t   line[RENDER_LINE_BYTES];
 } render_job_t;
 
 #define RENDER_JOBS 2048 /* a power of 2, more lines than a frame has */
+#define RENDER_BATCH 32 /* KairoX86#214: lines queued before a sleeping drawing thread is woken */
 
 static render_job_t render_jobs[RENDER_JOBS];
 static atomic_uint  render_head; /* next job queued, emulation thread */
@@ -788,6 +790,14 @@ render_8bpp_dwords(const render_job_t *job)
         uint32_t dat;
 
         memcpy(&dat, &job->line[4 * c], 4);
+        if (job->wide) {
+            p[0] = p[1] = job->map8[dat & job->dac];
+            p[2] = p[3] = job->map8[(dat >> 8) & job->dac];
+            p[4] = p[5] = job->map8[(dat >> 16) & job->dac];
+            p[6] = p[7] = job->map8[(dat >> 24) & job->dac];
+            p += 8;
+            continue;
+        }
         p[0]    = job->map8[dat & job->dac];
         p[1]    = job->map8[(dat >> 8) & job->dac];
         p[2]    = job->map8[(dat >> 16) & job->dac];
@@ -869,11 +879,12 @@ static void
 render_commit(void)
 {
     const unsigned head = atomic_load_explicit(&render_head, memory_order_relaxed);
-    /* A thread still drawing finds the job itself; one that found the queue
-       empty is woken */
-    const int was_empty = (head == atomic_load_explicit(&render_tail, memory_order_acquire));
+    /* KairoX86#214: a thread still drawing finds the job itself; a sleeping one is woken once
+       RENDER_BATCH lines wait (while it sleeps nothing is drawn, so the count reaches it), and
+       svga_render_drain() wakes it for the rest */
+    const unsigned waiting = head + 1 - atomic_load_explicit(&render_tail, memory_order_acquire);
     atomic_store_explicit(&render_head, head + 1, memory_order_release);
-    if (was_empty)
+    if (waiting == RENDER_BATCH)
         thread_set_event(render_wake);
 }
 
@@ -994,7 +1005,8 @@ svga_render_indexed_gfx(svga_t *svga, bool highres, bool combine8bits)
        force_old_addr the address is memaddr & ~3 (forcepacked makes
        incbypow2 0) unless CRTC 17h bits 0/1 bring in scanline bits, so it is
        the same for a dword-aligned memaddr with both bits set. */
-    if (combine8bits && highres && !svga->packed_4bpp && !svga->half_pixel && !svga->ati_4color &&
+    /* KairoX86#214: lowres too, each pixel twice across (dotwidth 2, a dword to eight pixels) */
+    if (combine8bits && !svga->packed_4bpp && !svga->half_pixel && !svga->ati_4color &&
         (!svga->force_old_addr || (((svga->crtc[0x17] & 3) == 3) && !(svga->memaddr & 3) && !incbypow2)) &&
         !svga->remap_required && (loadevery == 1) && (incevery == 1) &&
         (planemask == 0xffffffff) && !blinkmask && shift4bit) {
@@ -1016,22 +1028,34 @@ svga_render_indexed_gfx(svga_t *svga, bool highres, bool combine8bits)
         if (svga->render_async && !svga->render_line_offset && !((mask + 1) & mask) && (svga->hdisp >= 8) &&
             (svga->hdisp <= RENDER_LINE_BYTES)) {
             render_job_t *job    = render_slot();
-            const int     dwords = svga->hdisp / 4;
+            const int     dwords = svga->hdisp / (highres ? 4 : 8);
 
             job->p      = p;
             job->dac    = dac;
             job->dwords = dwords;
+            job->wide   = !highres;
             memcpy(job->map8, map8, sizeof(job->map8));
             for (int c = 0; c < dwords; c++) {
                 memcpy(&job->line[4 * c], &vram[memaddr & mask], 4);
                 memaddr = (memaddr + 4) & mask;
             }
             render_commit();
-            p += 4 * dwords;
-            x = 4 * dwords;
+            p += (highres ? 4 : 8) * dwords;
+            x = (highres ? 4 : 8) * dwords;
         }
 
-        for (; x <= end; x += 4) {
+        for (; !highres && (x <= end); x += 8) {
+            const uint32_t dat = *(const uint32_t *) &vram[memaddr & mask];
+
+            memaddr = (memaddr + 4) & mask;
+            p[0] = p[1] = map8[dat & dac];
+            p[2] = p[3] = map8[(dat >> 8) & dac];
+            p[4] = p[5] = map8[(dat >> 16) & dac];
+            p[6] = p[7] = map8[(dat >> 24) & dac];
+            col = p[7];
+            p += 8;
+        }
+        for (; highres && (x <= end); x += 4) {
             const uint32_t dat = *(const uint32_t *) &vram[memaddr & mask];
 
             memaddr = (memaddr + 4) & mask;
