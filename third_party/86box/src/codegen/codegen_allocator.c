@@ -88,6 +88,32 @@ static uint8_t    *mem_block_alloc = NULL;
 
 int codegen_allocator_usage = 0;
 
+#ifdef K9X_DIAG
+/*Writes the code map to path: "base <address> <size>", then for each code memory block in use
+  "<offset> <codeblock> <pc> <cs base> <phys> <ins> <guest bytes from phys, in hex>"*/
+void
+k9x_code_map(const char *path)
+{
+    FILE *f = fopen(path, "w");
+
+    if (f == NULL)
+        fatal("k9x_code_map - cannot write %s\n", path);
+    fprintf(f, "base %p %u\n", (void *) mem_block_alloc, (unsigned) (MEM_BLOCK_NR * MEM_BLOCK_SIZE));
+    for (uint32_t c = 0; c < MEM_BLOCK_NR; c++) {
+        const uint32_t nr = mem_blocks[c].code_block;
+
+        if (nr == BLOCK_INVALID)
+            continue;
+        const codeblock_t *b = &codeblock[nr];
+        fprintf(f, "%x %x %x %x %x %u ", mem_blocks[c].offset, nr, b->pc, b->_cs, b->phys, (unsigned) b->ins);
+        for (uint32_t i = 0; i < 128; i++)
+            fprintf(f, "%02x", ((b->phys + i) & rammask) < (mem_size << 10) ? ram[(b->phys + i) & rammask] : 0);
+        fputc('\n', f);
+    }
+    fclose(f);
+}
+#endif
+
 /* Matches the per-arch direct-branch ranges the header comment above
    documents (128MB on ARMv8 and LoongArch64 (`b`/`bl` +/-128MiB), 2GB on
    x86) - same arch check already used elsewhere in this codebase (cpu.h,
