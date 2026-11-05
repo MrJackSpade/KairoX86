@@ -148,4 +148,29 @@ class ExoWin9xTest {
             ExoWin9x.translate(daytona.replace("W98-C.vhd", "../../x/W98.vhd"), members) { it }
         }
     }
+
+    @Test
+    fun aPlayConfsCopiesBeforeBootAreRead() {
+        val conf = """
+            [autoexec]
+            vhdmake -f -l .\emulators\dosbox\x98\parent/W98-C.vhd .\emulators\dosbox\x98\W98-C.vhd
+            IMGMOUNT c .\emulators\dosbox\x98\W98-C.vhd
+            IMGMOUNT d ".\eXoWin9x\1996\FlagTower - The Unexplained (1996)\FlagTower - The Unexplained (1996).vhd"
+            xcopy d:\windows\system\cdaint2f.vxd c:\windows\system\ /Y
+            xcopy D:\Windows\*.ini c:\Windows\ /y
+            BOOT -l c
+        """.trimIndent()
+        val copies = ExoWin9x.dosboxCopies(conf)
+        assertEquals(listOf(ExoWin9x.Copy('d', "windows/system", "cdaint2f.vxd", 'c', "windows/system"),
+            ExoWin9x.Copy('d', "Windows", "*.ini", 'c', "Windows")), copies)
+        assertTrue(copies[1].matches("SYSTEM.INI"))
+        assertTrue(copies[1].matches("qtw.ini"))
+        assertFalse(copies[1].matches("SYSTEM.INF"))
+        assertTrue(copies[0].matches("CDAINT2F.VXD"))
+        assertFalse(copies[0].matches("CDAINT2F.VXD2"))
+        assertEquals(emptyList<ExoWin9x.Copy>(), ExoWin9x.dosboxCopies(conf.lines().filter { !it.startsWith("xcopy") }.joinToString("\n")))
+        // Anything but files into a folder fails, not copied some other way
+        assertThrows(IllegalStateException::class.java) { ExoWin9x.dosboxCopies("[autoexec]\nxcopy d:\\x\\*.* c:\\x\\ /s /y") }
+        assertThrows(IllegalStateException::class.java) { ExoWin9x.dosboxCopies("[autoexec]\nxcopy d:\\x\\a.ini c:\\x\\b.ini /y") }
+    }
 }

@@ -156,6 +156,39 @@ object ExoWin9x {
         Mount(drive, images, cdrom = type == "cdrom", folder = command == "mount")
     }
 
+    /**
+     * A file copy a Play.conf makes before Windows boots (KairoX86#225): `xcopy d:\windows\*.ini
+     * c:\windows\ /Y` copies the files of drive [sourceDrive]'s folder [sourceFolder] ("windows")
+     * that [pattern] matches into drive [targetDrive]'s folder [targetFolder].
+     */
+    data class Copy(val sourceDrive: Char, val sourceFolder: String, val pattern: String, val targetDrive: Char, val targetFolder: String) {
+        /** Whether [name] is one this copy takes: DOS's `*` and `?`, whatever the case. */
+        fun matches(name: String): Boolean = Regex(pattern.lowercase().map { c ->
+            when (c) {
+                '*' -> ".*"
+                '?' -> "."
+                else -> Regex.escape(c.toString())
+            }
+        }.joinToString("")).matches(name.lowercase())
+    }
+
+    /** The copies a Play.conf makes before Windows boots, in order: each `xcopy <file or pattern> <folder>\ /Y`. */
+    fun dosboxCopies(playConf: String): List<Copy> = autoexec(playConf).mapNotNull { line ->
+        val words = tokens(line)
+        if (!words.first().equals("xcopy", ignoreCase = true)) return@mapNotNull null
+        val flags = words.drop(1).filter { it.startsWith("/") }
+        check(flags.all { it.equals("/y", ignoreCase = true) }) { "$PLAY_DOSBOX_X copies with ${flags.joinToString(" ")}: \"$line\"" }
+        val paths = words.drop(1).filter { !it.startsWith("/") }
+        check(paths.size == 2) { "$PLAY_DOSBOX_X copies something other than files into a folder: \"$line\"" }
+        val (source, target) = paths.map { it.replace('\\', '/') }
+        check(source.length > 2 && source[1] == ':' && target.length > 2 && target[1] == ':' && target.endsWith("/")) {
+            "$PLAY_DOSBOX_X copies something other than files into a folder: \"$line\""
+        }
+        val sourcePath = source.substring(2).trim('/')
+        Copy(source[0].lowercaseChar(), sourcePath.substringBeforeLast('/', ""), sourcePath.substringAfterLast('/'),
+            target[0].lowercaseChar(), target.substring(2).trim('/'))
+    }
+
     /** The DOSBox-X Windows images whose 86Box counterpart is eXo's 86Box Windows 98 ([PARENT_86BOX]). */
     val DOSBOX_ENGLISH_98 = setOf("w98-c.vhd", "w98-c-net.vhd", "w98-c-net2.vhd")
     const val PARENT_86BOX = "W98-P.vhd"

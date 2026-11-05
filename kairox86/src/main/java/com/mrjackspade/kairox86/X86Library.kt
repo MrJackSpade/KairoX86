@@ -218,6 +218,8 @@ class X86Library(private val context: Context) {
             // A disk its 86box.cfg names that is not in its folder (KairoX86#63): 86Box would start with the drive empty.
             missingMedium(IniText(File(dir, CONFIG).readText())) { path -> File(dir, path).isFile }
                 ?.let { throw MissingDisk(missingDisk(it)) }
+            // The files an eXoWin9x game copies into Windows before it boots (KairoX86#225)
+            if (entry.exo) exoBuilder.prepareStart(tree, exoGame(entry), dir)
         } catch (failure: Exception) {
             session.close()
             throw failure

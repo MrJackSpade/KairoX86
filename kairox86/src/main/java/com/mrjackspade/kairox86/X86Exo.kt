@@ -87,6 +87,48 @@ class X86Exo(private val context: Context, private val docs: X86Documents) {
     }
 
     /**
+     * Makes this start's Windows disk ([ExoWin9x.CHILD] in the session folder [dir]) when [game]'s
+     * Play.conf copies files into Windows before it boots (KairoX86#225): a differencing disk over
+     * the Windows image holding those files, as DOSBox-X's `xcopy` would have left them, copied from
+     * the game's own disk in the session. Without such copies 86Box makes the disk itself, empty.
+     * Neither the Windows image nor the game's disk is written.
+     */
+    fun prepareStart(tree: Uri, game: ExoWin9x.Game, dir: File) {
+        val (kind, text) = gameConfig(tree, game)
+        if (kind != ExoWin9x.PLAY_DOSBOX_X) return
+        val copies = ExoWin9x.dosboxCopies(text)
+        if (copies.isEmpty()) return
+        val mounts = ExoWin9x.dosboxMounts(text)
+        val config = IniText(File(dir, X86Library.CONFIG).readText())
+        val parentFile = File(checkNotNull(config[X86Library.HARD_DISKS, "hdd_01_vhd_parent"]) { "${game.name}'s ${X86Library.CONFIG} names no Windows image" })
+        val child = File(dir, checkNotNull(config[X86Library.HARD_DISKS, "hdd_01_fn"]) { "${game.name}'s ${X86Library.CONFIG} names no Windows disk" })
+        check(!child.exists()) { "${child.name} is already in ${game.name}'s session" }
+        Vhd.open(parentFile).use { parent ->
+            val windows = SectorChanges(parent)
+            val volume = FatVolume(windows)
+            for (copy in copies) {
+                check(copy.targetDrive == 'c') { "${game.name}'s ${ExoWin9x.PLAY_DOSBOX_X} copies into drive ${copy.targetDrive}:, not Windows' C:" }
+                val mount = checkNotNull(mounts.firstOrNull { it.drive == copy.sourceDrive }) {
+                    "${game.name}'s ${ExoWin9x.PLAY_DOSBOX_X} copies from drive ${copy.sourceDrive}:, which it doesn't mount"
+                }
+                check(!mount.cdrom && !mount.folder) { "${game.name}'s ${ExoWin9x.PLAY_DOSBOX_X} copies from drive ${copy.sourceDrive}:, which is not a hard disk" }
+                val name = mount.images.single().substringAfterLast('/')
+                val image = checkNotNull(dir.listFiles().orEmpty().firstOrNull { it.name.equals(name, ignoreCase = true) && it.isFile }) {
+                    context.getString(FrontendR.string.kairo_disk_member_missing, name)
+                }
+                Vhd.open(image).use { disk ->
+                    val source = FatVolume(disk)
+                    // As xcopy without /H: files only, not hidden or system ones
+                    for (entry in source.list(copy.sourceFolder).filter { !it.folder && !it.hidden && (copy.matches(it.name) || it.longName?.let(copy::matches) == true) }) {
+                        volume.write(copy.targetFolder, entry, source.read(entry))
+                    }
+                }
+            }
+            Vhd.writeChild(child, parent, parentFile, windows.changed)
+        }
+    }
+
+    /**
      * [mounts] with each archive a drive takes made a CD of its files (KairoX86#223): the archive,
      * one of the game's own, is unpacked into the machine folder and its files written beside it as
      * an ISO 9660 image named after it, which the drive then holds. The game's files are [members],
