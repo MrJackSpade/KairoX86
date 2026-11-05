@@ -107,6 +107,13 @@ static int      cy;
 static int      cw;
 static int      ch;
 static ini_t    config;
+
+/* KairoX86#224: a setting of the [KairoX86] section, def when it has none */
+int
+config_kairo_int(const char *name, int def)
+{
+    return ini_section_get_int(ini_find_section(config, "KairoX86"), name, def);
+}
 static ini_t    global;
 static mutex_t *config_mutex = NULL;
 

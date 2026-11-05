@@ -2537,6 +2537,72 @@ KAIROX86_DIAG_CODE_MAP = [
      '#endif\n'),
 ]
 
+
+# KairoX86#224: PCem's Award 430VX PCI. eXo's Windows 95 image (Win95DX8.vhd) was installed under
+# PCem on that board: 86Box's 430vx has its BIOS (55XWUQ0E), its Super I/O and its slots, but a
+# PIIX3 where PCem had the original PIIX at device 7, so Windows meets new chipset functions and
+# stops to install them. "pcem_piix = 1" in 86box.cfg's [KairoX86] section builds the board with
+# PCem's PIIX. Only the machines KairoX86 makes for eXo's DOSBox-X games set it.
+KAIROX86_PCEM_430VX = [
+    ('86box/src/include/86box/config.h',
+     'extern void config_load_global(void);\n',
+     'extern void config_load_global(void);\n'
+     '/* KairoX86#224: a setting of 86box.cfg\'s [KairoX86] section, def when it has none */\n'
+     'extern int config_kairo_int(const char *name, int def);\n'),
+    ('86box/src/config.c',
+     'static ini_t    config;\n',
+     'static ini_t    config;\n'
+     '\n'
+     '/* KairoX86#224: a setting of the [KairoX86] section, def when it has none */\n'
+     'int\n'
+     'config_kairo_int(const char *name, int def)\n'
+     '{\n'
+     '    return ini_section_get_int(ini_find_section(config, "KairoX86"), name, def);\n'
+     '}\n'),
+    ('86box/src/machine/m_at_socket7.c',
+     '    ret = bios_load_linear("roms/machines/430vx/55XWUQ0E.BIN",\n'
+     '                           0x000e0000, 131072, 0);\n'
+     '\n'
+     '    if (bios_only || !ret)\n'
+     '        return ret;\n'
+     '\n'
+     '    machine_at_common_init(model);\n'
+     '\n'
+     '    pci_init(PCI_CONFIG_TYPE_1);\n'
+     '    pci_register_slot(0x00, PCI_CARD_NORTHBRIDGE, 0, 0, 0, 0);\n'
+     '    pci_register_slot(0x11, PCI_CARD_NORMAL,      2, 3, 4, 1);\n'
+     '    pci_register_slot(0x12, PCI_CARD_NORMAL,      1, 2, 3, 4);\n'
+     '    pci_register_slot(0x14, PCI_CARD_NORMAL,      3, 4, 1, 2);\n'
+     '    pci_register_slot(0x13, PCI_CARD_NORMAL,      4, 1, 2, 3);\n'
+     '    pci_register_slot(0x07, PCI_CARD_SOUTHBRIDGE, 0, 0, 0, 0);\n'
+     '\n'
+     '    device_add(&i430vx_device);\n'
+     '    device_add(&piix3_device);\n',
+     '    ret = bios_load_linear("roms/machines/430vx/55XWUQ0E.BIN",\n'
+     '                           0x000e0000, 131072, 0);\n'
+     '\n'
+     '    if (bios_only || !ret)\n'
+     '        return ret;\n'
+     '\n'
+     '    machine_at_common_init(model);\n'
+     '\n'
+     '    pci_init(PCI_CONFIG_TYPE_1);\n'
+     '    pci_register_slot(0x00, PCI_CARD_NORTHBRIDGE, 0, 0, 0, 0);\n'
+     '    pci_register_slot(0x11, PCI_CARD_NORMAL,      2, 3, 4, 1);\n'
+     '    pci_register_slot(0x12, PCI_CARD_NORMAL,      1, 2, 3, 4);\n'
+     '    pci_register_slot(0x14, PCI_CARD_NORMAL,      3, 4, 1, 2);\n'
+     '    pci_register_slot(0x13, PCI_CARD_NORMAL,      4, 1, 2, 3);\n'
+     '    pci_register_slot(0x07, PCI_CARD_SOUTHBRIDGE, 0, 0, 0, 0);\n'
+     '\n'
+     '    device_add(&i430vx_device);\n'
+     '    /* KairoX86#224: PCem\'s Award 430VX PCI had the original PIIX here */\n'
+     '    device_add(config_kairo_int("pcem_piix", 0) ? &piix_device : &piix3_device);\n'),
+    ('86box/src/machine/m_at_socket7.c',
+     '#include <86box/machine.h>\n',
+     '#include <86box/machine.h>\n'
+     '#include <86box/config.h> /* KairoX86#224: config_kairo_int() */\n'),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -2570,6 +2636,7 @@ PATCHES = {
     'kairox86-voodoo-settle': KAIROX86_VOODOO_SETTLE,
     'kairox86-banshee-16bpp': KAIROX86_BANSHEE_16BPP,
     'kairox86-diag-code-map': KAIROX86_DIAG_CODE_MAP,
+    'kairox86-pcem-430vx': KAIROX86_PCEM_430VX,
 }
 
 ADDED = [

@@ -36,6 +36,7 @@
 #include <86box/spd.h>
 #include "cpu.h"
 #include <86box/machine.h>
+#include <86box/config.h> /* KairoX86#224: config_kairo_int() */
 #include <86box/timer.h>
 #include <86box/fdd.h>
 #include <86box/fdc.h>
@@ -1373,7 +1374,8 @@ machine_at_i430vx_init(const machine_t *model)
     pci_register_slot(0x07, PCI_CARD_SOUTHBRIDGE, 0, 0, 0, 0);
 
     device_add(&i430vx_device);
-    device_add(&piix3_device);
+    /* KairoX86#224: PCem's Award 430VX PCI had the original PIIX here */
+    device_add(config_kairo_int("pcem_piix", 0) ? &piix_device : &piix3_device);
     device_add_params(machine_get_kbc_device(machine), (void *) model->kbc_params);
     device_add_params(&um8669f_device, (void *) 0);
     device_add(&intel_flash_bxt_device);

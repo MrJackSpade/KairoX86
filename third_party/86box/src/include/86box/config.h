@@ -27,6 +27,8 @@ extern "C" {
 #endif
 
 extern void config_load_global(void);
+/* KairoX86#224: a setting of 86box.cfg's [KairoX86] section, def when it has none */
+extern int config_kairo_int(const char *name, int def);
 extern int  config_load(void);
 extern void config_save_global(void);
 extern void config_save_global_setting(const char *head, const char *name);
