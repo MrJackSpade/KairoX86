@@ -353,6 +353,32 @@ voodoo_flush(voodoo_t *voodoo)
     voodoo->flush = 0;
 }
 
+/* KairoX86#222: waits until the FIFO thread has settled (see KAIROX86_VOODOO_SETTLE in
+   tools/patches.py) and the render threads are idle. The emulation thread is the only one that
+   queues entries or brings the vsync, so a settled thread stays settled while it draws a line. */
+void
+voodoo_settle(voodoo_t *voodoo)
+{
+    if (!voodoo->fifo_thread_run)
+        return;
+    for (;;) {
+        const int state = voodoo->k_fifo_state;
+
+        if ((state == KX86_FIFO_SWAP_WAIT) && voodoo->swap_pending)
+            break;
+        if ((state == KX86_FIFO_WAITING) && FIFO_EMPTY &&
+            !(voodoo->cmdfifo_enabled && ((voodoo->cmdfifo_depth_rd != voodoo->cmdfifo_depth_wr) || voodoo->cmdfifo_in_sub)) &&
+            !(voodoo->cmdfifo_enabled_2 && ((voodoo->cmdfifo_depth_rd_2 != voodoo->cmdfifo_depth_wr_2) || voodoo->cmdfifo_in_sub_2)))
+            break;
+        /* Woken at once, not by voodoo_wake_fifo_thread(): that arms the emulated-time
+           wake_timer, which never fires while the emulation thread waits here, and arming
+           it would move the timers the guest runs by */
+        voodoo_wake_fifo_thread_now(voodoo);
+        plat_delay_ms(0);
+    }
+    voodoo_wait_for_render_thread_idle(voodoo);
+}
+
 void
 voodoo_wake_fifo_threads(voodoo_set_t *set, voodoo_t *voodoo)
 {
@@ -379,12 +405,14 @@ voodoo_wait_for_swap_complete(voodoo_t *voodoo)
         } else
             thread_release_mutex(voodoo->swap_mutex);
         /* Yield briefly while waiting for the swap to complete. */
+        voodoo->k_fifo_state = KX86_FIFO_SWAP_WAIT; /* KairoX86#222 */
 #ifdef _WIN32
         /* Sleep(1) can add measurable stalls on Windows. */
         plat_delay_ms(0);
 #else
         plat_delay_ms(1);
 #endif
+        voodoo->k_fifo_state = KX86_FIFO_WORKING;
     }
 }
 
@@ -400,10 +428,12 @@ cmdfifo_get(voodoo_t *voodoo)
         while (voodoo->fifo_thread_run && (voodoo->cmdfifo_depth_rd == voodoo->cmdfifo_depth_wr)) {
             /* The CPU thread must be able to drain the FIFO while this
                waits for it to write the rest of the packet. */
+            voodoo->k_fifo_state = KX86_FIFO_WAITING; /* KairoX86#222 */
             thread_release_mutex(voodoo->fifo_mutex);
             thread_wait_event(voodoo->wake_fifo_thread, -1);
             thread_reset_event(voodoo->wake_fifo_thread);
             thread_wait_mutex(voodoo->fifo_mutex);
+            voodoo->k_fifo_state = KX86_FIFO_WORKING;
         }
 
         /* During card teardown, stop consuming an unpublished CMDFIFO tail. */
@@ -448,10 +478,12 @@ cmdfifo_get_2(voodoo_t *voodoo)
         while (voodoo->fifo_thread_run && (voodoo->cmdfifo_depth_rd_2 == voodoo->cmdfifo_depth_wr_2)) {
             /* The CPU thread must be able to drain the FIFO while this
                waits for it to write the rest of the packet. */
+            voodoo->k_fifo_state = KX86_FIFO_WAITING; /* KairoX86#222 */
             thread_release_mutex(voodoo->fifo_mutex);
             thread_wait_event(voodoo->wake_fifo_thread, -1);
             thread_reset_event(voodoo->wake_fifo_thread);
             thread_wait_mutex(voodoo->fifo_mutex);
+            voodoo->k_fifo_state = KX86_FIFO_WORKING;
         }
 
         /* During card teardown, stop consuming an unpublished CMDFIFO tail. */
@@ -504,8 +536,10 @@ voodoo_fifo_thread(void *param)
 
     while (voodoo->fifo_thread_run) {
         thread_set_event(voodoo->fifo_not_full_event);
+        voodoo->k_fifo_state = KX86_FIFO_WAITING; /* KairoX86#222 */
         thread_wait_event(voodoo->wake_fifo_thread, -1);
         thread_reset_event(voodoo->wake_fifo_thread);
+        voodoo->k_fifo_state = KX86_FIFO_WORKING;
         voodoo->voodoo_busy = 1;
         thread_wait_mutex(voodoo->fifo_mutex);
         voodoo_fifo_run(voodoo);

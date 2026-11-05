@@ -3369,6 +3369,16 @@ banshee_pci_write(int func, int addr, UNUSED(int len), uint8_t val, void *priv)
     }
 }
 
+/* KairoX86#222: each line is drawn with every write the guest queued before it applied */
+static void
+banshee_render_sync(svga_t *svga)
+{
+    const banshee_t *banshee = (banshee_t *) svga->priv;
+
+    if (banshee->voodoo != NULL)
+        voodoo_settle(banshee->voodoo);
+}
+
 static void *
 banshee_init_common(const device_t *info, const char *fn, const int has_sgram,
                     const int type, const int voodoo_type, const int agp, const int clamp)
@@ -3414,6 +3424,7 @@ banshee_init_common(const device_t *info, const char *fn, const int has_sgram,
               banshee_hwcursor_draw,
               banshee_overlay_draw);
     banshee->svga.vsync_callback = banshee_vsync_callback;
+    banshee->svga.render_sync    = banshee_render_sync; /* KairoX86#222 */
 
     mem_mapping_add(&banshee->linear_mapping, 0, 0, banshee_read_linear,
                     banshee_read_linear_w,

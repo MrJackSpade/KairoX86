@@ -8,9 +8,10 @@ without the change.
 
 <test set> is the local UI test set (roms/uitest: xt/fd13-720k.img, dos486/freedos.img and
 dos486/nvr). <out folder> receives one folder per machine, and machines.json: each machine's frames.
-The Windows 98 machines boot the reference disks kept on the device, <reference folder>/win98-486 and
-<reference folder>/win98-p5 (base.vhd and nvr/ each; docs/development.md): each run opens a new
-differencing disk over the base, so every run starts from the same disk.
+The Windows 98 machines boot the reference disks kept on the device, <reference folder>/win98-486,
+<reference folder>/win98-pentium and <reference folder>/win98-voodoo3 (base.vhd and nvr/ each;
+docs/development.md): each run opens a new differencing disk over the base, so every run starts from
+the same disk.
 """
 import json
 import shutil
@@ -73,6 +74,23 @@ MACHINES = {
 }
 
 
+def voodoo3(reference):
+    """Windows 98 on a 3dfx Voodoo3 3000 (KairoX86#222): eXoWin9x's own Windows 98 (its W98-P.vhd as the
+    reference's base.vhd, its 686bx CMOS and flash as nvr/) on the hardware of its 86Box games (686BX,
+    Pentium Pro 150, 1 GB, AWE32), 4000 frames from power-on, through Windows' start to its desktop:
+    the Voodoo's FIFO thread blitting while the Banshee draws its lines."""
+    return (GENERAL + machine("686bx", "pentiumpro", 100000000, 1.5, 1048576, "voodoo3_3k_agp",
+                              extra="cpu_use_dynarec = 1\nfpu_type = internal")
+            + "[Input devices]\nmouse_type = ps2\n\n"
+            + "[Sound]\nsndcard = sbawe32_pnp\n\n"
+            + "[Storage controllers]\nfdc = none\nhdc = ide_pci\nide_qua = 1\nide_ter = 1\n\n"
+            + "[3dfx Voodoo3 3000]\nbilinear = 1\ndithersub = 1\ndacfilter = 0\nrender_threads = 2\nrecompiler = 1\n\n"
+            + "[Sound Blaster AWE32 PnP #1]\nonboard_ram = 512\ncontrol_pc_speaker = 0\nreceive_input = 1\nreceive_input401 = 0\n\n"
+            + "[Tertiary IDE Controller]\nirq = -1\n\n[Quaternary IDE Controller]\nirq = -1\n\n"
+            + f"[Hard disks]\nhdd_01_fn = child.vhd\nhdd_01_vhd_parent = {reference}/base.vhd\nhdd_01_ide_channel = 0:0\n"
+            + "hdd_01_parameters = 255, 16, 32896, 0, ide\nhdd_01_speed = ramdisk\nhdd_01_vhd_blocksize = 4096\n")
+
+
 def windows(name, cpu, speed, multi, memory, reference):
     """A Windows 98 machine over the reference disk: 60 emulated seconds on the 486, 25 on the Pentium,
     from power-on, as the reference was first measured."""
@@ -111,6 +129,10 @@ def main():
         folder.mkdir()
         (folder / "86box.cfg").write_text(windows(*args, f"{reference}/{name}"), encoding="utf-8", newline="\n")
         frames[name] = count
+    folder = out / "win98-voodoo3"
+    folder.mkdir()
+    (folder / "86box.cfg").write_text(voodoo3(f"{reference}/win98-voodoo3"), encoding="utf-8", newline="\n")
+    frames["win98-voodoo3"] = 4000
     (out / "machines.json").write_text(json.dumps(frames, indent=1) + "\n", encoding="utf-8", newline="\n")
     print(f"{len(frames)} machines in {out}")
 

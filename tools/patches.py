@@ -2336,6 +2336,155 @@ KAIROX86_FLAGS_ZPNA_ONCE = [
      '}\n'),
 ]
 
+# KairoX86#222: a Voodoo3/Banshee machine's picture followed host timing. The Banshee draws its
+# scanlines on the emulation thread from VRAM while the FIFO thread runs the guest's queued writes,
+# blits and command FIFO into it, so a line drawn while a blit was partway through showed part of it
+# (Daytona USA: one frame's picture of 3,500 differed between two runs; the guest's state did not).
+# Before each line (svga render_sync) the emulation thread now waits until the FIFO thread has
+# settled: waiting for work with nothing queued (the FIFO empty, both command FIFOs drained and out of
+# a subroutine), or waiting for a vsync swap that is still pending. Either way every entry the guest
+# queued before that point has taken effect, and which ones those are follows what the guest queued.
+# Then the render threads are let finish. Nothing is forced: no swap happens sooner, and the
+# emulation thread takes no lock the FIFO thread holds while it waits for the vsync only the
+# emulation thread brings.
+_C = '86box/src/include/86box/vid_voodoo_common.h'
+_F = '86box/src/video/vid_voodoo_fifo.c'
+KAIROX86_VOODOO_SETTLE = [
+    (_C,
+     '    mutex_t  *fifo_mutex;\n',
+     '    mutex_t  *fifo_mutex;\n'
+     '    /* KairoX86#222: what the FIFO thread is doing (KX86_FIFO_*), for voodoo_settle() */\n'
+     '    ATOMIC_INT k_fifo_state;\n'),
+    (_C,
+     '#define FIFO_EMPTY      (voodoo->fifo_read_idx == voodoo->fifo_write_idx)\n',
+     '#define FIFO_EMPTY      (voodoo->fifo_read_idx == voodoo->fifo_write_idx)\n'
+     '/* KairoX86#222: the FIFO thread running entries, waiting for work or the rest of a command\n'
+     '   FIFO packet (fifo_mutex released), or waiting for a vsync swap */\n'
+     '#define KX86_FIFO_WORKING   0\n'
+     '#define KX86_FIFO_WAITING   1\n'
+     '#define KX86_FIFO_SWAP_WAIT 2\n'),
+    ('86box/src/include/86box/vid_voodoo_fifo.h',
+     'void voodoo_flush(voodoo_t *voodoo);\n',
+     'void voodoo_flush(voodoo_t *voodoo);\n'
+     'void voodoo_settle(voodoo_t *voodoo); /* KairoX86#222 */\n'),
+    (_F,
+     '        /* Yield briefly while waiting for the swap to complete. */\n'
+     '#ifdef _WIN32\n'
+     '        /* Sleep(1) can add measurable stalls on Windows. */\n'
+     '        plat_delay_ms(0);\n'
+     '#else\n'
+     '        plat_delay_ms(1);\n'
+     '#endif\n',
+     '        /* Yield briefly while waiting for the swap to complete. */\n'
+     '        voodoo->k_fifo_state = KX86_FIFO_SWAP_WAIT; /* KairoX86#222 */\n'
+     '#ifdef _WIN32\n'
+     '        /* Sleep(1) can add measurable stalls on Windows. */\n'
+     '        plat_delay_ms(0);\n'
+     '#else\n'
+     '        plat_delay_ms(1);\n'
+     '#endif\n'
+     '        voodoo->k_fifo_state = KX86_FIFO_WORKING;\n'),
+    (_F,
+     '        while (voodoo->fifo_thread_run && (voodoo->cmdfifo_depth_rd == voodoo->cmdfifo_depth_wr)) {\n'
+     '            /* The CPU thread must be able to drain the FIFO while this\n'
+     '               waits for it to write the rest of the packet. */\n'
+     '            thread_release_mutex(voodoo->fifo_mutex);\n'
+     '            thread_wait_event(voodoo->wake_fifo_thread, -1);\n'
+     '            thread_reset_event(voodoo->wake_fifo_thread);\n'
+     '            thread_wait_mutex(voodoo->fifo_mutex);\n'
+     '        }\n',
+     '        while (voodoo->fifo_thread_run && (voodoo->cmdfifo_depth_rd == voodoo->cmdfifo_depth_wr)) {\n'
+     '            /* The CPU thread must be able to drain the FIFO while this\n'
+     '               waits for it to write the rest of the packet. */\n'
+     '            voodoo->k_fifo_state = KX86_FIFO_WAITING; /* KairoX86#222 */\n'
+     '            thread_release_mutex(voodoo->fifo_mutex);\n'
+     '            thread_wait_event(voodoo->wake_fifo_thread, -1);\n'
+     '            thread_reset_event(voodoo->wake_fifo_thread);\n'
+     '            thread_wait_mutex(voodoo->fifo_mutex);\n'
+     '            voodoo->k_fifo_state = KX86_FIFO_WORKING;\n'
+     '        }\n'),
+    (_F,
+     '        while (voodoo->fifo_thread_run && (voodoo->cmdfifo_depth_rd_2 == voodoo->cmdfifo_depth_wr_2)) {\n'
+     '            /* The CPU thread must be able to drain the FIFO while this\n'
+     '               waits for it to write the rest of the packet. */\n'
+     '            thread_release_mutex(voodoo->fifo_mutex);\n'
+     '            thread_wait_event(voodoo->wake_fifo_thread, -1);\n'
+     '            thread_reset_event(voodoo->wake_fifo_thread);\n'
+     '            thread_wait_mutex(voodoo->fifo_mutex);\n'
+     '        }\n',
+     '        while (voodoo->fifo_thread_run && (voodoo->cmdfifo_depth_rd_2 == voodoo->cmdfifo_depth_wr_2)) {\n'
+     '            /* The CPU thread must be able to drain the FIFO while this\n'
+     '               waits for it to write the rest of the packet. */\n'
+     '            voodoo->k_fifo_state = KX86_FIFO_WAITING; /* KairoX86#222 */\n'
+     '            thread_release_mutex(voodoo->fifo_mutex);\n'
+     '            thread_wait_event(voodoo->wake_fifo_thread, -1);\n'
+     '            thread_reset_event(voodoo->wake_fifo_thread);\n'
+     '            thread_wait_mutex(voodoo->fifo_mutex);\n'
+     '            voodoo->k_fifo_state = KX86_FIFO_WORKING;\n'
+     '        }\n'),
+    (_F,
+     '    while (voodoo->fifo_thread_run) {\n'
+     '        thread_set_event(voodoo->fifo_not_full_event);\n'
+     '        thread_wait_event(voodoo->wake_fifo_thread, -1);\n'
+     '        thread_reset_event(voodoo->wake_fifo_thread);\n',
+     '    while (voodoo->fifo_thread_run) {\n'
+     '        thread_set_event(voodoo->fifo_not_full_event);\n'
+     '        voodoo->k_fifo_state = KX86_FIFO_WAITING; /* KairoX86#222 */\n'
+     '        thread_wait_event(voodoo->wake_fifo_thread, -1);\n'
+     '        thread_reset_event(voodoo->wake_fifo_thread);\n'
+     '        voodoo->k_fifo_state = KX86_FIFO_WORKING;\n'),
+    (_F,
+     'void\n'
+     'voodoo_wake_fifo_threads(voodoo_set_t *set, voodoo_t *voodoo)\n',
+     '/* KairoX86#222: waits until the FIFO thread has settled (see KAIROX86_VOODOO_SETTLE in\n'
+     '   tools/patches.py) and the render threads are idle. The emulation thread is the only one that\n'
+     '   queues entries or brings the vsync, so a settled thread stays settled while it draws a line. */\n'
+     'void\n'
+     'voodoo_settle(voodoo_t *voodoo)\n'
+     '{\n'
+     '    if (!voodoo->fifo_thread_run)\n'
+     '        return;\n'
+     '    for (;;) {\n'
+     '        const int state = voodoo->k_fifo_state;\n'
+     '\n'
+     '        if ((state == KX86_FIFO_SWAP_WAIT) && voodoo->swap_pending)\n'
+     '            break;\n'
+     '        if ((state == KX86_FIFO_WAITING) && FIFO_EMPTY &&\n'
+     '            !(voodoo->cmdfifo_enabled && ((voodoo->cmdfifo_depth_rd != voodoo->cmdfifo_depth_wr) || voodoo->cmdfifo_in_sub)) &&\n'
+     '            !(voodoo->cmdfifo_enabled_2 && ((voodoo->cmdfifo_depth_rd_2 != voodoo->cmdfifo_depth_wr_2) || voodoo->cmdfifo_in_sub_2)))\n'
+     '            break;\n'
+     '        /* Woken at once, not by voodoo_wake_fifo_thread(): that arms the emulated-time\n'
+     '           wake_timer, which never fires while the emulation thread waits here, and arming\n'
+     '           it would move the timers the guest runs by */\n'
+     '        voodoo_wake_fifo_thread_now(voodoo);\n'
+     '        plat_delay_ms(0);\n'
+     '    }\n'
+     '    voodoo_wait_for_render_thread_idle(voodoo);\n'
+     '}\n'
+     '\n'
+     'void\n'
+     'voodoo_wake_fifo_threads(voodoo_set_t *set, voodoo_t *voodoo)\n'),
+    ('86box/src/video/vid_voodoo_banshee.c',
+     'static void *\n'
+     'banshee_init_common(const device_t *info, const char *fn, const int has_sgram,\n',
+     '/* KairoX86#222: each line is drawn with every write the guest queued before it applied */\n'
+     'static void\n'
+     'banshee_render_sync(svga_t *svga)\n'
+     '{\n'
+     '    const banshee_t *banshee = (banshee_t *) svga->priv;\n'
+     '\n'
+     '    if (banshee->voodoo != NULL)\n'
+     '        voodoo_settle(banshee->voodoo);\n'
+     '}\n'
+     '\n'
+     'static void *\n'
+     'banshee_init_common(const device_t *info, const char *fn, const int has_sgram,\n'),
+    ('86box/src/video/vid_voodoo_banshee.c',
+     '    banshee->svga.vsync_callback = banshee_vsync_callback;\n',
+     '    banshee->svga.vsync_callback = banshee_vsync_callback;\n'
+     '    banshee->svga.render_sync    = banshee_render_sync; /* KairoX86#222 */\n'),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -2366,6 +2515,7 @@ PATCHES = {
     'kairox86-plain-planar-write': KAIROX86_PLAIN_PLANAR_WRITE,
     'kairox86-arm64-fp-callee-saved': KAIROX86_ARM64_FP_CALLEE_SAVED,
     'kairox86-flags-zpna-once': KAIROX86_FLAGS_ZPNA_ONCE,
+    'kairox86-voodoo-settle': KAIROX86_VOODOO_SETTLE,
 }
 
 ADDED = [

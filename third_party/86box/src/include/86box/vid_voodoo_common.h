@@ -79,6 +79,11 @@ typedef union rgba_u {
 #define FIFO_ENTRIES    (voodoo->fifo_write_idx - voodoo->fifo_read_idx)
 #define FIFO_FULL       ((voodoo->fifo_write_idx - voodoo->fifo_read_idx) >= FIFO_SIZE - 4)
 #define FIFO_EMPTY      (voodoo->fifo_read_idx == voodoo->fifo_write_idx)
+/* KairoX86#222: the FIFO thread running entries, waiting for work or the rest of a command
+   FIFO packet (fifo_mutex released), or waiting for a vsync swap */
+#define KX86_FIFO_WORKING   0
+#define KX86_FIFO_WAITING   1
+#define KX86_FIFO_SWAP_WAIT 2
 
 #define VOODOO_BUF_FRONT   0
 #define VOODOO_BUF_BACK    1
@@ -397,6 +402,8 @@ typedef struct voodoo_t {
        a time and in order; the CPU thread takes it to drain the FIFO itself
        when an access must see every queued write. */
     mutex_t  *fifo_mutex;
+    /* KairoX86#222: what the FIFO thread is doing (KX86_FIFO_*), for voodoo_settle() */
+    ATOMIC_INT k_fifo_state;
     event_t  *render_not_full_event[4];
     event_t  *wake_render_thread[4];
 
