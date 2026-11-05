@@ -2502,6 +2502,41 @@ KAIROX86_BANSHEE_16BPP = [
      '            }\n'),
 ]
 
+# KairoX86#214: a diagnostic core's code map (K9X_DIAG builds only): every code memory block in use,
+# by its offset in the code memory, with the guest block it holds and that block's guest bytes, so
+# profile samples in translated code can be told apart by the guest code they run.
+KAIROX86_DIAG_CODE_MAP = [
+    ('86box/src/codegen/codegen_allocator.c',
+     'int codegen_allocator_usage = 0;\n',
+     'int codegen_allocator_usage = 0;\n'
+     '\n'
+     '#ifdef K9X_DIAG\n'
+     '/*Writes the code map to path: "base <address> <size>", then for each code memory block in use\n'
+     '  "<offset> <codeblock> <pc> <cs base> <phys> <ins> <guest bytes from phys, in hex>"*/\n'
+     'void\n'
+     'k9x_code_map(const char *path)\n'
+     '{\n'
+     '    FILE *f = fopen(path, "w");\n'
+     '\n'
+     '    if (f == NULL)\n'
+     '        fatal("k9x_code_map - cannot write %s\\n", path);\n'
+     '    fprintf(f, "base %p %u\\n", (void *) mem_block_alloc, (unsigned) (MEM_BLOCK_NR * MEM_BLOCK_SIZE));\n'
+     '    for (uint32_t c = 0; c < MEM_BLOCK_NR; c++) {\n'
+     '        const uint32_t nr = mem_blocks[c].code_block;\n'
+     '\n'
+     '        if (nr == BLOCK_INVALID)\n'
+     '            continue;\n'
+     '        const codeblock_t *b = &codeblock[nr];\n'
+     '        fprintf(f, "%x %x %x %x %x %u ", mem_blocks[c].offset, nr, b->pc, b->_cs, b->phys, (unsigned) b->ins);\n'
+     '        for (uint32_t i = 0; i < 128; i++)\n'
+     '            fprintf(f, "%02x", ((b->phys + i) & rammask) < (mem_size << 10) ? ram[(b->phys + i) & rammask] : 0);\n'
+     '        fputc(\'\\n\', f);\n'
+     '    }\n'
+     '    fclose(f);\n'
+     '}\n'
+     '#endif\n'),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -2534,6 +2569,7 @@ PATCHES = {
     'kairox86-flags-zpna-once': KAIROX86_FLAGS_ZPNA_ONCE,
     'kairox86-voodoo-settle': KAIROX86_VOODOO_SETTLE,
     'kairox86-banshee-16bpp': KAIROX86_BANSHEE_16BPP,
+    'kairox86-diag-code-map': KAIROX86_DIAG_CODE_MAP,
 }
 
 ADDED = [

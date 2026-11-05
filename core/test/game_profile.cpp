@@ -343,6 +343,13 @@ int main(int argc, char **argv) {
         if (times.empty()) return fail("no frames measured");
 #ifdef K9X_DIAG
         Diag::now(*machine).report(diag_start);
+        {
+            // The code map at the end, for telling profile samples apart by guest code
+            using CodeMap = void (*)(const char *);
+            const auto code_map = reinterpret_cast<CodeMap>(machine->symbol("k9x_code_map"));
+            if (!code_map) return fail("the core has no k9x_code_map: not a K9X_DIAG core");
+            code_map(utf8(work / "code-map.txt").c_str());
+        }
 #endif
         std::vector<double> sorted = times;
         std::sort(sorted.begin(), sorted.end());
