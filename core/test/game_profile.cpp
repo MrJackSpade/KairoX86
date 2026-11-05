@@ -161,6 +161,46 @@ void write_bmp(const std::string &path, const uint8_t *bgra, uint32_t width, uin
 
 } // namespace
 
+#ifdef K9X_DIAG
+// The core's diagnostic counters (a core built with -DK9X_DIAG), over the measured frames: how the
+// translated code's block exits went (KairoX86#214). Read from the machine's copy of the library.
+struct Diag {
+    std::vector<uint64_t> values;
+
+    static const uint64_t *counters(const kairox86::X86Machine &machine, const char *name) {
+        const auto *found = static_cast<const uint64_t *>(machine.symbol(name));
+        if (!found) {
+            std::fprintf(stderr, "FAIL: the core has no counter %s: not a K9X_DIAG core\n", name);
+            std::exit(1);
+        }
+        return found;
+    }
+
+    static Diag now(const kairox86::X86Machine &machine) {
+        static const char *const singles[] = {"k9x_c_dispatch", "k9x_c_dispatch_nofrom", "k9x_c_interp", "k9x_link_patches",
+                                              "k9x_patch_first", "k9x_patch_same", "k9x_patch_retarget", "k9x_cnt_ins",
+                                              "k9x_cnt_exits", "k9x_cnt_mem", "k9x_cnt_changed"};
+        Diag d;
+        for (const char *name : singles) d.values.push_back(*counters(machine, name));
+        const uint64_t *miss = counters(machine, "k9x_miss");
+        d.values.insert(d.values.end(), miss, miss + 8);
+        const uint64_t *miss2 = counters(machine, "k9x_miss2");
+        d.values.insert(d.values.end(), miss2, miss2 + 11);
+        return d;
+    }
+
+    void report(const Diag &start) const {
+        static const char *const names[] = {"dispatch", "dispatch-nofrom", "interp", "patches", "patch-first", "patch-same",
+                                            "patch-retarget", "ins", "exits", "mem", "changed", "miss-target", "miss-gen",
+                                            "miss-tsc", "miss-slice", "miss-timer", "miss-irq", "miss-status", "miss-other",
+                                            "other-cpu", "other-status", "other-npxc", "other-cr0", "other-page", "other-exec",
+                                            "other-hash", "other-dirty", "other-top", "other-two-page", "other-none"};
+        for (size_t i = 0; i < values.size(); ++i)
+            std::printf("diag %s %llu\n", names[i], (unsigned long long) (values[i] - start.values[i]));
+    }
+};
+#endif
+
 int main(int argc, char **argv) {
     if (argc < 6) return fail("usage: game_profile <ROM set> <work dir> <machine folder> <frames> <script> [options]");
     const fs::path work = fs::path(reinterpret_cast<const char8_t *>(argv[2]));
@@ -236,7 +276,13 @@ int main(int argc, char **argv) {
         typer.start(commands);
         Typed typed{*machine};
         bool typing = !commands.empty();
+#ifdef K9X_DIAG
+        Diag diag_start = Diag::now(*machine);
+#endif
         for (long frame = 0; frame < warmup + frames; ++frame) {
+#ifdef K9X_DIAG
+            if (frame == warmup) diag_start = Diag::now(*machine);
+#endif
             for (const MediaEvent &change : media) {
                 if (change.frame != frame) continue;
                 const bool plain = !change.path.empty() && change.path.find_first_of("/\\") == std::string::npos;
@@ -295,6 +341,9 @@ int main(int argc, char **argv) {
             }
         }
         if (times.empty()) return fail("no frames measured");
+#ifdef K9X_DIAG
+        Diag::now(*machine).report(diag_start);
+#endif
         std::vector<double> sorted = times;
         std::sort(sorted.begin(), sorted.end());
         double total = 0;

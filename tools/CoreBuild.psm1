@@ -26,7 +26,8 @@ Builds game_profile and the 86Box library of the tree at $Source into $Build\out
 folder. The arguments are the app's release build's, $Pgo choosing the core's profile: 'use' (the
 recorded one, as the app builds it), 'off' or 'generate' (the build that records one).
 #>
-function Build-Core([string]$Source, [string]$Build, [ValidateSet('use', 'off', 'generate')][string]$Pgo = 'use') {
+# $Options: more CMake options for the build's configuration (-DK9X_DIAG=ON for the diagnostic counters).
+function Build-Core([string]$Source, [string]$Build, [ValidateSet('use', 'off', 'generate')][string]$Pgo = 'use', [string[]]$Options = @()) {
     $out = Join-Path $Build 'out'
     if (-not (Test-Path (Join-Path $Build 'build.ninja'))) {
         # An array even for one argument: splatting a lone string would pass it character by character.
@@ -40,7 +41,7 @@ function Build-Core([string]$Source, [string]$Build, [ValidateSet('use', 'off', 
             -DCMAKE_SYSTEM_NAME=Android -DCMAKE_SYSTEM_VERSION=26 -DANDROID_PLATFORM=android-26 -DANDROID_ABI=arm64-v8a `
             -DCMAKE_ANDROID_ARCH_ABI=arm64-v8a "-DANDROID_NDK=$ndk" "-DCMAKE_ANDROID_NDK=$ndk" `
             "-DCMAKE_TOOLCHAIN_FILE=$ndk\build\cmake\android.toolchain.cmake" -DANDROID_STL=c++_shared `
-            -DCMAKE_BUILD_TYPE=RelWithDebInfo @pgoArgs "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=$out" "-DCMAKE_RUNTIME_OUTPUT_DIRECTORY=$out" | Out-Null
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo @pgoArgs @Options "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=$out" "-DCMAKE_RUNTIME_OUTPUT_DIRECTORY=$out" | Out-Null
         if ($LASTEXITCODE -ne 0) { throw "CMake could not configure the core in $Build" }
     }
     & $script:Ninja -C $Build game_profile 86Box | Select-Object -Last 1 | Out-Host

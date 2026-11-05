@@ -23,6 +23,8 @@ public:
     X86Library &operator=(const X86Library &) = delete;
 
     const KairoX86Api &api() const { return *api_; }
+    // A symbol of this copy, null when it has none.
+    void *symbol(const char *name) const { return library_->symbol(name); }
 
 private:
     X86Library(std::unique_ptr<kairo::FreshLibrary> library, const KairoX86Api *api)

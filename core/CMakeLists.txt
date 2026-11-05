@@ -104,9 +104,25 @@ if(KAIROX86_PGO_GENERATE)
     add_compile_options(-fprofile-generate)
     add_link_options(-fprofile-generate)
 endif()
+# The core's diagnostic counters (K9X_DIAG in 86Box's sources), reported by game_profile over its
+# measured frames (KairoX86#214). Never in a build that ships; needs -DKAIRO_PGO=OFF, as the
+# counters change the profiled code.
+option(K9X_DIAG "Build the core with its diagnostic counters" OFF)
+if(K9X_DIAG)
+    if(KAIRO_PGO)
+        message(FATAL_ERROR "The counters change the profiled code: add -DKAIRO_PGO=OFF to a K9X_DIAG build")
+    endif()
+    add_compile_definitions(K9X_DIAG)
+    set(CMAKE_C_VISIBILITY_PRESET default)
+    set(CMAKE_CXX_VISIBILITY_PRESET default)
+endif()
 add_subdirectory("${KAIROX86_THIRD_PARTY}/86box" 86box)
 
 set_target_properties(86Box PROPERTIES OUTPUT_NAME kairox86_86box C_VISIBILITY_PRESET hidden CXX_VISIBILITY_PRESET hidden)
+if(K9X_DIAG)
+    # game_profile reads the counters from the library (KairoMachine.cmake hides every symbol of its parts)
+    set_target_properties(86Box PROPERTIES C_VISIBILITY_PRESET default CXX_VISIBILITY_PRESET default)
+endif()
 target_include_directories(plat PRIVATE "${CMAKE_CURRENT_LIST_DIR}/kairo")
 target_link_libraries(86Box chdr-static kairo_zlib)
 # A machine owns what it allocates (KairoX86#186): the library's malloc family goes through the

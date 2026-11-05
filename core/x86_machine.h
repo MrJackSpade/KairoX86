@@ -97,6 +97,10 @@ public:
     // Which slots the machine has a drive for.
     std::vector<bool> media_drives() const;
 
+    // A symbol of the machine's copy of the library, null when it has none: game_profile reads a
+    // diagnostic core's counters (K9X_DIAG) through it.
+    void *symbol(const char *name) const;
+
     // A hard reset, as switching the PC off and on does.
     void reset();
     // Ends the machine, saving its CMOS to the machine folder.

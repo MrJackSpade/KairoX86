@@ -156,6 +156,8 @@ std::vector<bool> X86Machine::media_drives() const {
     return drives;
 }
 
+void *X86Machine::symbol(const char *name) const { return impl_->library->symbol(name); }
+
 void X86Machine::reset() { impl_->api->reset(); }
 
 void X86Machine::close() {
