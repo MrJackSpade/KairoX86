@@ -554,8 +554,14 @@ banshee_render_16bpp_tiled(svga_t *svga)
         if (svga->changedvram[addr >> 12] || svga->fullchange) {
             const uint16_t *vram_p = (uint16_t *) &svga->vram[addr & svga->vram_display_mask];
 
-            for (uint8_t xx = 0; xx < 64; xx++)
-                *p++ = banshee_conv_16to32(svga, *vram_p++, 16);
+            /* KairoX86#214: with no LUT mapping, the conversion is the table */
+            if (!svga->lut_map) {
+                for (uint8_t xx = 0; xx < 64; xx++)
+                    *p++ = video_16to32[*vram_p++];
+            } else {
+                for (uint8_t xx = 0; xx < 64; xx++)
+                    *p++ = banshee_conv_16to32(svga, *vram_p++, 16);
+            }
 
             drawn = 1;
         } else

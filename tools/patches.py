@@ -2485,6 +2485,23 @@ KAIROX86_VOODOO_SETTLE = [
      '    banshee->svga.render_sync    = banshee_render_sync; /* KairoX86#222 */\n'),
 ]
 
+# KairoX86#214: the Banshee's tiled 16bpp desktop (Voodoo3 Windows games' screen) called
+# banshee_conv_16to32() for every pixel, which, with no LUT mapping, gives video_16to32[] of it
+# whatever the CLUT selection. The test is made once a tile and the table read directly.
+KAIROX86_BANSHEE_16BPP = [
+    ('86box/src/video/vid_voodoo_banshee.c',
+     '            for (uint8_t xx = 0; xx < 64; xx++)\n'
+     '                *p++ = banshee_conv_16to32(svga, *vram_p++, 16);\n',
+     '            /* KairoX86#214: with no LUT mapping, the conversion is the table */\n'
+     '            if (!svga->lut_map) {\n'
+     '                for (uint8_t xx = 0; xx < 64; xx++)\n'
+     '                    *p++ = video_16to32[*vram_p++];\n'
+     '            } else {\n'
+     '                for (uint8_t xx = 0; xx < 64; xx++)\n'
+     '                    *p++ = banshee_conv_16to32(svga, *vram_p++, 16);\n'
+     '            }\n'),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -2516,6 +2533,7 @@ PATCHES = {
     'kairox86-arm64-fp-callee-saved': KAIROX86_ARM64_FP_CALLEE_SAVED,
     'kairox86-flags-zpna-once': KAIROX86_FLAGS_ZPNA_ONCE,
     'kairox86-voodoo-settle': KAIROX86_VOODOO_SETTLE,
+    'kairox86-banshee-16bpp': KAIROX86_BANSHEE_16BPP,
 }
 
 ADDED = [
