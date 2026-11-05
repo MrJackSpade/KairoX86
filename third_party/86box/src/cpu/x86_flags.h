@@ -462,19 +462,65 @@ flags_rebuild(void)
 static __inline void
 flags_rebuild_zpna(void)
 {
-    if (cpu_state.flags_op != FLAGS_UNKNOWN) {
-        uint16_t tempf = 0;
-        if (PF_SET())
-            tempf |= P_FLAG;
-        if (AF_SET())
-            tempf |= A_FLAG;
-        if (ZF_SET())
-            tempf |= Z_FLAG;
-        if (NF_SET())
-            tempf |= N_FLAG;
-        cpu_state.flags    = (cpu_state.flags & ~0xd4) | tempf;
-        cpu_state.flags_op = FLAGS_UNKNOWN;
+    /* KairoX86#214: PF_SET(), AF_SET(), ZF_SET() and NF_SET() in one switch */
+    const uint32_t res = cpu_state.flags_res;
+    const uint32_t op1 = cpu_state.flags_op1;
+    const uint32_t op2 = cpu_state.flags_op2;
+    uint32_t       sign;
+    int            af;
+
+    switch (cpu_state.flags_op) {
+        case FLAGS_UNKNOWN:
+            return;
+        /* Each of the four is the flag as it is: the flags stay as they are */
+        case FLAGS_ROL8: case FLAGS_ROL16: case FLAGS_ROL32:
+        case FLAGS_ROR8: case FLAGS_ROR16: case FLAGS_ROR32:
+            cpu_state.flags_op = FLAGS_UNKNOWN;
+            return;
+        case FLAGS_ZN8: case FLAGS_SHL8: case FLAGS_SHR8: case FLAGS_SAR8:
+            sign = 0x80; af = 0;
+            break;
+        case FLAGS_ZN16: case FLAGS_SHL16: case FLAGS_SHR16: case FLAGS_SHRD16: case FLAGS_SAR16:
+            sign = 0x8000; af = 0;
+            break;
+        case FLAGS_ZN32: case FLAGS_SHL32: case FLAGS_SHR32: case FLAGS_SHRD32: case FLAGS_SAR32:
+            sign = 0x80000000; af = 0;
+            break;
+        case FLAGS_ADD8: case FLAGS_INC8:
+            sign = 0x80; af = ((op1 & 0xF) + (op2 & 0xF)) & 0x10;
+            break;
+        case FLAGS_ADD16: case FLAGS_INC16:
+            sign = 0x8000; af = ((op1 & 0xF) + (op2 & 0xF)) & 0x10;
+            break;
+        case FLAGS_ADD32: case FLAGS_INC32:
+            sign = 0x80000000; af = ((op1 & 0xF) + (op2 & 0xF)) & 0x10;
+            break;
+        case FLAGS_SUB8: case FLAGS_DEC8:
+            sign = 0x80; af = ((op1 & 0xF) - (op2 & 0xF)) & 0x10;
+            break;
+        case FLAGS_SUB16: case FLAGS_DEC16:
+            sign = 0x8000; af = ((op1 & 0xF) - (op2 & 0xF)) & 0x10;
+            break;
+        case FLAGS_SUB32: case FLAGS_DEC32:
+            sign = 0x80000000; af = ((op1 & 0xF) - (op2 & 0xF)) & 0x10;
+            break;
+        case FLAGS_ADC8: case FLAGS_ADC16: case FLAGS_ADC32:
+            sign = (cpu_state.flags_op == FLAGS_ADC8) ? 0x80 : (cpu_state.flags_op == FLAGS_ADC16) ? 0x8000 : 0x80000000;
+            af   = ((res & 0xf) < (op1 & 0xf)) || (((res & 0xf) == (op1 & 0xf)) && ((op2 & 0xf) == 0xf));
+            break;
+        case FLAGS_SBC8: case FLAGS_SBC16: case FLAGS_SBC32:
+            sign = (cpu_state.flags_op == FLAGS_SBC8) ? 0x80 : (cpu_state.flags_op == FLAGS_SBC16) ? 0x8000 : 0x80000000;
+            af   = ((op1 & 0xf) < (op2 & 0xf)) || (((op1 & 0xf) == (op2 & 0xf)) && ((res & 0xf) != 0));
+            break;
+        /* An operation none of the four knows: each gave 0 */
+        default:
+            cpu_state.flags    = cpu_state.flags & ~0xd4;
+            cpu_state.flags_op = FLAGS_UNKNOWN;
+            return;
     }
+    cpu_state.flags    = (cpu_state.flags & ~0xd4) | (znptable8[res & 0xff] & P_FLAG) | (af ? A_FLAG : 0) |
+                         (!res ? Z_FLAG : 0) | ((res & sign) ? N_FLAG : 0);
+    cpu_state.flags_op = FLAGS_UNKNOWN;
 }
 
 static __inline void

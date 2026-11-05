@@ -2246,6 +2246,96 @@ KAIROX86_ARM64_FP_CALLEE_SAVED = [
      '    host_arm64_LDP_POSTIDX_D(block, REG_V8, REG_V9, REG_XSP, 16);\n'),
 ]
 
+# KairoX86#214: flags_rebuild_zpna (the P, A, Z and N flags of the last operation, before a rotate,
+# which sets only C and O) asked PF_SET, AF_SET, ZF_SET and NF_SET in turn, each a switch of its own
+# on flags_op, AF_SET not even inlined: about 8% of Daytona USA's emulation thread. One switch now
+# gives what they gave: Z and P from the result as every result-keeping operation has them, N from
+# its sign bit at the operation's size, A as each kind of operation has it, the rotates and
+# FLAGS_UNKNOWN the flags as they are (so nothing changes), and any other operation nothing.
+KAIROX86_FLAGS_ZPNA_ONCE = [
+    ('86box/src/cpu/x86_flags.h',
+     'static __inline void\n'
+     'flags_rebuild_zpna(void)\n'
+     '{\n'
+     '    if (cpu_state.flags_op != FLAGS_UNKNOWN) {\n'
+     '        uint16_t tempf = 0;\n'
+     '        if (PF_SET())\n'
+     '            tempf |= P_FLAG;\n'
+     '        if (AF_SET())\n'
+     '            tempf |= A_FLAG;\n'
+     '        if (ZF_SET())\n'
+     '            tempf |= Z_FLAG;\n'
+     '        if (NF_SET())\n'
+     '            tempf |= N_FLAG;\n'
+     '        cpu_state.flags    = (cpu_state.flags & ~0xd4) | tempf;\n'
+     '        cpu_state.flags_op = FLAGS_UNKNOWN;\n'
+     '    }\n'
+     '}\n',
+     'static __inline void\n'
+     'flags_rebuild_zpna(void)\n'
+     '{\n'
+     '    /* KairoX86#214: PF_SET(), AF_SET(), ZF_SET() and NF_SET() in one switch */\n'
+     '    const uint32_t res = cpu_state.flags_res;\n'
+     '    const uint32_t op1 = cpu_state.flags_op1;\n'
+     '    const uint32_t op2 = cpu_state.flags_op2;\n'
+     '    uint32_t       sign;\n'
+     '    int            af;\n'
+     '\n'
+     '    switch (cpu_state.flags_op) {\n'
+     '        case FLAGS_UNKNOWN:\n'
+     '            return;\n'
+     '        /* Each of the four is the flag as it is: the flags stay as they are */\n'
+     '        case FLAGS_ROL8: case FLAGS_ROL16: case FLAGS_ROL32:\n'
+     '        case FLAGS_ROR8: case FLAGS_ROR16: case FLAGS_ROR32:\n'
+     '            cpu_state.flags_op = FLAGS_UNKNOWN;\n'
+     '            return;\n'
+     '        case FLAGS_ZN8: case FLAGS_SHL8: case FLAGS_SHR8: case FLAGS_SAR8:\n'
+     '            sign = 0x80; af = 0;\n'
+     '            break;\n'
+     '        case FLAGS_ZN16: case FLAGS_SHL16: case FLAGS_SHR16: case FLAGS_SHRD16: case FLAGS_SAR16:\n'
+     '            sign = 0x8000; af = 0;\n'
+     '            break;\n'
+     '        case FLAGS_ZN32: case FLAGS_SHL32: case FLAGS_SHR32: case FLAGS_SHRD32: case FLAGS_SAR32:\n'
+     '            sign = 0x80000000; af = 0;\n'
+     '            break;\n'
+     '        case FLAGS_ADD8: case FLAGS_INC8:\n'
+     '            sign = 0x80; af = ((op1 & 0xF) + (op2 & 0xF)) & 0x10;\n'
+     '            break;\n'
+     '        case FLAGS_ADD16: case FLAGS_INC16:\n'
+     '            sign = 0x8000; af = ((op1 & 0xF) + (op2 & 0xF)) & 0x10;\n'
+     '            break;\n'
+     '        case FLAGS_ADD32: case FLAGS_INC32:\n'
+     '            sign = 0x80000000; af = ((op1 & 0xF) + (op2 & 0xF)) & 0x10;\n'
+     '            break;\n'
+     '        case FLAGS_SUB8: case FLAGS_DEC8:\n'
+     '            sign = 0x80; af = ((op1 & 0xF) - (op2 & 0xF)) & 0x10;\n'
+     '            break;\n'
+     '        case FLAGS_SUB16: case FLAGS_DEC16:\n'
+     '            sign = 0x8000; af = ((op1 & 0xF) - (op2 & 0xF)) & 0x10;\n'
+     '            break;\n'
+     '        case FLAGS_SUB32: case FLAGS_DEC32:\n'
+     '            sign = 0x80000000; af = ((op1 & 0xF) - (op2 & 0xF)) & 0x10;\n'
+     '            break;\n'
+     '        case FLAGS_ADC8: case FLAGS_ADC16: case FLAGS_ADC32:\n'
+     '            sign = (cpu_state.flags_op == FLAGS_ADC8) ? 0x80 : (cpu_state.flags_op == FLAGS_ADC16) ? 0x8000 : 0x80000000;\n'
+     '            af   = ((res & 0xf) < (op1 & 0xf)) || (((res & 0xf) == (op1 & 0xf)) && ((op2 & 0xf) == 0xf));\n'
+     '            break;\n'
+     '        case FLAGS_SBC8: case FLAGS_SBC16: case FLAGS_SBC32:\n'
+     '            sign = (cpu_state.flags_op == FLAGS_SBC8) ? 0x80 : (cpu_state.flags_op == FLAGS_SBC16) ? 0x8000 : 0x80000000;\n'
+     '            af   = ((op1 & 0xf) < (op2 & 0xf)) || (((op1 & 0xf) == (op2 & 0xf)) && ((res & 0xf) != 0));\n'
+     '            break;\n'
+     '        /* An operation none of the four knows: each gave 0 */\n'
+     '        default:\n'
+     '            cpu_state.flags    = cpu_state.flags & ~0xd4;\n'
+     '            cpu_state.flags_op = FLAGS_UNKNOWN;\n'
+     '            return;\n'
+     '    }\n'
+     '    cpu_state.flags    = (cpu_state.flags & ~0xd4) | (znptable8[res & 0xff] & P_FLAG) | (af ? A_FLAG : 0) |\n'
+     '                         (!res ? Z_FLAG : 0) | ((res & sign) ? N_FLAG : 0);\n'
+     '    cpu_state.flags_op = FLAGS_UNKNOWN;\n'
+     '}\n'),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -2275,6 +2365,7 @@ PATCHES = {
     'kairox86-opl3-thread': KAIROX86_OPL3_THREAD,
     'kairox86-plain-planar-write': KAIROX86_PLAIN_PLANAR_WRITE,
     'kairox86-arm64-fp-callee-saved': KAIROX86_ARM64_FP_CALLEE_SAVED,
+    'kairox86-flags-zpna-once': KAIROX86_FLAGS_ZPNA_ONCE,
 }
 
 ADDED = [
