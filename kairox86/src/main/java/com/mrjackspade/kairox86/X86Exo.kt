@@ -96,10 +96,19 @@ class X86Exo(private val context: Context, private val docs: X86Documents) {
     fun prepareStart(tree: Uri, game: ExoWin9x.Game, dir: File) {
         val (kind, text) = gameConfig(tree, game)
         if (kind != ExoWin9x.PLAY_DOSBOX_X) return
+        val config = IniText(File(dir, X86Library.CONFIG).readText())
+        // Each disk DOSBox-X makes of a mounted archive: a fresh child over it, as DOSBox-X keeps
+        // nothing written to it (KairoX86#223)
+        for (n in 2..MAX_DISKS) {
+            val parentName = config[X86Library.HARD_DISKS, "hdd_%02d_vhd_parent".format(n)] ?: continue
+            val childName = checkNotNull(config[X86Library.HARD_DISKS, "hdd_%02d_fn".format(n)]) { "${game.name}'s disk $n has no file" }
+            val image = File(dir, parentName)
+            check(image.isFile) { context.getString(FrontendR.string.kairo_disk_member_missing, parentName) }
+            Vhd.open(image).use { parent -> Vhd.writeChild(File(dir, childName), parent, image, java.util.TreeMap()) }
+        }
         val copies = ExoWin9x.dosboxCopies(text)
         if (copies.isEmpty()) return
         val mounts = ExoWin9x.dosboxMounts(text)
-        val config = IniText(File(dir, X86Library.CONFIG).readText())
         val parentFile = File(checkNotNull(config[X86Library.HARD_DISKS, "hdd_01_vhd_parent"]) { "${game.name}'s ${X86Library.CONFIG} names no Windows image" })
         val child = File(dir, checkNotNull(config[X86Library.HARD_DISKS, "hdd_01_fn"]) { "${game.name}'s ${X86Library.CONFIG} names no Windows disk" })
         check(!child.exists()) { "${child.name} is already in ${game.name}'s session" }
@@ -129,10 +138,11 @@ class X86Exo(private val context: Context, private val docs: X86Documents) {
     }
 
     /**
-     * [mounts] with each archive a drive takes made a CD of its files (KairoX86#223): the archive,
-     * one of the game's own, is unpacked into the machine folder and its files written beside it as
-     * an ISO 9660 image named after it, which the drive then holds. The game's files are [members],
-     * returned with the images made.
+     * [mounts] with each archive a drive takes made the FAT hard disk DOSBox-X makes of it at BOOT
+     * (KairoX86#223, [DosboxFat]): the archive, one of the game's own, is unpacked into the machine
+     * folder and its disk written beside it once as a fixed VHD named after it ("x (zip).vhd"), which
+     * each start's child then sits over ([ExoWin9x.startChild]). The game's files are [members],
+     * returned with the disks made.
      */
     private fun mounts(tree: Uri, game: ExoWin9x.Game, folder: String, mounts: List<ExoWin9x.Mount>,
                        members: List<String>): Pair<List<ExoWin9x.Mount>, List<String>> {
@@ -140,22 +150,29 @@ class X86Exo(private val context: Context, private val docs: X86Documents) {
         val made = mounts.map { mount ->
             if (!mount.folder) return@map mount
             val name = mount.images.single().substringAfterLast('/')
-            check(DiskArchive.isArchive(name)) { context.getString(R.string.exo_folder_cd, game.name) }
+            check(name.endsWith(".zip", ignoreCase = true)) { context.getString(R.string.exo_folder_cd, game.name) }
             val archive = checkNotNull(members.firstOrNull { it.substringAfterLast('/').equals(name, ignoreCase = true) }) {
                 context.getString(FrontendR.string.kairo_disk_member_missing, name)
             }.substringAfterLast('/')
-            val iso = archive.substringBeforeLast('.') + ".iso"
-            if (docs.children(tree, folder).none { it.name == iso && !it.folder }) {
+            val disk = archive.substringBeforeLast('.') + " (zip).vhd"
+            if (docs.children(tree, folder).none { it.name == disk && !it.folder }) {
                 val source = unpackMember(tree, game, folder, archive, AtomicBoolean(false))
+                val entries = checkNotNull(context.contentResolver.openFileDescriptor(source, "r")) {
+                    context.getString(R.string.machine_open_failed, archive)
+                }.use { descriptor -> ZipListing.read(FileInputStream(descriptor.fileDescriptor).channel) }
+                val layout = DosboxFat.layout(entries)
+                val cylinders = ((layout.sectors + 63 * 16 - 1) / (63 * 16)).toInt()
                 DiskArchive.open(context, source, archive, -1).use { inner ->
-                    val files = inner.members.associateBy { X86Iso.File(DiskArchive.safeName(it.name), it.size) }
-                    docs.writeWhole(tree, folder, iso) { output ->
-                        X86Iso.write(archive.substringBeforeLast('.'), files.keys.toList(), output) { file -> inner.open(files.getValue(file)) }
+                    docs.writeWhole(tree, folder, disk) { output ->
+                        val buffered = java.io.BufferedOutputStream(output, 1 shl 20)
+                        DosboxFat.write(layout, cylinders.toLong() * 63 * 16, buffered) { entry -> inner.open(entry.member as String) }
+                        buffered.write(Vhd.fixedFooter(cylinders, 16, 63))
+                        buffered.flush()
                     }
                 }
             }
-            all += iso
-            ExoWin9x.Mount(mount.drive, listOf(iso), cdrom = true, folder = false)
+            all += disk
+            ExoWin9x.Mount(mount.drive, listOf(disk), cdrom = false, folder = true, converted = true)
         }
         return made to all
     }
@@ -323,5 +340,10 @@ class X86Exo(private val context: Context, private val docs: X86Documents) {
         override fun truncate(size: Long): SeekableByteChannel = throw NonWritableChannelException()
         override fun isOpen(): Boolean = open
         override fun close() { open = false }
+    }
+
+    private companion object {
+        /** 86Box's hard disk count (HDD_NUM). */
+        const val MAX_DISKS = 88
     }
 }

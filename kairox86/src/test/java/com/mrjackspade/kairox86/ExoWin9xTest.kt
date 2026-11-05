@@ -134,6 +134,30 @@ class ExoWin9xTest {
     }
 
     @Test
+    fun drivesTakeTheIdePositionsDosboxXGivesThem() {
+        val members = listOf("G/G.vhd", "G/G.cue", "G/G v1.zip", "G/G (zip).vhd")
+        // A CD naming -ide 2m sits at 1:0 even with no hard disk before it; a hard disk takes the first free
+        val cdFirst = ExoWin9x.dosboxMounts("[autoexec]\nIMGMOUNT e \"G.cue\" -t cdrom -ide 2m\nIMGMOUNT d \"G.vhd\"\n")
+        assertEquals("2m", cdFirst[0].ide)
+        val config = ExoWin9x.translateDosbox(template, cdFirst, members, { it }) { 1008L * 10 }.config
+        assertTrue(config, config.contains("cdrom_01_ide_channel = 1:0\n"))
+        assertTrue(config, config.contains("hdd_02_fn = G.vhd\nhdd_02_ide_channel = 0:1\n"))
+        // A mounted archive becomes, at BOOT, a disk at the first position free after every mount: here 1:1
+        val mounts = ExoWin9x.dosboxMounts("[autoexec]\nIMGMOUNT d \"G.vhd\"\nmount f \"G v1.zip\"\nIMGMOUNT e \"G.cue\" -t cdrom -ide 2m\n")
+            .map { if (it.folder) ExoWin9x.Mount(it.drive, listOf("G (zip).vhd"), cdrom = false, folder = true, converted = true) else it }
+        val withZip = ExoWin9x.translateDosbox(template, mounts, members, { it }) { 1008L * 10 }.config
+        assertTrue(withZip, withZip.contains("hdd_02_fn = G.vhd\nhdd_02_ide_channel = 0:1\n"))
+        assertTrue(withZip, withZip.contains("hdd_03_fn = G (zip).start.vhd\nhdd_03_vhd_parent = G (zip).vhd\nhdd_03_ide_channel = 1:1\nhdd_03_parameters = 63, 16, 10, 0, ide\n"))
+        assertTrue(withZip, withZip.contains("cdrom_01_ide_channel = 1:0\n"))
+        // eXo's 86box.cfg starts with a byte order mark: its [General] still goes
+        assertFalse(ExoWin9x.translateDosbox("﻿" + template, mounts, members, { it }) { 1008L * 10 }.config.contains("emu_build_num"))
+        // Two drives at one position fail
+        assertThrows(IllegalStateException::class.java) {
+            ExoWin9x.translateDosbox(template, ExoWin9x.dosboxMounts("[autoexec]\nIMGMOUNT d \"G.vhd\" -ide 1s\nIMGMOUNT e \"G.cue\" -t cdrom -ide 1s\n"), members, { it }) { 1008L * 10 }
+        }
+    }
+
+    @Test
     fun aFolderCdIsMarked() {
         val mounts = ExoWin9x.dosboxMounts("[autoexec]\nIMGMOUNT d \"a.vhd\"\nmount e \".\\eXoWin9x\\1995\\G (1995)\\CD\"\n")
         assertTrue(mounts.single { it.drive == 'e' }.folder)

@@ -87,7 +87,8 @@ object ExoWin9x {
         var machine: String? = null
         var section = ""
         val out = StringBuilder()
-        for (raw in playCfg.lines()) {
+        // eXo's files start with a UTF-8 byte order mark, which would hide their first section's name
+        for (raw in playCfg.removePrefix("﻿").lines()) {
             val line = raw.trimEnd()
             if (line.startsWith("[") && line.endsWith("]")) {
                 section = line.substring(1, line.length - 1)
@@ -135,9 +136,12 @@ object ExoWin9x {
     /**
      * What a DOSBox-X game's Play.conf mounts before it boots: drive [drive]'s [images] (a CD's
      * several, the first in the drive), [cdrom] or a hard disk; [folder] when it mounts a folder of
-     * the host as the drive, not an image.
+     * the host as the drive, not an image; [ide] the IDE position it names (`-ide 2m`), if any.
+     * [converted]: a mounted archive as the FAT hard disk DOSBox-X makes of it at BOOT
+     * ([DosboxFat], KairoX86#223), its one image that disk.
      */
-    data class Mount(val drive: Char, val images: List<String>, val cdrom: Boolean, val folder: Boolean)
+    data class Mount(val drive: Char, val images: List<String>, val cdrom: Boolean, val folder: Boolean,
+                     val ide: String? = null, val converted: Boolean = false)
 
     /** The DOSBox-X Windows image a Play.conf boots (its parent, `vhdmake -f -l <parent> <child>`), by name. */
     fun dosboxWindows(playConf: String): String? = autoexec(playConf)
@@ -153,7 +157,10 @@ object ExoWin9x {
         if (drive == 'c') return@mapNotNull null
         val images = words.drop(2).takeWhile { !it.startsWith("-") }.map { it.replace('\\', '/') }
         val type = words.indexOf("-t").takeIf { it >= 0 }?.let { words.getOrNull(it + 1)?.lowercase() }
-        Mount(drive, images, cdrom = type == "cdrom", folder = command == "mount")
+        val ide = words.indexOf("-ide").takeIf { it >= 0 }?.let {
+            checkNotNull(words.getOrNull(it + 1)) { "-ide with no position: \"$line\"" }.lowercase()
+        }
+        Mount(drive, images, cdrom = type == "cdrom", folder = command == "mount", ide = ide)
     }
 
     /**
@@ -196,9 +203,12 @@ object ExoWin9x {
     /**
      * A DOSBox-X game as an 86Box machine (KairoX86#219): eXo's own 86Box machine for its Windows 98
      * ([template], its emulator folder's 86box.cfg) with the game's drives from its Play.conf. The
-     * Windows disk is the session's child over the parent ([parentPath] of [PARENT_86BOX]), the
-     * game's hard disk images follow (each by its size in sectors, [sectors], at eXo's 63 x 16
-     * geometry), and its CDs take the IDE channels after them, each holding the first of its images.
+     * Windows disk is the session's child over the parent ([parentPath] of [PARENT_86BOX]); the game's
+     * hard disk images (each by its size in sectors, [sectors], at eXo's 63 x 16 geometry) and CDs
+     * (each holding the first of its images) take the IDE positions DOSBox-X gives them, in the
+     * Play.conf's order: the one `-ide` names, or else the first free (IDE_Auto: each controller's
+     * master, then its slave). The disks DOSBox-X makes of its mounted archives at BOOT
+     * ([Mount.converted]) come last, each the start's child ([startChild]) over its image.
      */
     fun translateDosbox(template: String, mounts: List<Mount>, members: Collection<String>, parentPath: (String) -> String,
                         sectors: (String) -> Long): Translation {
@@ -206,9 +216,24 @@ object ExoWin9x {
         fun member(path: String): String = checkNotNull(byName[path.substringAfterLast('/').lowercase()]) {
             "$PLAY_DOSBOX_X mounts ${path.substringAfterLast('/')}, which is not in the game's archive"
         }.substringAfterLast('/')
-        val disks = mounts.filter { !it.cdrom && !it.folder }.map { member(it.images.single()) }
-        val cds = mounts.filter { it.cdrom }.map { member(it.images.first()) }
-        val ini = IniText(template)
+        check(mounts.none { it.folder && !it.converted }) { "$PLAY_DOSBOX_X mounts a folder, which has no disk made of it here" }
+        // IDE positions as DOSBox-X attaches the drives: C: (Windows) first, the mounts in order, then
+        // the archives it converts at BOOT
+        val taken = BooleanArray(8)
+        taken[0] = true
+        fun position(mount: Mount): Int {
+            val at = mount.ide?.let { spec ->
+                val m = Regex("([1-4])([ms])").matchEntire(spec) ?: error("$PLAY_DOSBOX_X names IDE position -ide $spec")
+                (m.groupValues[1].toInt() - 1) * 2 + (if (m.groupValues[2] == "s") 1 else 0)
+            } ?: (0 until 8).firstOrNull { !taken[it] } ?: error("More drives than the IDE channels hold")
+            check(!taken[at]) { "$PLAY_DOSBOX_X puts two drives at IDE position ${channel(at)}" }
+            taken[at] = true
+            return at
+        }
+        val placed = (mounts.filter { !it.converted } + mounts.filter { it.converted }).map { it to position(it) }
+        val disks = placed.filter { !it.first.cdrom }.map { Triple(member(it.first.images.single()), it.second, it.first.converted) }
+        val cds = placed.filter { it.first.cdrom }.map { member(it.first.images.first()) to it.second }
+        val ini = IniText(template.removePrefix("﻿"))
         val machine = checkNotNull(ini["Machine", "machine"]) { "$EMULATOR_CONFIG names no machine" }
         val windows = checkNotNull(ini["Hard disks", "hdd_01_parameters"]) { "$EMULATOR_CONFIG names no Windows disk" }
         val out = StringBuilder()
@@ -216,7 +241,7 @@ object ExoWin9x {
         // reads one section of a name
         val drives = StringBuilder()
         var section = ""
-        for (raw in template.lines()) {
+        for (raw in template.removePrefix("﻿").lines()) {
             val line = raw.trimEnd()
             if (line.startsWith("[") && line.endsWith("]")) {
                 section = line.substring(1, line.length - 1)
@@ -232,21 +257,28 @@ object ExoWin9x {
         out.append("\n[Hard disks]\n")
         out.append("hdd_01_fn = $CHILD\nhdd_01_vhd_parent = ${parentPath(PARENT_86BOX)}\nhdd_01_ide_channel = 0:0\n")
         out.append("hdd_01_parameters = $windows\nhdd_01_speed = ramdisk\n")
-        disks.forEachIndexed { index, disk ->
+        disks.forEachIndexed { index, (disk, at, converted) ->
             val n = "%02d".format(index + 2)
             val cylinders = sectors(disk) / (63 * 16)
             check(cylinders > 0) { "$disk is smaller than a cylinder" }
-            out.append("hdd_${n}_fn = $disk\nhdd_${n}_ide_channel = ${channel(index + 1)}\nhdd_${n}_parameters = 63, 16, $cylinders, 0, ide\nhdd_${n}_speed = ramdisk\n")
+            out.append(if (converted) "hdd_${n}_fn = ${startChild(disk)}\nhdd_${n}_vhd_parent = $disk\n" else "hdd_${n}_fn = $disk\n")
+            out.append("hdd_${n}_ide_channel = ${channel(at)}\nhdd_${n}_parameters = 63, 16, $cylinders, 0, ide\nhdd_${n}_speed = ramdisk\n")
         }
         out.append("\n[$DRIVES]\n").append(drives)
-        cds.forEachIndexed { index, cd ->
+        cds.forEachIndexed { index, (cd, at) ->
             val n = "%02d".format(index + 1)
-            out.append("cdrom_${n}_ide_channel = ${channel(disks.size + 1 + index)}\ncdrom_${n}_image_path = $cd\ncdrom_${n}_parameters = 1, atapi\n")
+            out.append("cdrom_${n}_ide_channel = ${channel(at)}\ncdrom_${n}_image_path = $cd\ncdrom_${n}_parameters = 1, atapi\n")
         }
         return Translation(out.toString(), PARENT_86BOX, machine)
     }
 
     private const val DRIVES = "Floppy and CD-ROM drives"
+
+    /**
+     * The start's own disk over the FAT disk [image] DOSBox-X makes of a mounted archive: a child made
+     * fresh each start, as DOSBox-X keeps nothing the guest writes to a read-only one.
+     */
+    fun startChild(image: String): String = image.substringBeforeLast('.') + ".start.vhd"
 
     /** The [index]th IDE channel, the primary master's first. */
     private fun channel(index: Int): String {

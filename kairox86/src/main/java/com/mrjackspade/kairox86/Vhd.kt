@@ -211,6 +211,37 @@ object Vhd {
         }
     }
 
+    /**
+     * The footer that makes [cylinders] × [heads] × [sectorsPerTrack] sectors of raw data a fixed
+     * VHD, appended after them.
+     */
+    fun fixedFooter(cylinders: Int, heads: Int, sectorsPerTrack: Int): ByteArray {
+        require(cylinders in 1..0xffff && heads in 1..255 && sectorsPerTrack in 1..255) { "No VHD geometry $cylinders/$heads/$sectorsPerTrack" }
+        val size = cylinders.toLong() * heads * sectorsPerTrack * SECTOR
+        val footer = ByteArray(SECTOR)
+        "conectix".toByteArray(Charsets.US_ASCII).copyInto(footer, 0)
+        ByteBuffer.wrap(footer).order(ByteOrder.BIG_ENDIAN).apply {
+            putInt(8, 2)
+            putInt(12, 0x00010000)
+            putLong(16, -1L)
+            putInt(24, (System.currentTimeMillis() / 1000 - EPOCH).toInt())
+            "kx86".toByteArray(Charsets.US_ASCII).copyInto(footer, 28)
+            putInt(32, 0x00010000)
+            "Wi2k".toByteArray(Charsets.US_ASCII).copyInto(footer, 36)
+            putLong(40, size)
+            putLong(48, size)
+            putShort(56, cylinders.toShort())
+            put(58, heads.toByte())
+            put(59, sectorsPerTrack.toByte())
+            putInt(60, FIXED)
+            val uuid = UUID.randomUUID()
+            putLong(68, uuid.mostSignificantBits)
+            putLong(76, uuid.leastSignificantBits)
+        }
+        checksum(footer, 64, 0 until 512)
+        return footer
+    }
+
     /** Stores the ones' complement of the sum of [bytes] in [range] at [at], as VHD's checksums are. */
     private fun checksum(bytes: ByteArray, at: Int, range: IntRange) {
         ByteBuffer.wrap(bytes).order(ByteOrder.BIG_ENDIAN).putInt(at, 0)
