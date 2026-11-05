@@ -84,6 +84,10 @@ static uint8_t     next_pci_card = 0;
 static uint8_t     normal_pci_cards = 0;
 static uint8_t     next_normal_pci_card = 0;
 static uint8_t     pci_card_to_slot_mapping[256][PCI_CARDS_NUM];
+/* KairoX86#228: the card at device 0 of bus 0 below register 50h (pci_add_card_dev0) */
+static uint8_t (*pci_dev0_read)(int func, int addr, int len, void *priv);
+static void (*pci_dev0_write)(int func, int addr, int len, uint8_t val, void *priv);
+static void *pci_dev0_priv;
 static uint8_t     pci_bus_number_to_index_mapping[256];
 static uint8_t     pci_irqs[PCI_IRQS_NUM];
 static uint8_t     pci_irq_level[PCI_IRQS_NUM];
@@ -705,6 +709,12 @@ pci_reg_write(uint16_t port, uint8_t val)
         pci_index = port & 0xfc;
     }
 
+    /* KairoX86#228: device 0 of bus 0 below register 50h is the card there, if any */
+    if (pci_dev0_write && (pci_bus == 0) && (pci_card == 0) && (pci_func == 0) && (pci_index < 0x50)) {
+        pci_dev0_write(pci_func, pci_index | (port & 0x03), pci_access_len, val, pci_dev0_priv);
+        return;
+    }
+
     slot = pci_card_to_slot_mapping[pci_bus_number_to_index_mapping[pci_bus]][pci_card];
     if (slot != PCI_CARD_INVALID) {
         if (pci_cards[slot].write)
@@ -951,6 +961,10 @@ pci_reg_read(uint16_t port)
         pci_card  = (port >> 8) & 0xf;
         pci_index = port & 0xfc;
     }
+
+    /* KairoX86#228: device 0 of bus 0 below register 50h is the card there, if any */
+    if (pci_dev0_read && (pci_bus == 0) && (pci_card == 0) && (pci_func == 0) && (pci_index < 0x50))
+        return pci_dev0_read(pci_func, pci_index | (port & 0x03), pci_access_len, pci_dev0_priv);
 
     slot = pci_card_to_slot_mapping[pci_bus_number_to_index_mapping[pci_bus]][pci_card];
     if (slot != PCI_CARD_INVALID) {
@@ -1262,6 +1276,21 @@ pci_add_card(uint8_t add_type, uint8_t (*read)(int func, int addr, int len, void
     }
 }
 
+/* KairoX86#228: DOSBox-X's PCI bus has no host bridge, so its first card answers device 0. An
+   installed Windows that met a card there (eXo's Windows 95 image, its Voodoo Graphics) finds it
+   there again: the card answers the header and its own registers (00h-4Fh of function 0), and
+   the northbridge keeps the registers above, which the BIOS programs. */
+void
+pci_add_card_dev0(uint8_t (*read)(int func, int addr, int len, void *priv),
+                  void (*write)(int func, int addr, int len, uint8_t val, void *priv), void *priv)
+{
+    if (pci_dev0_read)
+        fatal("pci_add_card_dev0(): device 0 already has a card\n");
+    pci_dev0_read  = read;
+    pci_dev0_write = write;
+    pci_dev0_priv  = priv;
+}
+
 static void
 pci_clear_card(UNUSED(int pci_card))
 {
@@ -1394,6 +1423,10 @@ pci_slots_clear(void)
     } while (i++ < 0xff);
 
     pci_bus_number_to_index_mapping[0] = 0; /* always map bus 0 to index 0 */
+
+    pci_dev0_read  = NULL;
+    pci_dev0_write = NULL;
+    pci_dev0_priv  = NULL;
 }
 
 void

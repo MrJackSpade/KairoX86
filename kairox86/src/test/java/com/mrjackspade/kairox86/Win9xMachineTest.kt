@@ -109,12 +109,24 @@ class Win9xMachineTest {
     @Test
     fun aWindows95FromPcemsAward430vxGetsThatBoard() {
         // Win95DX8.vhd: Windows 95 names functions without SUBSYS; ViRGE/DX and Voodoo2 in PCem's slots, a Sound Blaster at IRQ 7
-        val machine = Win9xMachine.of(registry(pci("VEN_8086&DEV_7030", slot(0)), pci("VEN_8086&DEV_122E", "BUS_00&DEV_07&FUNC_00"),
+        val win95 = registry(pci("VEN_8086&DEV_7030", slot(0)), pci("VEN_8086&DEV_122E", "BUS_00&DEV_07&FUNC_00"),
             pci("VEN_8086&DEV_1230", "BUS_00&DEV_07&FUNC_01"), pci("VEN_5333&DEV_8A01", slot(0x11)), pci("VEN_121A&DEV_0002", slot(0x12)),
             pci("VEN_5333&DEV_8811", slot(1)), pci("VEN_121A&DEV_0001", slot(0)),
             "Enum\\Root\\*PNPB003\\0000" to mapOf("HardwareID" to string("*PNPB003"),
                 "BootConfig" to binary(bootConfig(listOf(0x220, 0x330), 7, listOf(1, 5)))),
-            "Enum\\Root\\*PNPB005\\0000" to mapOf("HardwareID" to string("*PNPB005"))))
+            "Enum\\Root\\*PNPB005\\0000" to mapOf("HardwareID" to string("*PNPB005")))
+        val machine = Win9xMachine.of(win95)
+        // Its Glide is the Voodoo Graphics build (DOSBox-X's card): the Voodoo Graphics goes where Windows
+        // met it, device 0, as DOSBox-X's PCI bus had it (KairoX86#228)
+        val glide = Win9xMachine.glideVoodoo("_GlideInitEnvironment sst1InitGrxClk".toByteArray())
+        assertEquals("voodoo", glide)
+        assertNull(Win9xMachine.glideVoodoo(null))
+        assertNull(Win9xMachine.glideVoodoo("SSTH3_GAMMA".toByteArray()))
+        val withGlide = Win9xMachine.of(win95, glide)
+        assertEquals("voodoo", withGlide.value("3Dfx Voodoo Graphics", "type"))
+        assertEquals("1", withGlide.value("Video", "voodoo"))
+        assertEquals("1", withGlide.value("KairoX86", "voodoo_pci_dev0"))
+        assertNull(machine.value("KairoX86", "voodoo_pci_dev0"))
         assertEquals("430vx", machine.board.machine)
         assertEquals("1", machine.value("KairoX86", "pcem_piix"))
         assertEquals("pentium_p55c", machine.value("Machine", "cpu_family"))

@@ -88,7 +88,9 @@ class X86Exo(private val context: Context, private val docs: X86Documents) {
         return Vhd.open(image).use { disk ->
             val volume = FatVolume(disk)
             val hive = checkNotNull(volume.find(SYSTEM_HIVE)) { "$name has no $SYSTEM_HIVE" }
-            val machine = Win9xMachine.of(Win9xRegistry.read(volume.read(hive)))
+            // The Voodoo its Glide is built for (KairoX86#228), when it has Glide
+            val glide = Win9xMachine.glideVoodoo(volume.find(GLIDE)?.let { volume.read(it) })
+            val machine = Win9xMachine.of(Win9xRegistry.read(volume.read(hive)), glide)
             ExoWin9x.Windows(name, disk.footer.cylinders, disk.footer.heads, disk.footer.sectorsPerTrack, machine)
         }
     }
@@ -428,5 +430,7 @@ class X86Exo(private val context: Context, private val docs: X86Documents) {
         const val MAX_DISKS = 88
         /** The registry hive of an installed Windows 9x that holds what it knows of the hardware. */
         const val SYSTEM_HIVE = "WINDOWS/SYSTEM.DAT"
+        /** 3dfx's Glide 2 in an installed Windows 9x, built for one Voodoo ([Win9xMachine.glideVoodoo]). */
+        const val GLIDE = "WINDOWS/SYSTEM/GLIDE2X.DLL"
     }
 }

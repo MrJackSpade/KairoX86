@@ -2603,6 +2603,38 @@ KAIROX86_PCEM_430VX = [
      '#include <86box/config.h> /* KairoX86#224: config_kairo_int() */\n'),
 ]
 
+# KairoX86#228: DOSBox-X's PCI bus has no host bridge, so its first card answers device 0; eXo's
+# Windows 95 image met its Voodoo Graphics there. pci_add_card_dev0() puts a card at device 0 of
+# bus 0 for registers 00h-4Fh of function 0, before the northbridge, which keeps the rest (the
+# 430VX keeps only stored values below 50h). "voodoo_pci_dev0 = 1" in 86box.cfg's [KairoX86]
+# section puts the Voodoo there; only the machines KairoX86 makes for an image that knows it there set it.
+KAIROX86_PCI_DEV0_CARD = [
+    ('86box/src/include/86box/pci.h',
+     '/* Add an instance of the PCI bridge. */\n',
+     '/* KairoX86#228: a card at device 0 of bus 0, registers 00h-4Fh of function 0, before the\n   northbridge, which keeps the rest. */\nextern void        pci_add_card_dev0(uint8_t (*read)(int func, int addr, int len, void *priv),\n                                     void (*write)(int func, int addr, int len, uint8_t val, void *priv), void *priv);\n\n/* Add an instance of the PCI bridge. */\n'),
+    ('86box/src/pci.c',
+     'static uint8_t     pci_card_to_slot_mapping[256][PCI_CARDS_NUM];\n',
+     'static uint8_t     pci_card_to_slot_mapping[256][PCI_CARDS_NUM];\n/* KairoX86#228: the card at device 0 of bus 0 below register 50h (pci_add_card_dev0) */\nstatic uint8_t (*pci_dev0_read)(int func, int addr, int len, void *priv);\nstatic void (*pci_dev0_write)(int func, int addr, int len, uint8_t val, void *priv);\nstatic void *pci_dev0_priv;\n'),
+    ('86box/src/pci.c',
+     '    slot = pci_card_to_slot_mapping[pci_bus_number_to_index_mapping[pci_bus]][pci_card];\n    if (slot != PCI_CARD_INVALID) {\n        if (pci_cards[slot].write)\n',
+     '    /* KairoX86#228: device 0 of bus 0 below register 50h is the card there, if any */\n    if (pci_dev0_write && (pci_bus == 0) && (pci_card == 0) && (pci_func == 0) && (pci_index < 0x50)) {\n        pci_dev0_write(pci_func, pci_index | (port & 0x03), pci_access_len, val, pci_dev0_priv);\n        return;\n    }\n\n    slot = pci_card_to_slot_mapping[pci_bus_number_to_index_mapping[pci_bus]][pci_card];\n    if (slot != PCI_CARD_INVALID) {\n        if (pci_cards[slot].write)\n'),
+    ('86box/src/pci.c',
+     '    slot = pci_card_to_slot_mapping[pci_bus_number_to_index_mapping[pci_bus]][pci_card];\n    if (slot != PCI_CARD_INVALID) {\n        if (pci_cards[slot].read)\n',
+     '    /* KairoX86#228: device 0 of bus 0 below register 50h is the card there, if any */\n    if (pci_dev0_read && (pci_bus == 0) && (pci_card == 0) && (pci_func == 0) && (pci_index < 0x50))\n        return pci_dev0_read(pci_func, pci_index | (port & 0x03), pci_access_len, pci_dev0_priv);\n\n    slot = pci_card_to_slot_mapping[pci_bus_number_to_index_mapping[pci_bus]][pci_card];\n    if (slot != PCI_CARD_INVALID) {\n        if (pci_cards[slot].read)\n'),
+    ('86box/src/pci.c',
+     'static void\npci_clear_card(UNUSED(int pci_card))\n',
+     '/* KairoX86#228: DOSBox-X\'s PCI bus has no host bridge, so its first card answers device 0. An\n   installed Windows that met a card there (eXo\'s Windows 95 image, its Voodoo Graphics) finds it\n   there again: the card answers the header and its own registers (00h-4Fh of function 0), and\n   the northbridge keeps the registers above, which the BIOS programs. */\nvoid\npci_add_card_dev0(uint8_t (*read)(int func, int addr, int len, void *priv),\n                  void (*write)(int func, int addr, int len, uint8_t val, void *priv), void *priv)\n{\n    if (pci_dev0_read)\n        fatal("pci_add_card_dev0(): device 0 already has a card\\n");\n    pci_dev0_read  = read;\n    pci_dev0_write = write;\n    pci_dev0_priv  = priv;\n}\n\nstatic void\npci_clear_card(UNUSED(int pci_card))\n'),
+    ('86box/src/pci.c',
+     '    pci_bus_number_to_index_mapping[0] = 0; /* always map bus 0 to index 0 */\n}\n',
+     '    pci_bus_number_to_index_mapping[0] = 0; /* always map bus 0 to index 0 */\n\n    pci_dev0_read  = NULL;\n    pci_dev0_write = NULL;\n    pci_dev0_priv  = NULL;\n}\n'),
+    ('86box/src/video/vid_voodoo.c',
+     '    pci_add_card(PCI_ADD_NORMAL, voodoo_pci_read, voodoo_pci_write, voodoo, &voodoo->pci_slot);\n',
+     '    /* KairoX86#228: "voodoo_pci_dev0 = 1" in 86box.cfg\'s [KairoX86] section puts it at device 0,\n       where DOSBox-X\'s PCI bus has it */\n    if (config_kairo_int("voodoo_pci_dev0", 0)) {\n        voodoo->pci_slot = PCI_CARD_INVALID;\n        pci_add_card_dev0(voodoo_pci_read, voodoo_pci_write, voodoo);\n    } else\n        pci_add_card(PCI_ADD_NORMAL, voodoo_pci_read, voodoo_pci_write, voodoo, &voodoo->pci_slot);\n'),
+    ('86box/src/video/vid_voodoo.c',
+     '#include <86box/vid_voodoo_texture.h>\n',
+     '#include <86box/vid_voodoo_texture.h>\n#include <86box/config.h> /* KairoX86#228: config_kairo_int() */\n'),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -2637,6 +2669,7 @@ PATCHES = {
     'kairox86-banshee-16bpp': KAIROX86_BANSHEE_16BPP,
     'kairox86-diag-code-map': KAIROX86_DIAG_CODE_MAP,
     'kairox86-pcem-430vx': KAIROX86_PCEM_430VX,
+    'kairox86-pci-dev0-card': KAIROX86_PCI_DEV0_CARD,
 }
 
 ADDED = [

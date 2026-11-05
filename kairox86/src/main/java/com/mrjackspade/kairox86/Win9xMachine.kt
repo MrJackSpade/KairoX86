@@ -13,7 +13,9 @@ import java.nio.ByteOrder
  * - The board: the one of [BOARDS] whose chipset Windows met at its places (PCI bus 0, by device
  *   number), by the IDs 86Box's (or PCem's) board gives it.
  * - The cards: the PCI ones Windows met in that board's slots, as 86Box places them: the video card
- *   in the first, a Voodoo after it (in the first when the video card is on AGP).
+ *   in the first, a Voodoo after it (in the first when the video card is on AGP). When the image's
+ *   Glide is built for a Voodoo Windows met only at device 0 (DOSBox-X's place for it), the Voodoo
+ *   goes there instead (kairox86-pci-dev0-card).
  * - The sound card: the legacy Sound Blaster Windows was told of, at the ports, IRQ and DMA channels
  *   Windows gives it (its ForcedConfig or BootConfig), or else one it enumerated by ISA Plug and Play.
  * - 86Box's ISA Plug and Play IDE controllers, the tertiary and quaternary, when Windows met them.
@@ -83,7 +85,18 @@ object Win9xMachine {
         key.equals(id, ignoreCase = true) || key.startsWith("$id&", ignoreCase = true) ||
             !key.contains("&SUBSYS", ignoreCase = true) && key.equals(id.substringBefore("&SUBSYS"), ignoreCase = true)
 
-    fun of(registry: Win9xRegistry): Machine {
+    /**
+     * The Voodoo an image's Glide ([glide], its WINDOWS/SYSTEM/GLIDE2X.DLL) is built for: 86Box's
+     * "voodoo" for a Voodoo Graphics (SST-1) build, whose code is `sst1Init`; null for any other, or none.
+     */
+    fun glideVoodoo(glide: ByteArray?): String? =
+        if (glide != null && String(glide, Charsets.ISO_8859_1).contains("sst1Init")) "voodoo" else null
+
+    /**
+     * The machine [registry]'s Windows knows; [glide] the Voodoo its Glide is built for ([glideVoodoo]),
+     * which, when Windows met one where 86Box can put it, is the Voodoo the machine gets.
+     */
+    fun of(registry: Win9xRegistry, glide: String? = null): Machine {
         val pci = checkNotNull(registry.key("Enum\\PCI")) { "The Windows image's registry has no PCI devices (Enum\\PCI)" }
         val instances = pci.children.filter { it.name.startsWith("VEN_", ignoreCase = true) }.flatMap { id ->
             id.children.map { at ->
@@ -128,9 +141,17 @@ object Win9xMachine {
                 "The Windows image knows ${at.device} in slot ${"%02X".format(instance.device)} of the ${board.machine}, with ${video.device} as its video card"
             }
         }
-        val voodoo = inSlots.filter { it.device == voodooSlot }.map { card(it)!! }.singleOrNull { it.kind == Kind.VOODOO }
+        val inSlot = inSlots.filter { it.device == voodooSlot }.map { card(it)!! }.singleOrNull { it.kind == Kind.VOODOO }
+        // The Voodoo the image's Glide is built for, where Windows met it: in that slot, or at device
+        // 0, where DOSBox-X's PCI bus (no host bridge) has its first card (kairox86-pci-dev0-card,
+        // KairoX86#228); otherwise the one Windows met in the slot
+        val atDevice0 = glide != null && inSlot?.device != glide && instances.any { instance ->
+            instance.device == 0 && instance.function == 0 && card(instance)?.let { it.kind == Kind.VOODOO && it.device == glide } == true
+        }
+        val voodoo = if (atDevice0) glide else inSlot?.device
         settings += Setting("Video", "voodoo", if (voodoo != null) "1" else null)
-        if (voodoo != null) settings += Setting("3Dfx Voodoo Graphics", "type", voodoo.device)
+        if (voodoo != null) settings += Setting("3Dfx Voodoo Graphics", "type", voodoo)
+        settings += Setting("KairoX86", "voodoo_pci_dev0", if (atDevice0) "1" else null)
 
         settings += sound(registry)
 

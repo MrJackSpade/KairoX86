@@ -46,6 +46,7 @@
 #include <86box/vid_voodoo_regs.h>
 #include <86box/vid_voodoo_render.h>
 #include <86box/vid_voodoo_texture.h>
+#include <86box/config.h> /* KairoX86#228: config_kairo_int() */
 
 rgba8_t rgb332[0x100];
 rgba8_t ai44[0x100];
@@ -1270,7 +1271,13 @@ voodoo_card_init(const device_t *info)
     else
         voodoo_generate_filter_v1(voodoo);
 
-    pci_add_card(PCI_ADD_NORMAL, voodoo_pci_read, voodoo_pci_write, voodoo, &voodoo->pci_slot);
+    /* KairoX86#228: "voodoo_pci_dev0 = 1" in 86box.cfg's [KairoX86] section puts it at device 0,
+       where DOSBox-X's PCI bus has it */
+    if (config_kairo_int("voodoo_pci_dev0", 0)) {
+        voodoo->pci_slot = PCI_CARD_INVALID;
+        pci_add_card_dev0(voodoo_pci_read, voodoo_pci_write, voodoo);
+    } else
+        pci_add_card(PCI_ADD_NORMAL, voodoo_pci_read, voodoo_pci_write, voodoo, &voodoo->pci_slot);
 
     mem_mapping_add(&voodoo->mapping, 0, 0, NULL, voodoo_readw, voodoo_readl, NULL, voodoo_writew, voodoo_writel, NULL, MEM_MAPPING_EXTERNAL, voodoo);
 

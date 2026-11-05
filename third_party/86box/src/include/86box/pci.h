@@ -319,6 +319,11 @@ extern void        pci_apic_load_intin_routes(const ioapic_pci_intin_route_state
 extern void        pci_add_card(uint8_t add_type, uint8_t (*read)(int func, int addr, int len, void *priv),
                                 void (*write)(int func, int addr, int len, uint8_t val, void *priv), void *priv, uint8_t *slot);
 
+/* KairoX86#228: a card at device 0 of bus 0, registers 00h-4Fh of function 0, before the
+   northbridge, which keeps the rest. */
+extern void        pci_add_card_dev0(uint8_t (*read)(int func, int addr, int len, void *priv),
+                                     void (*write)(int func, int addr, int len, uint8_t val, void *priv), void *priv);
+
 /* Add an instance of the PCI bridge. */
 extern void        pci_add_bridge(uint8_t agp, uint8_t (*read)(int func, int addr, int len, void *priv),
                                   void (*write)(int func, int addr, int len, uint8_t val, void *priv), void *priv,
