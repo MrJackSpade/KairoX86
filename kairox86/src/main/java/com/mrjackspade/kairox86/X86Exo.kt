@@ -27,6 +27,9 @@ import java.util.zip.CRC32
  * the player's settings and what the game wrote. The collection's own files are only read.
  */
 class X86Exo(private val context: Context, private val docs: X86Documents) {
+    /** Whether [game]'s machine folder is made: its 86box.cfg is the last thing [makeConfig] writes. */
+    fun isMade(tree: Uri, game: ExoWin9x.Game): Boolean = docs.find(tree, "${game.folder}/${X86Library.CONFIG}")?.folder == false
+
     /**
      * The machine folder of [game], with its 86box.cfg and CMOS, made when it is missing. A DOSBox-X
      * game's machine is the one its Windows image knows (KairoX86#224), so that image is unpacked

@@ -164,6 +164,13 @@ class X86Library(private val context: Context) {
     /** The game [entry] is of its eXoWin9x collection. */
     private fun exoGame(entry: X86Entry): ExoWin9x.Game = checkNotNull(ExoWin9x.gameOfFolder(entry.path)) { "${entry.path} is no eXoWin9x game's folder" }
 
+    /** Whether an eXoWin9x game's machine folder is made, with its 86box.cfg (KairoX86#227). */
+    fun exoMade(entry: X86Entry, tree: Uri): Boolean = exoBuilder.isMade(tree, exoGame(entry))
+
+    /** Makes an eXoWin9x game's machine folder and 86box.cfg, off the UI thread: it may unpack its Windows image (KairoX86#224, #227). */
+    fun makeExoConfig(entry: X86Entry, tree: Uri, cancelled: AtomicBoolean, progress: (String) -> Unit) =
+        exoBuilder.makeConfig(tree, exoGame(entry), cancelled, progress)
+
     /** Makes the files an eXoWin9x game's machine needs before it starts (KairoX86#219). */
     fun makeExoDisks(entry: X86Entry, tree: Uri, cancelled: AtomicBoolean, progress: (String) -> Unit) =
         exoBuilder.makeDisks(tree, exoGame(entry), cancelled, progress)
@@ -527,11 +534,8 @@ class X86Library(private val context: Context) {
         return DocumentsContract.buildDocumentUriUsingTree(tree, config.id)
     }
 
-    private fun readConfig(tree: Uri, entry: X86Entry): String {
-        // Made here when the config is read before the game's first start, with nothing to show its progress
-        if (entry.exo) exoBuilder.makeConfig(tree, exoGame(entry), AtomicBoolean(false)) {}
-        return readConfigFile(tree, entry)
-    }
+    /** An eXoWin9x game's config is read once its machine folder is made ([makeExoConfig], KairoX86#227). */
+    private fun readConfig(tree: Uri, entry: X86Entry): String = readConfigFile(tree, entry)
 
     private fun readConfigFile(tree: Uri, entry: X86Entry): String =
         checkNotNull(context.contentResolver.openInputStream(configUri(tree, entry))) { context.getString(R.string.machine_open_failed, "${entry.path}/$CONFIG") }

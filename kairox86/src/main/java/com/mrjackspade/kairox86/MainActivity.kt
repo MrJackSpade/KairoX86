@@ -82,14 +82,31 @@ class MainActivity : MachineActivity<X86Entry>() {
             machines.change(entry, libraryTree(), changes)
             session?.takeIf { it.entryId == entry.id }?.let { running -> changes.forEach { running.edit(it.section, it.key, it.value) } }
         }
+
+        // The eXoWin9x games whose machine folder is known to be made
+        private val made = HashSet<String>()
+
+        /**
+         * An eXoWin9x game's settings exist once its machine folder is made (KairoX86#219), which can
+         * mean unpacking its Windows image (#224): until then it has none (KairoX86#227).
+         */
+        @Synchronized override fun ready(entry: X86Entry): Boolean {
+            if (!entry.exo || entry.id in configs || entry.id in made) return true
+            return machines.exoMade(entry, libraryTree()).also { if (it) made += entry.id }
+        }
+
+        override fun prepare(entry: X86Entry, cancelled: AtomicBoolean, progress: (String) -> Unit) {
+            if (entry.exo) machines.makeExoConfig(entry, libraryTree(), cancelled, progress)
+        }
     }
 
     /**
      * The options of each card [entry]'s machine has (KairoX86#201): a group for each card, named by
-     * 86Box, with its own options, kept in its section of the folder's 86box.cfg.
+     * 86Box, with its own options, kept in its section of the folder's 86box.cfg. An eXoWin9x game's
+     * machine shows them once it is made (KairoX86#227).
      */
     override fun machineExtraGroups(entry: X86Entry, enabled: () -> Boolean): List<RowGroup> =
-        listOf(hardDiskGroup(entry, enabled)) + cardGroups(entry, enabled)
+        if (!configStore.ready(entry)) emptyList() else listOf(hardDiskGroup(entry, enabled)) + cardGroups(entry, enabled)
 
     /** Whether a hard disk is being set, which may unpack one from an archive (KairoX86#217). */
     @Volatile private var hardDiskBusy = false
@@ -189,6 +206,8 @@ class MainActivity : MachineActivity<X86Entry>() {
         if (tree == null) return
         readAhead.submit { X86Hardware.machines() }
         for (entry in entries.filter { !it.disk && it.playable }) readAhead.submit {
+            // An eXoWin9x game's machine is made at its first launch, not here (KairoX86#227)
+            if (!configStore.ready(entry)) return@submit
             val machine = configStore.read(entry, X86Settings.machine.option) ?: X86Settings.machine.option.default
             X86Hardware.options(X86Hardware.MACHINE, machine)
             for ((kind, card) in chosenCards(entry)) X86Hardware.options(kind, card.id)
