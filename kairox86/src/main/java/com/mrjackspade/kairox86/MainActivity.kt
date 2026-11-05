@@ -50,6 +50,9 @@ class MainActivity : MachineActivity<X86Entry>() {
     override val directTouchExplanation = UiText.res(R.string.direct_touch_explanation)
     // 86Box keeps no save states the frontend can take yet: the machine's own disks and CMOS keep its saves.
     override val saveStates = false
+    // A Bluetooth or USB mouse's middle button and wheel go to the guest's mouse (KairoX86#218)
+    override val mouseHasMiddleButton = true
+    override val mouseHasWheel = true
 
     /**
      * A machine's settings live in its folder's 86box.cfg (Kairo#142, X86Settings); one changed while

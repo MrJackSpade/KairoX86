@@ -56,6 +56,8 @@ public:
     // The mouse: motion in the picture's pixels, and button 1 (left), 2 (right) or 3 (middle).
     void mouse_move(int dx, int dy);
     void mouse_button(int button, bool down);
+    // The wheel: notches, positive toward the player (down) (KairoX86#218).
+    void mouse_wheel(int notches);
     // Direct touch through the guest's DOS mouse driver (kairo_x86.h): its next position read puts
     // the pointer on picture point (x, y); placing() until it has.
     void mouse_place(int x, int y);

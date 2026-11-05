@@ -125,6 +125,8 @@ void X86Machine::mouse_button(int button, bool down) {
     impl_->api->mouse_buttons(impl_->buttons);
 }
 
+void X86Machine::mouse_wheel(int notches) { impl_->api->mouse_wheel(notches); }
+
 void X86Machine::joystick_axis(int axis, int value) { impl_->api->joystick_axis(axis, value); }
 void X86Machine::joystick_button(int button, bool down) { impl_->api->joystick_button(button, down); }
 int X86Machine::locks() const { return impl_->api->locks(); }

@@ -1120,6 +1120,14 @@ api_mouse_buttons(int buttons)
 }
 
 static void
+api_mouse_wheel(int notches)
+{
+    /* 86Box's Z counts away from the player (up), as a host wheel's turns do, 120 to a notch (Qt's
+       unit: WHEEL_DELTA in mouse.c, off Apple); less than a notch reads as no turn */
+    mouse_set_z(-notches * 120);
+}
+
+static void
 api_mouse_place(int x, int y)
 {
     /* Called between frames: the picture is not changing. */
@@ -1487,6 +1495,7 @@ static const struct KairoX86Api api = {
     .key             = api_key,
     .mouse_move      = api_mouse_move,
     .mouse_buttons   = api_mouse_buttons,
+    .mouse_wheel     = api_mouse_wheel,
     .mouse_place     = api_mouse_place,
     .mouse_placing   = api_mouse_placing,
     .mouse_moving    = api_mouse_moving,

@@ -98,6 +98,8 @@ struct KairoX86Api {
 	/* The mouse: motion in the picture's pixels (86Box's raw input), and its buttons (bit 0 left, 1 right, 2 middle). */
 	void (*mouse_move)(int dx, int dy);
 	void (*mouse_buttons)(int buttons);
+	/* The wheel: notches, positive toward the player (down), for a guest mouse that has one (KairoX86#218). */
+	void (*mouse_wheel)(int notches);
 	/* Direct touch through the guest's DOS mouse driver (KairoX86#44): the program's next "get the
 	 * position and buttons" call (INT 33h AX=03h) sets the driver's pointer to picture point (x, y)
 	 * instead, as the driver's own "set the position" (AX=04h). mouse_placing: whether that call is

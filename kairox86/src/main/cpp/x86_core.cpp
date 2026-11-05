@@ -137,6 +137,7 @@ public:
     }
     bool mouse_warp_done() override { return placing_ ? !machine_->mouse_placing() : relative_.done(); }
     void mouse_button(int button, bool down) override { machine_->mouse_button(button, down); }
+    void mouse_wheel(int notches) override { machine_->mouse_wheel(notches); }
     // Startup commands (KairoX86#46): typed when DOS asks for a line from the keyboard, as its command
     // shell does at the prompt, on a US keyboard.
     kairo::Prompt prompt() override { return machine_->waits_for_line() ? kairo::Prompt::Line : kairo::Prompt::None; }
