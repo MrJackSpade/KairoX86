@@ -84,7 +84,8 @@ extern codegen_link_slot_t codegen_link_slots[BLOCK_SIZE][CODEGEN_LINK_SLOTS][CO
 /*Byte offset of the link entry from &block->data[BLOCK_START]: the first
   instruction after the prologue's register saves.*/
 #if defined(__aarch64__) || defined(_M_ARM64)
-#    define CODEGEN_LINK_ENTRY_OFFSET 24
+/*Ten pairs: X19-X30 and, KairoX86, d8-d15*/
+#    define CODEGEN_LINK_ENTRY_OFFSET 40
 #elif defined(_WIN64)
 /*Eight pushes, the frame and the XMM6/XMM7 saves*/
 #    define CODEGEN_LINK_ENTRY_OFFSET 28

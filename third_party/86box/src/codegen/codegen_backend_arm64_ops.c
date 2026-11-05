@@ -83,6 +83,8 @@
 #    define OPCODE_LDP_POSTIDX_X      (0x2a3 << 22)
 #    define OPCODE_SBFX               (0x04c << 22)
 #    define OPCODE_STP_PREIDX_X       (0x2a6 << 22)
+#    define OPCODE_STP_PREIDX_D       (0x1b6 << 22) /* KairoX86: STP Dt, Dt2, [Xn, #imm]! */
+#    define OPCODE_LDP_POSTIDX_D      (0x1b3 << 22) /* KairoX86: LDP Dt, Dt2, [Xn], #imm */
 #    define OPCODE_STP_POSTIDX_X      (0x2a2 << 22)
 #    define OPCODE_STR_IMM_W          (0x2e4 << 22)
 #    define OPCODE_STR_IMM_Q          (0x3e4 << 22)
@@ -1773,6 +1775,21 @@ host_arm64_STP_PREIDX_X(codeblock_t *block, int src_reg1, int src_reg2, int base
     if (!in_range7_x(offset))
         fatal("host_arm64_STP_PREIDX out of range7 %i\n", offset);
     codegen_addlong(block, OPCODE_STP_PREIDX_X | IMM7_X(offset) | Rn(base_reg) | Rt(src_reg1) | Rt2(src_reg2));
+}
+/* KairoX86: the callee-saved d8-d15, around a block's frame */
+void
+host_arm64_STP_PREIDX_D(codeblock_t *block, int src_reg1, int src_reg2, int base_reg, int offset)
+{
+    if (!in_range7_x(offset))
+        fatal("host_arm64_STP_PREIDX_D out of range7 %i\n", offset);
+    codegen_addlong(block, OPCODE_STP_PREIDX_D | IMM7_X(offset) | Rn(base_reg) | Rt(src_reg1) | Rt2(src_reg2));
+}
+void
+host_arm64_LDP_POSTIDX_D(codeblock_t *block, int src_reg1, int src_reg2, int base_reg, int offset)
+{
+    if (!in_range7_x(offset))
+        fatal("host_arm64_LDP_POSTIDX_D out of range7 %i\n", offset);
+    codegen_addlong(block, OPCODE_LDP_POSTIDX_D | IMM7_X(offset) | Rn(base_reg) | Rt(src_reg1) | Rt2(src_reg2));
 }
 void
 host_arm64_STP_POSTIDX_X(codeblock_t *block, int src_reg1, int src_reg2, int base_reg, int offset)

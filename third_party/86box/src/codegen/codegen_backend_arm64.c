@@ -1666,6 +1666,10 @@ codegen_backend_init(void)
     codegen_link_miss_rout = &block_write_data[block_pos];
 #    endif
     host_arm64_LDP_POSTIDX_X(block, REG_X19, REG_X20, REG_XSP, 64);
+    host_arm64_LDP_POSTIDX_D(block, REG_V14, REG_V15, REG_XSP, 16); /* KairoX86 */
+    host_arm64_LDP_POSTIDX_D(block, REG_V12, REG_V13, REG_XSP, 16);
+    host_arm64_LDP_POSTIDX_D(block, REG_V10, REG_V11, REG_XSP, 16);
+    host_arm64_LDP_POSTIDX_D(block, REG_V8, REG_V9, REG_XSP, 16);
     host_arm64_LDP_POSTIDX_X(block, REG_X21, REG_X22, REG_XSP, 16);
     host_arm64_LDP_POSTIDX_X(block, REG_X23, REG_X24, REG_XSP, 16);
     host_arm64_LDP_POSTIDX_X(block, REG_X25, REG_X26, REG_XSP, 16);
@@ -1729,7 +1733,17 @@ codegen_backend_prologue(codeblock_t *block)
     host_arm64_STP_PREIDX_X(block, REG_X25, REG_X26, REG_XSP, -16);
     host_arm64_STP_PREIDX_X(block, REG_X23, REG_X24, REG_XSP, -16);
     host_arm64_STP_PREIDX_X(block, REG_X21, REG_X22, REG_XSP, -16);
+    /* KairoX86: d8-d15 are callee-saved, and the guest FPU registers are V8-V15 */
+    host_arm64_STP_PREIDX_D(block, REG_V8, REG_V9, REG_XSP, -16);
+    host_arm64_STP_PREIDX_D(block, REG_V10, REG_V11, REG_XSP, -16);
+    host_arm64_STP_PREIDX_D(block, REG_V12, REG_V13, REG_XSP, -16);
+    host_arm64_STP_PREIDX_D(block, REG_V14, REG_V15, REG_XSP, -16);
     host_arm64_STP_PREIDX_X(block, REG_X19, REG_X20, REG_XSP, -64);
+#    ifdef CODEGEN_BACKEND_HAS_BLOCK_LINK
+    /* KairoX86: links enter here, past the saves (codegen_link.h), as the x86-64 backend checks */
+    if (block_pos != BLOCK_START + CODEGEN_LINK_ENTRY_OFFSET)
+        fatal("codegen_backend_prologue: the link entry is at %i, not %i\n", block_pos - BLOCK_START, CODEGEN_LINK_ENTRY_OFFSET);
+#    endif
 
     host_arm64_MOVX_IMM(block, REG_CPUSTATE, (uint64_t) &cpu_state);
 
@@ -1778,6 +1792,10 @@ codegen_backend_epilogue(codeblock_t *block)
     }
 #    endif
     host_arm64_LDP_POSTIDX_X(block, REG_X19, REG_X20, REG_XSP, 64);
+    host_arm64_LDP_POSTIDX_D(block, REG_V14, REG_V15, REG_XSP, 16); /* KairoX86 */
+    host_arm64_LDP_POSTIDX_D(block, REG_V12, REG_V13, REG_XSP, 16);
+    host_arm64_LDP_POSTIDX_D(block, REG_V10, REG_V11, REG_XSP, 16);
+    host_arm64_LDP_POSTIDX_D(block, REG_V8, REG_V9, REG_XSP, 16);
     host_arm64_LDP_POSTIDX_X(block, REG_X21, REG_X22, REG_XSP, 16);
     host_arm64_LDP_POSTIDX_X(block, REG_X23, REG_X24, REG_XSP, 16);
     host_arm64_LDP_POSTIDX_X(block, REG_X25, REG_X26, REG_XSP, 16);

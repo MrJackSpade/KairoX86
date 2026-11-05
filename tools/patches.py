@@ -2159,6 +2159,93 @@ KAIROX86_PLAIN_PLANAR_WRITE = [
      '    }\n'),
 ]
 
+# The arm64 recompiler's guest FPU registers are V8-V15 (codegen_host_fp_reg_list), whose low halves
+# (d8-d15) AAPCS64 makes callee-saved, but a block's prologue saved only X19-X30. A block with FPU
+# code (x87, as Windows 9x games run) clobbered the floating-point values its C callers kept in
+# d8-d15 across the call: the emulation thread's own C code and the frontend above it. Found by
+# game_profile on Daytona USA (eXoWin9x, Pentium Pro), whose frame statistics and screenshot headers
+# came out as doubles of the guest's. The prologue now saves d8-d15 under X19/X20 (the locals' offsets
+# from SP are unchanged), and both ways back to C restore them.
+_F = '86box/src/codegen/codegen_backend_arm64.c'
+_O = '86box/src/codegen/codegen_backend_arm64_ops.c'
+KAIROX86_ARM64_FP_CALLEE_SAVED = [
+    (_O,
+     '#    define OPCODE_STP_PREIDX_X       (0x2a6 << 22)\n',
+     '#    define OPCODE_STP_PREIDX_X       (0x2a6 << 22)\n'
+     '#    define OPCODE_STP_PREIDX_D       (0x1b6 << 22) /* KairoX86: STP Dt, Dt2, [Xn, #imm]! */\n'
+     '#    define OPCODE_LDP_POSTIDX_D      (0x1b3 << 22) /* KairoX86: LDP Dt, Dt2, [Xn], #imm */\n'),
+    (_O,
+     'void\n'
+     'host_arm64_STP_POSTIDX_X(codeblock_t *block, int src_reg1, int src_reg2, int base_reg, int offset)\n',
+     '/* KairoX86: the callee-saved d8-d15, around a block\'s frame */\n'
+     'void\n'
+     'host_arm64_STP_PREIDX_D(codeblock_t *block, int src_reg1, int src_reg2, int base_reg, int offset)\n'
+     '{\n'
+     '    if (!in_range7_x(offset))\n'
+     '        fatal("host_arm64_STP_PREIDX_D out of range7 %i\\n", offset);\n'
+     '    codegen_addlong(block, OPCODE_STP_PREIDX_D | IMM7_X(offset) | Rn(base_reg) | Rt(src_reg1) | Rt2(src_reg2));\n'
+     '}\n'
+     'void\n'
+     'host_arm64_LDP_POSTIDX_D(codeblock_t *block, int src_reg1, int src_reg2, int base_reg, int offset)\n'
+     '{\n'
+     '    if (!in_range7_x(offset))\n'
+     '        fatal("host_arm64_LDP_POSTIDX_D out of range7 %i\\n", offset);\n'
+     '    codegen_addlong(block, OPCODE_LDP_POSTIDX_D | IMM7_X(offset) | Rn(base_reg) | Rt(src_reg1) | Rt2(src_reg2));\n'
+     '}\n'
+     'void\n'
+     'host_arm64_STP_POSTIDX_X(codeblock_t *block, int src_reg1, int src_reg2, int base_reg, int offset)\n'),
+    ('86box/src/codegen/codegen_backend_arm64.h',
+     'void host_arm64_LDP_POSTIDX_X(codeblock_t *block, int src_reg1, int src_reg2, int base_reg, int offset);\n',
+     'void host_arm64_LDP_POSTIDX_X(codeblock_t *block, int src_reg1, int src_reg2, int base_reg, int offset);\n'
+     'void host_arm64_STP_PREIDX_D(codeblock_t *block, int src_reg1, int src_reg2, int base_reg, int offset);\n'
+     'void host_arm64_LDP_POSTIDX_D(codeblock_t *block, int src_reg1, int src_reg2, int base_reg, int offset);\n'),
+    (_F,
+     '    host_arm64_STP_PREIDX_X(block, REG_X21, REG_X22, REG_XSP, -16);\n'
+     '    host_arm64_STP_PREIDX_X(block, REG_X19, REG_X20, REG_XSP, -64);\n',
+     '    host_arm64_STP_PREIDX_X(block, REG_X21, REG_X22, REG_XSP, -16);\n'
+     '    /* KairoX86: d8-d15 are callee-saved, and the guest FPU registers are V8-V15 */\n'
+     '    host_arm64_STP_PREIDX_D(block, REG_V8, REG_V9, REG_XSP, -16);\n'
+     '    host_arm64_STP_PREIDX_D(block, REG_V10, REG_V11, REG_XSP, -16);\n'
+     '    host_arm64_STP_PREIDX_D(block, REG_V12, REG_V13, REG_XSP, -16);\n'
+     '    host_arm64_STP_PREIDX_D(block, REG_V14, REG_V15, REG_XSP, -16);\n'
+     '    host_arm64_STP_PREIDX_X(block, REG_X19, REG_X20, REG_XSP, -64);\n'
+     '#    ifdef CODEGEN_BACKEND_HAS_BLOCK_LINK\n'
+     '    /* KairoX86: links enter here, past the saves (codegen_link.h), as the x86-64 backend checks */\n'
+     '    if (block_pos != BLOCK_START + CODEGEN_LINK_ENTRY_OFFSET)\n'
+     '        fatal("codegen_backend_prologue: the link entry is at %i, not %i\\n", block_pos - BLOCK_START, CODEGEN_LINK_ENTRY_OFFSET);\n'
+     '#    endif\n'),
+    ('86box/src/codegen/codegen_link.h',
+     '#if defined(__aarch64__) || defined(_M_ARM64)\n'
+     '#    define CODEGEN_LINK_ENTRY_OFFSET 24\n',
+     '#if defined(__aarch64__) || defined(_M_ARM64)\n'
+     '/*Ten pairs: X19-X30 and, KairoX86, d8-d15*/\n'
+     '#    define CODEGEN_LINK_ENTRY_OFFSET 40\n'),
+    (_F,
+     '    codegen_link_miss_rout = &block_write_data[block_pos];\n'
+     '#    endif\n'
+     '    host_arm64_LDP_POSTIDX_X(block, REG_X19, REG_X20, REG_XSP, 64);\n',
+     '    codegen_link_miss_rout = &block_write_data[block_pos];\n'
+     '#    endif\n'
+     '    host_arm64_LDP_POSTIDX_X(block, REG_X19, REG_X20, REG_XSP, 64);\n'
+     '    host_arm64_LDP_POSTIDX_D(block, REG_V14, REG_V15, REG_XSP, 16); /* KairoX86 */\n'
+     '    host_arm64_LDP_POSTIDX_D(block, REG_V12, REG_V13, REG_XSP, 16);\n'
+     '    host_arm64_LDP_POSTIDX_D(block, REG_V10, REG_V11, REG_XSP, 16);\n'
+     '    host_arm64_LDP_POSTIDX_D(block, REG_V8, REG_V9, REG_XSP, 16);\n'),
+    (_F,
+     '        return;\n'
+     '    }\n'
+     '#    endif\n'
+     '    host_arm64_LDP_POSTIDX_X(block, REG_X19, REG_X20, REG_XSP, 64);\n',
+     '        return;\n'
+     '    }\n'
+     '#    endif\n'
+     '    host_arm64_LDP_POSTIDX_X(block, REG_X19, REG_X20, REG_XSP, 64);\n'
+     '    host_arm64_LDP_POSTIDX_D(block, REG_V14, REG_V15, REG_XSP, 16); /* KairoX86 */\n'
+     '    host_arm64_LDP_POSTIDX_D(block, REG_V12, REG_V13, REG_XSP, 16);\n'
+     '    host_arm64_LDP_POSTIDX_D(block, REG_V10, REG_V11, REG_XSP, 16);\n'
+     '    host_arm64_LDP_POSTIDX_D(block, REG_V8, REG_V9, REG_XSP, 16);\n'),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -2187,6 +2274,7 @@ PATCHES = {
     'kairox86-lowres-8bpp': KAIROX86_LOWRES_8BPP,
     'kairox86-opl3-thread': KAIROX86_OPL3_THREAD,
     'kairox86-plain-planar-write': KAIROX86_PLAIN_PLANAR_WRITE,
+    'kairox86-arm64-fp-callee-saved': KAIROX86_ARM64_FP_CALLEE_SAVED,
 }
 
 ADDED = [
