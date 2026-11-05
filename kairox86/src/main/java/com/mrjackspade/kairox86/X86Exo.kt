@@ -41,12 +41,13 @@ class X86Exo(private val context: Context, private val docs: X86Documents) {
             check(windows == null || windows.lowercase() in ExoWin9x.DOSBOX_ENGLISH_98) {
                 context.getString(R.string.exo_windows_unsupported, game.name, windows)
             }
-            val mounts = ExoWin9x.dosboxMounts(text)
-            check(mounts.none { it.folder }) { context.getString(R.string.exo_folder_cd, game.name) }
+            // An archive DOSBox-X mounts as a drive is a CD image of its files here (KairoX86#223)
+            val images = mounts(tree, game, folder, ExoWin9x.dosboxMounts(text), members)
+            val mounts = images.first
             val template = checkNotNull(emulatorFile(tree, game, ExoWin9x.EMULATOR_CONFIG)) {
                 "${game.name}'s collection has no ${ExoWin9x.EMULATOR_FOLDER}/${ExoWin9x.EMULATOR_CONFIG}"
             }.use { it.readBytes().toString(Charsets.UTF_8) }
-            ExoWin9x.translateDosbox(template, mounts, members, { parent -> parentFile(game, parent).absolutePath }) { disk ->
+            ExoWin9x.translateDosbox(template, mounts, images.second, { parent -> parentFile(game, parent).absolutePath }) { disk ->
                 // A hard disk's geometry comes from its size: it is unpacked now, as its start would
                 vhdSectors(tree, unpackMember(tree, game, folder, disk, AtomicBoolean(false)))
             }
@@ -83,6 +84,38 @@ class X86Exo(private val context: Context, private val docs: X86Documents) {
             progress(context.getString(FrontendR.string.kairo_disk_preparing, parent.name))
             unpackParent(tree, game, parent, cancelled)
         }
+    }
+
+    /**
+     * [mounts] with each archive a drive takes made a CD of its files (KairoX86#223): the archive,
+     * one of the game's own, is unpacked into the machine folder and its files written beside it as
+     * an ISO 9660 image named after it, which the drive then holds. The game's files are [members],
+     * returned with the images made.
+     */
+    private fun mounts(tree: Uri, game: ExoWin9x.Game, folder: String, mounts: List<ExoWin9x.Mount>,
+                       members: List<String>): Pair<List<ExoWin9x.Mount>, List<String>> {
+        val all = members.toMutableList()
+        val made = mounts.map { mount ->
+            if (!mount.folder) return@map mount
+            val name = mount.images.single().substringAfterLast('/')
+            check(DiskArchive.isArchive(name)) { context.getString(R.string.exo_folder_cd, game.name) }
+            val archive = checkNotNull(members.firstOrNull { it.substringAfterLast('/').equals(name, ignoreCase = true) }) {
+                context.getString(FrontendR.string.kairo_disk_member_missing, name)
+            }.substringAfterLast('/')
+            val iso = archive.substringBeforeLast('.') + ".iso"
+            if (docs.children(tree, folder).none { it.name == iso && !it.folder }) {
+                val source = unpackMember(tree, game, folder, archive, AtomicBoolean(false))
+                DiskArchive.open(context, source, archive, -1).use { inner ->
+                    val files = inner.members.associateBy { X86Iso.File(DiskArchive.safeName(it.name), it.size) }
+                    docs.writeWhole(tree, folder, iso) { output ->
+                        X86Iso.write(archive.substringBeforeLast('.'), files.keys.toList(), output) { file -> inner.open(files.getValue(file)) }
+                    }
+                }
+            }
+            all += iso
+            ExoWin9x.Mount(mount.drive, listOf(iso), cdrom = true, folder = false)
+        }
+        return made to all
     }
 
     /** The game's own file [name] in its machine folder [folder], unpacked from its ZIP when it is not there yet. */
