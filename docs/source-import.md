@@ -46,6 +46,7 @@
 - **`kairox86-gpu-v6355` group:** the Yamaha V6355D's display on the scanout queue (KairoX86#247); lines its mouse pointer crosses, and composite output, stay on the CPU.
 - **`kairox86-gpu-svga-touch` group:** an SVGA line drawn again in a frame draws its queued GPU drawing first (`svga_do_render`), and the borders drawn over a line's ends after it (`scrollcache`) are cut out of the queued line (`kairo_gpu_scan_cut`).
 - **`kairox86-gpu-pgc` group:** the IBM PGC's display and the ImageManager 1024's on the scanout queue (KairoX86#261, #268): native lines at 8 bits a pixel through the card's palette (the horizontal wrap applied as read), the CGA emulation's lines as text cells and 2 and 1-bit pixels.
+- **`kairox86-voodoo-changed-pages` group:** on a Voodoo Banshee or Voodoo3, every 3D colour write (triangle spans, fast fills, LFB writes) marks the desktop's pages it lands on changed (`voodoo_mark_changed`), so the 2D display redraws them (KairoX86#287).
 
 ## 86Box's translations
 

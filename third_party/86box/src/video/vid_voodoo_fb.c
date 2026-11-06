@@ -563,6 +563,9 @@ voodoo_fb_writew(uint32_t addr, uint16_t val, void *priv)
 
     if (voodoo->fb_write_offset == voodoo->params.front_offset && y < 2048)
         voodoo->dirty_line[y] = 1;
+    /* KairoX86#287: the pixels' pages on the desktop */
+    voodoo_mark_changed(voodoo, voodoo->fb_write_offset + (voodoo->col_tiled ? ((y & 31) * 128 + (y >> 5) * voodoo->row_width) : (y * voodoo->row_width)),
+                        voodoo->col_tiled, x >> 1, (x >> 1) + 1 - 1);
 
     if (voodoo->col_tiled)
         write_addr = voodoo->fb_write_offset + (x & 127) + (x >> 7) * 128 * 32 + (y & 31) * 128 + (y >> 5) * voodoo->row_width;
@@ -781,6 +784,9 @@ voodoo_fb_writel(uint32_t addr, uint32_t val, void *priv)
 
     if (voodoo->fb_write_offset == voodoo->params.front_offset && y < 2048)
         voodoo->dirty_line[y] = 1;
+    /* KairoX86#287: the pixels' pages on the desktop */
+    voodoo_mark_changed(voodoo, voodoo->fb_write_offset + (voodoo->col_tiled ? ((y & 31) * 128 + (y >> 5) * voodoo->row_width) : (y * voodoo->row_width)),
+                        voodoo->col_tiled, x >> 1, (x >> 1) + count - 1);
 
     if (voodoo->col_tiled)
         write_addr = voodoo->fb_write_offset + (x & 127) + (x >> 7) * 128 * 32 + (y & 31) * 128 + (y >> 5) * voodoo->row_width;

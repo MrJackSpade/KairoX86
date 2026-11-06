@@ -275,6 +275,9 @@ void voodoo_render_thread_2(void *param);
 void voodoo_render_thread_3(void *param);
 void voodoo_render_thread_4(void *param);
 void voodoo_queue_triangle(voodoo_t *voodoo, voodoo_params_t *params);
+/* KairoX86#287: marks the desktop's pages under pixels x0 to x1 of a 16-bit colour row (at byte offset row,
+   tiled or not) changed, on the cards whose display redraws by page (changedvram set) */
+void voodoo_mark_changed(voodoo_t *voodoo, uint32_t row, int tiled, int x0, int x1);
 
 extern int voodoo_recomp;
 extern int tris;

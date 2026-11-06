@@ -3015,6 +3015,34 @@ KAIROX86_GPU_PGC = [
      '            /* Rows outside the framebuffer are blank; columns wrap. */\n            y = dev->scan_top + dev->displine;\n            if (kairo_gpu_on) {\n                pgc_render_gpu(dev); /* KairoX86#268 */\n            } else for (uint32_t x = 0; x < dev->screenw; x++) {\n'),
 ]
 
+# KairoX86#287: on a Voodoo Banshee or Voodoo3 the 3D engine draws in the memory the 2D display shows, and
+# the display redraws only the pages marked changed: every 3D colour write (triangle spans, fast fills,
+# LFB writes) marks its pages, as the blitter's writes do. The Voodoo Graphics and Voodoo2 have no such
+# map (changedvram NULL).
+KAIROX86_VOODOO_CHANGED_PAGES = [
+    ('86box/src/include/86box/vid_voodoo_render.h',
+     'void voodoo_queue_triangle(voodoo_t *voodoo, voodoo_params_t *params);\n',
+     "void voodoo_queue_triangle(voodoo_t *voodoo, voodoo_params_t *params);\n/* KairoX86#287: marks the desktop's pages under pixels x0 to x1 of a 16-bit colour row (at byte offset row,\n   tiled or not) changed, on the cards whose display redraws by page (changedvram set) */\nvoid voodoo_mark_changed(voodoo_t *voodoo, uint32_t row, int tiled, int x0, int x1);\n"),
+    ('86box/src/video/vid_voodoo_render.c',
+     '\nvoid\nvoodoo_queue_triangle(voodoo_t *voodoo, voodoo_params_t *params)\n',
+     '\n/* KairoX86#287 */\nvoid\nvoodoo_mark_changed(voodoo_t *voodoo, uint32_t row, int tiled, int x0, int x1)\n{\n    if (voodoo->changedvram == NULL)\n        return;\n    if (x0 > x1) {\n        const int t = x0;\n        x0          = x1;\n        x1          = t;\n    }\n    if (tiled) {\n        /* 64 pixels across, 32 rows down: each tile column is one page */\n        for (int tile = x0 >> 6; tile <= (x1 >> 6); tile++)\n            voodoo->changedvram[((row + (uint32_t) tile * 4096) & voodoo->fb_mask) >> 12] = changeframecount;\n    } else {\n        const uint32_t last = row + (uint32_t) x1 * 2;\n        for (uint32_t addr = (row + (uint32_t) x0 * 2) & ~0xfffu; addr <= last; addr += 4096)\n            voodoo->changedvram[(addr & voodoo->fb_mask) >> 12] = changeframecount;\n    }\n}\n\nvoid\nvoodoo_queue_triangle(voodoo_t *voodoo, voodoo_params_t *params)\n'),
+    ('86box/src/video/vid_voodoo_render.c',
+     '        span_end_x         = x2;\n',
+     '        span_end_x         = x2;\n        const int span_start_x = x; /* KairoX86#287 */\n'),
+    ('86box/src/video/vid_voodoo_render.c',
+     '        if (voodoo->params.draw_offset == voodoo->params.front_offset && !SLI_ENABLED) {\n            if (real_y < 2048)\n                voodoo->dirty_line[real_y] = 1;\n        }\n',
+     "        if (voodoo->params.draw_offset == voodoo->params.front_offset && !SLI_ENABLED) {\n            if (real_y < 2048)\n                voodoo->dirty_line[real_y] = 1;\n        }\n        /* KairoX86#287: the span's pages on the desktop */\n        if (!SLI_ENABLED && (params->fbzMode & FBZ_RGB_WMASK))\n            voodoo_mark_changed(voodoo, params->draw_offset + (params->col_tiled ? ((real_y >> 5) * params->row_width + (real_y & 31) * 128) : (real_y * params->row_width)),\n                                params->col_tiled, span_start_x, span_end_x);\n"),
+    ('86box/src/video/vid_voodoo_blitter.c',
+     '                /* Mark line dirty for single buffer mode */\n                if (params->draw_offset == params->front_offset && y < 2048)\n                    voodoo->dirty_line[y] = 1;\n',
+     "                /* Mark line dirty for single buffer mode */\n                if (params->draw_offset == params->front_offset && y < 2048)\n                    voodoo->dirty_line[y] = 1;\n                /* KairoX86#287: the row's pages on the desktop */\n                if (params->clipRight > params->clipLeft)\n                    voodoo_mark_changed(voodoo, params->draw_offset + (voodoo->col_tiled ? ((y >> 5) * voodoo->row_width + (y & 31) * 128) : (y * voodoo->row_width)),\n                                        voodoo->col_tiled, params->clipLeft, params->clipRight - 1);\n"),
+    ('86box/src/video/vid_voodoo_fb.c',
+     '        x = lfb_addr & 0xffe;\n        y = (lfb_addr >> 12) & 0x3ff;\n    } else {\n        x = lfb_addr & 0x7fe;\n        y = (lfb_addr >> 11) & 0x3ff;\n    }\n\n    y = lfb_y_origin_flip(voodoo, y);\n    if (y < 0)\n        return;\n\n    if (SLI_ENABLED) {\n        if ((!(voodoo->initEnable & INITENABLE_SLI_MASTER_SLAVE) && (y & 1)) || ((voodoo->initEnable & INITENABLE_SLI_MASTER_SLAVE) && !(y & 1)))\n            return;\n        y >>= 1;\n    }\n\n    if (voodoo->fb_write_offset == voodoo->params.front_offset && y < 2048)\n        voodoo->dirty_line[y] = 1;\n',
+     "        x = lfb_addr & 0xffe;\n        y = (lfb_addr >> 12) & 0x3ff;\n    } else {\n        x = lfb_addr & 0x7fe;\n        y = (lfb_addr >> 11) & 0x3ff;\n    }\n\n    y = lfb_y_origin_flip(voodoo, y);\n    if (y < 0)\n        return;\n\n    if (SLI_ENABLED) {\n        if ((!(voodoo->initEnable & INITENABLE_SLI_MASTER_SLAVE) && (y & 1)) || ((voodoo->initEnable & INITENABLE_SLI_MASTER_SLAVE) && !(y & 1)))\n            return;\n        y >>= 1;\n    }\n\n    if (voodoo->fb_write_offset == voodoo->params.front_offset && y < 2048)\n        voodoo->dirty_line[y] = 1;\n    /* KairoX86#287: the pixels' pages on the desktop */\n    voodoo_mark_changed(voodoo, voodoo->fb_write_offset + (voodoo->col_tiled ? ((y & 31) * 128 + (y >> 5) * voodoo->row_width) : (y * voodoo->row_width)),\n                        voodoo->col_tiled, x >> 1, (x >> 1) + 1 - 1);\n"),
+    ('86box/src/video/vid_voodoo_fb.c',
+     '        x = addr & 0xffe;\n        y = (addr >> 12) & 0x3ff;\n    } else {\n        x = addr & 0x7fe;\n        y = (addr >> 11) & 0x3ff;\n    }\n\n    y = lfb_y_origin_flip(voodoo, y);\n    if (y < 0)\n        return;\n\n    if (SLI_ENABLED) {\n        if ((!(voodoo->initEnable & INITENABLE_SLI_MASTER_SLAVE) && (y & 1)) || ((voodoo->initEnable & INITENABLE_SLI_MASTER_SLAVE) && !(y & 1)))\n            return;\n        y >>= 1;\n    }\n\n    if (voodoo->fb_write_offset == voodoo->params.front_offset && y < 2048)\n        voodoo->dirty_line[y] = 1;\n',
+     "        x = addr & 0xffe;\n        y = (addr >> 12) & 0x3ff;\n    } else {\n        x = addr & 0x7fe;\n        y = (addr >> 11) & 0x3ff;\n    }\n\n    y = lfb_y_origin_flip(voodoo, y);\n    if (y < 0)\n        return;\n\n    if (SLI_ENABLED) {\n        if ((!(voodoo->initEnable & INITENABLE_SLI_MASTER_SLAVE) && (y & 1)) || ((voodoo->initEnable & INITENABLE_SLI_MASTER_SLAVE) && !(y & 1)))\n            return;\n        y >>= 1;\n    }\n\n    if (voodoo->fb_write_offset == voodoo->params.front_offset && y < 2048)\n        voodoo->dirty_line[y] = 1;\n    /* KairoX86#287: the pixels' pages on the desktop */\n    voodoo_mark_changed(voodoo, voodoo->fb_write_offset + (voodoo->col_tiled ? ((y & 31) * 128 + (y >> 5) * voodoo->row_width) : (y * voodoo->row_width)),\n                        voodoo->col_tiled, x >> 1, (x >> 1) + count - 1);\n"),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -3052,6 +3080,7 @@ PATCHES = {
     'kairox86-pci-dev0-card': KAIROX86_PCI_DEV0_CARD,
     'kairox86-gpu-scanout': KAIROX86_GPU_SCANOUT,
     'kairox86-gpu-svga-touch': KAIROX86_GPU_SVGA_TOUCH,
+    'kairox86-voodoo-changed-pages': KAIROX86_VOODOO_CHANGED_PAGES,
     'kairox86-gpu-cga': KAIROX86_GPU_CGA,
     'kairox86-whole-frames': KAIROX86_WHOLE_FRAMES,
     'kairox86-gpu-mda': KAIROX86_GPU_MDA,

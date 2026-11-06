@@ -497,6 +497,10 @@ voodoo_fastfill(voodoo_t *voodoo, voodoo_params_t *params)
                 /* Mark line dirty for single buffer mode */
                 if (params->draw_offset == params->front_offset && y < 2048)
                     voodoo->dirty_line[y] = 1;
+                /* KairoX86#287: the row's pages on the desktop */
+                if (params->clipRight > params->clipLeft)
+                    voodoo_mark_changed(voodoo, params->draw_offset + (voodoo->col_tiled ? ((y >> 5) * voodoo->row_width + (y & 31) * 128) : (y * voodoo->row_width)),
+                                        voodoo->col_tiled, params->clipLeft, params->clipRight - 1);
             }
         }
     }

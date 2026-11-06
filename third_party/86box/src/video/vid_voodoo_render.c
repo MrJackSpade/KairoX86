@@ -1101,6 +1101,7 @@ voodoo_half_triangle(voodoo_t *voodoo, voodoo_params_t *params, voodoo_state_t *
         state->pixel_count = 0;
         state->texel_count = 0;
         span_end_x         = x2;
+        const int span_start_x = x; /* KairoX86#287 */
 
         /*Draw the span in parts, perspective-corrected textures get a base LOD for every part, see voodoo_update_span_part_lod().
           The recompiled code reads state->x, state->x2 and state->tmu[].lod on every call, so it draws one part per call.*/
@@ -1582,6 +1583,10 @@ skip_pixel:
             if (real_y < 2048)
                 voodoo->dirty_line[real_y] = 1;
         }
+        /* KairoX86#287: the span's pages on the desktop */
+        if (!SLI_ENABLED && (params->fbzMode & FBZ_RGB_WMASK))
+            voodoo_mark_changed(voodoo, params->draw_offset + (params->col_tiled ? ((real_y >> 5) * params->row_width + (real_y & 31) * 128) : (real_y * params->row_width)),
+                                params->col_tiled, span_start_x, span_end_x);
 
 next_line:
         if (SLI_ENABLED) {
@@ -1813,6 +1818,28 @@ void
 voodoo_render_thread_4(void *param)
 {
     render_thread(param, 3);
+}
+
+/* KairoX86#287 */
+void
+voodoo_mark_changed(voodoo_t *voodoo, uint32_t row, int tiled, int x0, int x1)
+{
+    if (voodoo->changedvram == NULL)
+        return;
+    if (x0 > x1) {
+        const int t = x0;
+        x0          = x1;
+        x1          = t;
+    }
+    if (tiled) {
+        /* 64 pixels across, 32 rows down: each tile column is one page */
+        for (int tile = x0 >> 6; tile <= (x1 >> 6); tile++)
+            voodoo->changedvram[((row + (uint32_t) tile * 4096) & voodoo->fb_mask) >> 12] = changeframecount;
+    } else {
+        const uint32_t last = row + (uint32_t) x1 * 2;
+        for (uint32_t addr = (row + (uint32_t) x0 * 2) & ~0xfffu; addr <= last; addr += 4096)
+            voodoo->changedvram[(addr & voodoo->fb_mask) >> 12] = changeframecount;
+    }
 }
 
 void
