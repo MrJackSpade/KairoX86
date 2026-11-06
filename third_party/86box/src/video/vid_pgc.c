@@ -89,6 +89,8 @@
 #include <86box/video.h>
 #include <86box/vid_cga.h>
 #include <86box/vid_pgc.h>
+#include <stdbool.h>
+#include <86box/kairo_gpu.h> /* KairoX86#268 */
 
 #define PGC_CGA_WIDTH  640
 #define PGC_CGA_HEIGHT 400
@@ -3132,6 +3134,100 @@ pgc_cga_gfx80(pgc_t *dev)
     }
 }
 
+/* KairoX86#268: a CGA emulation line (pgc_cga_poll's mode, read as pgc_cga_text, _gfx40 or _gfx80 reads
+   it) to the GPU's scanout queue, coloured as video_process_8 colours it; returns whether the GPU draws it */
+static bool
+pgc_cga_render_gpu(pgc_t *dev)
+{
+    if (!kairo_gpu_on)
+        return false;
+    bitmap_t       *bitmap  = buffer32;
+    const uint32_t  out     = (uint32_t) (bitmap->line[dev->displine] - bitmap->dat);
+    const uint32_t *palette = pal_lookup;
+    uint16_t        memaddr = (dev->mapram[0x3ed] | (dev->mapram[0x3ec] << 8)) & 0x3fff;
+    if (dev->mapram[0x03d8] & 0x02) {
+        const bool hires = (dev->mapram[0x03d8] & 0x12) == 0x12;
+        uint32_t   colours[4];
+        if (hires) {
+            colours[0] = palette[16];
+            colours[1] = palette[(dev->mapram[0x3d9] & 15) + 16];
+        } else {
+            const int col = ((dev->mapram[0x3d9] & 16) ? 8 : 0) + 16;
+            colours[0]    = palette[(dev->mapram[0x3d9] & 15) + 16];
+            if (dev->mapram[0x3d9] & 32) {
+                colours[1] = palette[col | 3];
+                colours[2] = palette[col | 5];
+                colours[3] = palette[col | 7];
+            } else if (dev->mapram[0x3d8] & 4) {
+                colours[1] = palette[col | 3];
+                colours[2] = palette[col | 4];
+                colours[3] = palette[col | 7];
+            } else {
+                colours[1] = palette[col | 2];
+                colours[2] = palette[col | 4];
+                colours[3] = palette[col | 6];
+            }
+        }
+        uint8_t *bytes = (uint8_t *) kairo_gpu_scan(bitmap, bitmap->kairo_gpu, out, KAIRO_SCAN_BITS, 640, 20, colours,
+                                                    hires ? 2 : 4, hires ? 1 : 2, 0, hires ? 0 : KAIRO_SCAN_WIDE);
+        for (uint8_t x = 0; x < 40; x++) {
+            const uint8_t *addr = &dev->cga_vram[(memaddr + 2 * x + 80 * (dev->displine >> 2) + 0x2000 * ((dev->displine >> 1) & 1)) & 0x3fff];
+            bytes[x * 2]        = addr[0];
+            bytes[x * 2 + 1]    = addr[1];
+            dev->memaddr++;
+        }
+        kairo_gpu_scan_commit();
+        return true;
+    }
+    const int      w          = (dev->mapram[0x03d8] & 0x01) ? 80 : 40;
+    const int      pitch      = (dev->mapram[0x3e9] + 1) * 2;
+    const uint16_t scanline   = (dev->displine & 0x0f) % pitch;
+    const uint16_t cursoraddr = (dev->mapram[0x3ef] | (dev->mapram[0x3ee] << 8)) & 0x3fff;
+    const uint8_t *addr       = &dev->cga_vram[((memaddr + ((dev->displine / pitch) * w)) * 2) & 0x3ffe];
+    memaddr += (dev->displine / pitch) * w;
+    uint32_t *cells = kairo_gpu_scan(bitmap, bitmap->kairo_gpu, out, KAIRO_SCAN_TEXT, (uint32_t) w * ((w == 80) ? 8 : 16), (uint32_t) w,
+                                     palette, 256, 8, 0, (w == 80) ? 0 : KAIRO_SCAN_WIDE);
+    for (int x = 0; x < w; x++) {
+        const uint8_t chr  = *addr++;
+        const uint8_t attr = *addr++;
+        int           drawcursor;
+        if (memaddr == cursoraddr && (dev->cgablink & 8) && (dev->mapram[0x3ea] & 0x60) != 0x20)
+            drawcursor = ((dev->mapram[0x3ea] & 0x1f) <= (scanline >> 1)) && ((dev->mapram[0x3eb] & 0x1f) >= (scanline >> 1));
+        else
+            drawcursor = 0;
+        uint32_t fg = (attr & 15) + 16;
+        uint32_t bg;
+        if (dev->mapram[0x3d8] & 0x20) {
+            bg = ((attr >> 4) & 7) + 16;
+            if ((dev->cgablink & 8) && (attr & 0x80) && !drawcursor)
+                fg = bg;
+        } else
+            bg = (attr >> 4) + 16;
+        if (drawcursor) {
+            fg ^= 0x0f;
+            bg ^= 0x0f;
+        }
+        cells[x] = fontdatm[chr + dev->fontbase][scanline] | (fg << 8) | (bg << 16);
+        memaddr++;
+    }
+    kairo_gpu_scan_commit();
+    return true;
+}
+
+/* KairoX86#268: a native line (pgc_poll's, read as it reads it) to the GPU's scanout queue through the
+   card's palette */
+static void
+pgc_render_gpu(pgc_t *dev)
+{
+    bitmap_t     *bitmap = buffer32;
+    const int32_t y      = dev->scan_top + dev->displine;
+    uint8_t      *bytes  = (uint8_t *) kairo_gpu_scan(bitmap, bitmap->kairo_gpu, (uint32_t) (bitmap->line[dev->displine] - bitmap->dat),
+                                                      KAIRO_SCAN_8, dev->screenw, (dev->screenw + 3) / 4, dev->palette, 256, 0xff, 0, 0);
+    for (uint32_t x = 0; x < dev->screenw; x++)
+        bytes[x] = (y >= 0 && y < (int32_t) dev->maxh) ? dev->vram[y * dev->maxw + ((uint32_t) dev->scan_left + x) % dev->maxw] : 0;
+    kairo_gpu_scan_commit();
+}
+
 /* Draw the screen in CGA mode. */
 void
 pgc_cga_poll(pgc_t *dev)
@@ -3147,7 +3243,9 @@ pgc_cga_poll(pgc_t *dev)
             if (dev->displine == 0)
                 video_wait_for_buffer();
 
-            if ((dev->mapram[0x03d8] & 0x12) == 0x12)
+            if (pgc_cga_render_gpu(dev)) {
+                /* KairoX86#268: the GPU draws the line */
+            } else if ((dev->mapram[0x03d8] & 0x12) == 0x12)
                 pgc_cga_gfx80(dev);
             else if (dev->mapram[0x03d8] & 0x02)
                 pgc_cga_gfx40(dev);
@@ -3235,7 +3333,9 @@ pgc_poll(void *priv)
 
             /* Rows outside the framebuffer are blank; columns wrap. */
             y = dev->scan_top + dev->displine;
-            for (uint32_t x = 0; x < dev->screenw; x++) {
+            if (kairo_gpu_on) {
+                pgc_render_gpu(dev); /* KairoX86#268 */
+            } else for (uint32_t x = 0; x < dev->screenw; x++) {
                 if (y >= 0 && y < (int32_t) dev->maxh)
                     buffer32->line[dev->displine][x] = dev->palette[dev->vram[y * dev->maxw + ((uint32_t) dev->scan_left + x) % dev->maxw]];
                 else

@@ -99,6 +99,17 @@ enum {
        dot's value takes plane p's bit from F where that plane's dot is set, else from B; a: the cell's
        width; palette: the colour of each value (16) */
     KAIRO_SCAN_TEXT4,
+    /* 24 bits a pixel, 3 bytes each over the bytes in order (byte k at bits 8(k % 4) of dword k / 4), with
+       the RAMDAC's LUT through the palette when it has one, as KAIRO_SCAN_32 */
+    KAIRO_SCAN_24,
+    /* svga_render_indexed_gfx's character clocks, a dword each: eight 4-bit pixels taken in the order a
+       gives (svga's shift_values: each pixel's shift in 3 bits, masked 0x1c), each a palette colour (16) */
+    KAIRO_SCAN_NIBBLES,
+    /* The same clocks combined into four 8-bit pixels, each pair of nibbles one (palette: 256) */
+    KAIRO_SCAN_NIBBLES8,
+    /* 15 bits a pixel, 2 a dword, each through the palette (its low byte) when its top bit is set, else
+       through 86Box's 15-bit table (svga_render_15bpp_mix_*) */
+    KAIRO_SCAN_15MIX,
 };
 
 /* Each pixel drawn twice across */

@@ -34,6 +34,10 @@ const uint SCAN_TEXT = 5u;
 const uint SCAN_BITS = 6u;
 const uint SCAN_PLANES = 7u;
 const uint SCAN_TEXT4 = 8u;
+const uint SCAN_24 = 9u;
+const uint SCAN_NIBBLES = 10u;
+const uint SCAN_NIBBLES8 = 11u;
+const uint SCAN_15MIX = 12u;
 const uint SCAN_WIDE = 1u;
 const uint SCAN_WIDE4 = 2u;
 
@@ -66,18 +70,38 @@ void main() {
         if (kind == SCAN_8) {
             const uint word = words[src + (s >> 2)];
             v = colour(palette, (word >> (8u * (s & 3u))) & a);
-        } else if (kind == SCAN_15 || kind == SCAN_16) {
+        } else if (kind == SCAN_15 || kind == SCAN_16 || kind == SCAN_15MIX) {
             const uint word = words[src + (s >> 1)];
             const uint c = (s & 1u) != 0u ? (word >> 16) : (word & 0xffffu);
-            v = kind == SCAN_15 ? table15[c] : table16[c];
-        } else if (kind == SCAN_32) {
-            v = words[src + s] & 0xffffffu;
+            if (kind == SCAN_15MIX && (c & 0x8000u) != 0u)
+                v = colour(palette, c & 0xffu);
+            else
+                v = kind == SCAN_16 ? table16[c] : table15[c];
+        } else if (kind == SCAN_32 || kind == SCAN_24) {
+            if (kind == SCAN_32)
+                v = words[src + s] & 0xffffffu;
+            else {
+                const uint k = 3u * s;
+                v = 0u;
+                for (uint b = 0u; b < 3u; b++)
+                    v |= ((words[src + ((k + b) >> 2)] >> (8u * ((k + b) & 3u))) & 0xffu) << (8u * b);
+            }
             if (palette != 0u) {
                 const uint r = (colour(palette, (v >> 16) & 0xffu) >> 16) & 0xffu;
                 const uint g = (colour(palette, (v >> 8) & 0xffu) >> 8) & 0xffu;
                 const uint b = colour(palette, v & 0xffu) & 0xffu;
                 v = b | (g << 8) | (r << 16) | 0xff000000u;
             }
+        } else if (kind == SCAN_NIBBLES) {
+            const uint word = words[src + (s >> 3)];
+            const uint shift = (a >> (3u * (s & 7u))) & 0x1cu;
+            v = colour(palette, (word >> shift) & 0xfu);
+        } else if (kind == SCAN_NIBBLES8) {
+            const uint word = words[src + (s >> 2)];
+            const uint pair = s & 3u;
+            const uint c0 = (word >> ((a >> (6u * pair)) & 0x1cu)) & 0xfu;
+            const uint c1 = (word >> ((a >> (6u * pair + 3u)) & 0x1cu)) & 0xfu;
+            v = colour(palette, (c0 << 4) | c1);
         } else if (kind == SCAN_BITS) {
             // a bits a pixel, most significant first, over the bytes in scan order
             const uint bit = s * a;
