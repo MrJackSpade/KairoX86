@@ -46,6 +46,31 @@ typedef struct kairo_gpu_buffer {
 kairo_gpu_buffer_t *kairo_gpu_buffer(size_t size);
 void                kairo_gpu_buffer_free(kairo_gpu_buffer_t *buffer);
 
+/* Card memory (video memory, a frame buffer, texture caches) where a card would calloc it with the GPU
+   on, so kernels work in it in place: zeroed, the CPU's for its whole life as any memory, freed with
+   kairo_gpu_free. kairo_gpu_buffer_of gives the buffer an allocation is (data where it starts). */
+void               *kairo_gpu_alloc(size_t size);
+void                kairo_gpu_free(void *data);
+kairo_gpu_buffer_t *kairo_gpu_buffer_of(const void *data);
+
+/* The 4 KB pages of card memory a recorded GPU batch draws on (core/kairo/gpu_pages.c): marked as work is
+   recorded, checked where the processor touches card memory, cleared once the batch is drawn. hit and
+   any are read without the batch's lock: a page marked as the processor touches it races just as the
+   card's own threads would. */
+typedef struct kairo_gpu_pages {
+    uint8_t *pending;
+    uint32_t count; /* pages */
+    uint32_t mask;  /* the memory's address mask */
+    int      any;   /* a page is marked (atomic) */
+} kairo_gpu_pages_t;
+
+void kairo_gpu_pages_init(kairo_gpu_pages_t *pages, uint32_t mask);
+void kairo_gpu_pages_free(kairo_gpu_pages_t *pages);
+void kairo_gpu_pages_mark(kairo_gpu_pages_t *pages, uint32_t addr, uint32_t len);
+bool kairo_gpu_pages_hit(const kairo_gpu_pages_t *pages, uint32_t addr, uint32_t len);
+bool kairo_gpu_pages_any(const kairo_gpu_pages_t *pages);
+void kairo_gpu_pages_clear(kairo_gpu_pages_t *pages);
+
 typedef struct kairo_gpu_kernel kairo_gpu_kernel_t;
 
 /* A compute kernel: its SPIR-V (words, its size in bytes), the storage buffers it binds (bindings 0 to

@@ -1881,7 +1881,8 @@ svga_init(const device_t *info, svga_t *svga, void *priv, int memsize,
     svga->dispontime        = 1000ULL << 32;
     svga->dispofftime       = 1000ULL << 32;
     svga->bpp               = 8;
-    svga->vram              = calloc(memsize + 4096, 1);
+    /* KairoX86#278: with the GPU on, memory it shares */
+    svga->vram              = kairo_gpu_on ? kairo_gpu_alloc(memsize + 4096) : calloc(memsize + 4096, 1);
     svga->vram_max          = memsize;
     svga->vram_display_mask = svga->vram_mask = memsize - 1;
     svga->decode_mask                         = 0x7fffff;
@@ -1959,7 +1960,10 @@ svga_close(svga_t *svga)
 {
     svga_render_drain();
     free(svga->changedvram);
-    free(svga->vram);
+    if (kairo_gpu_on) /* KairoX86#278 */
+        kairo_gpu_free(svga->vram);
+    else
+        free(svga->vram);
 
     if ((svga->monitor != NULL) && (svga->monitor->mon_dpms))
         svga->monitor->mon_dpms = 0;
@@ -2004,10 +2008,24 @@ svga_decode_addr(svga_t *svga, uint32_t addr, int write)
     return addr;
 }
 
+/* KairoX86#272: the card's GPU work drawn first where the processor reads or writes video memory: the
+   bytes when the access is plain linear (a frame-buffer-only card, no address translation), else all of it */
+static inline void
+svga_kairo_touch(svga_t *svga, uint32_t addr, uint8_t linear, uint32_t len)
+{
+    if (svga->kairo_touch == NULL)
+        return;
+    if (linear && svga->fb_only && (svga->translate_address == NULL))
+        svga->kairo_touch(svga, addr & svga->decode_mask, len);
+    else
+        svga->kairo_touch(svga, 0, svga->vram_max);
+}
+
 static __inline void
 svga_write_common(uint32_t addr, uint8_t val, uint8_t linear, void *priv)
 {
     svga_t *svga       = (svga_t *) priv;
+    svga_kairo_touch(svga, addr, linear, 1); /* KairoX86#272 */
     uint8_t writemask2 = svga->writemask;
     int     reset_wm   = 0;
     latch_t vall;
@@ -2238,6 +2256,7 @@ static __inline uint8_t
 svga_read_common(uint32_t addr, uint8_t linear, void *priv)
 {
     svga_t  *svga       = (svga_t *) priv;
+    svga_kairo_touch(svga, addr, linear, 1); /* KairoX86#272 */
     uint32_t latch_addr = 0;
     int      readplane  = svga->readplane;
     uint8_t  count;
@@ -2482,6 +2501,7 @@ void
 svga_writew_common(uint32_t addr, uint16_t val, uint8_t linear, void *priv)
 {
     svga_t *svga = (svga_t *) priv;
+    svga_kairo_touch(svga, addr, linear, 2); /* KairoX86#272 */
 
         /* A word/dword access crosses the bus once even when planar or latched
            modes split it into byte operations inside the card (a 32-bit write
@@ -2544,6 +2564,7 @@ void
 svga_writel_common(uint32_t addr, uint32_t val, uint8_t linear, void *priv)
 {
     svga_t *svga = (svga_t *) priv;
+    svga_kairo_touch(svga, addr, linear, 4); /* KairoX86#272 */
 
         /* A word/dword access crosses the bus once even when planar or latched
            modes split it into byte operations inside the card (a 32-bit write
@@ -2636,6 +2657,7 @@ uint16_t
 svga_readw_common(uint32_t addr, uint8_t linear, void *priv)
 {
     svga_t *svga = (svga_t *) priv;
+    svga_kairo_touch(svga, addr, linear, 2); /* KairoX86#272 */
 
         /* A word/dword access crosses the bus once even when planar or latched
            modes split it into byte operations inside the card (a 32-bit write
@@ -2692,6 +2714,7 @@ uint32_t
 svga_readl_common(uint32_t addr, uint8_t linear, void *priv)
 {
     svga_t *svga = (svga_t *) priv;
+    svga_kairo_touch(svga, addr, linear, 4); /* KairoX86#272 */
 
         /* A word/dword access crosses the bus once even when planar or latched
            modes split it into byte operations inside the card (a 32-bit write

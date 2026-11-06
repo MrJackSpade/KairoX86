@@ -1,6 +1,8 @@
 #ifndef VIDEO_VOODOO_RENDER_H
 #define VIDEO_VOODOO_RENDER_H
 
+#include <86box/kairo_gpu_voodoo.h> /* KairoX86#278 */
+
 #if !(defined __amd64__ || defined _M_X64 || defined __aarch64__ || defined _M_ARM64)
 #    define NO_CODEGEN
 #endif
@@ -17,37 +19,37 @@ void voodoo_codegen_close(voodoo_t *voodoo);
                 voodoo->fbiZFuncFail++;           \
                 goto skip_pixel;                  \
             case DEPTHOP_LESSTHAN:                \
-                if (!(comp_depth < old_depth)) {  \
+                if (!((comp_depth) < old_depth)) {  \
                     voodoo->fbiZFuncFail++;       \
                     goto skip_pixel;              \
                 }                                 \
                 break;                            \
             case DEPTHOP_EQUAL:                   \
-                if (!(comp_depth == old_depth)) { \
+                if (!((comp_depth) == old_depth)) { \
                     voodoo->fbiZFuncFail++;       \
                     goto skip_pixel;              \
                 }                                 \
                 break;                            \
             case DEPTHOP_LESSTHANEQUAL:           \
-                if (!(comp_depth <= old_depth)) { \
+                if (!((comp_depth) <= old_depth)) { \
                     voodoo->fbiZFuncFail++;       \
                     goto skip_pixel;              \
                 }                                 \
                 break;                            \
             case DEPTHOP_GREATERTHAN:             \
-                if (!(comp_depth > old_depth)) {  \
+                if (!((comp_depth) > old_depth)) {  \
                     voodoo->fbiZFuncFail++;       \
                     goto skip_pixel;              \
                 }                                 \
                 break;                            \
             case DEPTHOP_NOTEQUAL:                \
-                if (!(comp_depth != old_depth)) { \
+                if (!((comp_depth) != old_depth)) { \
                     voodoo->fbiZFuncFail++;       \
                     goto skip_pixel;              \
                 }                                 \
                 break;                            \
             case DEPTHOP_GREATERTHANEQUAL:        \
-                if (!(comp_depth >= old_depth)) { \
+                if (!((comp_depth) >= old_depth)) { \
                     voodoo->fbiZFuncFail++;       \
                     goto skip_pixel;              \
                 }                                 \
@@ -275,6 +277,8 @@ void voodoo_render_thread_2(void *param);
 void voodoo_render_thread_3(void *param);
 void voodoo_render_thread_4(void *param);
 void voodoo_queue_triangle(voodoo_t *voodoo, voodoo_params_t *params);
+/* KairoX86#288: the pixels a triangle draws on this card (its spans after clipping) */
+uint32_t voodoo_triangle_pixels(voodoo_t *voodoo, const voodoo_params_t *params);
 /* KairoX86#287: marks the desktop's pages under pixels x0 to x1 of a 16-bit colour row (at byte offset row,
    tiled or not) changed, on the cards whose display redraws by page (changedvram set) */
 void voodoo_mark_changed(voodoo_t *voodoo, uint32_t row, int tiled, int x0, int x1);
@@ -297,6 +301,11 @@ voodoo_wake_render_thread(voodoo_t *voodoo)
 static __inline void
 voodoo_wait_for_render_thread_idle(voodoo_t *voodoo)
 {
+    /* KairoX86#278: on the GPU, the recorded triangles drawn */
+    if (voodoo->k_gpu != NULL) {
+        kairo_voodoo_gpu_drain(voodoo);
+        return;
+    }
     while (!PARAM_EMPTY(0) || (voodoo->render_threads >= 2 && !PARAM_EMPTY(1)) || (voodoo->render_threads == 4 && (!PARAM_EMPTY(2) || !PARAM_EMPTY(3))) || RENDER_VOODOO_BUSY(voodoo, 0) || (voodoo->render_threads >= 2 && RENDER_VOODOO_BUSY(voodoo, 1)) || (voodoo->render_threads == 4 && (RENDER_VOODOO_BUSY(voodoo, 2) || RENDER_VOODOO_BUSY(voodoo, 3)))) {
         voodoo_wake_render_thread(voodoo);
         if (!PARAM_EMPTY(0) || RENDER_VOODOO_BUSY(voodoo, 0))

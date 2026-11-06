@@ -3,8 +3,10 @@
  * vendor 121Ah), VESA mode 640 x 480 x 16 set, the 3D engine pointed at the displayed buffer (a depth
  * buffer after it), and a fixed sequence drawn through the 3D registers: a fast fill; Gouraud
  * triangles; overlapping triangles depth tested against iterated Z; alpha blended ones; each set
- * dithered and not. The engine is waited for after each set, and each picture held four ticks of the BIOS
- * clock. Any other card returns at once.
+ * dithered and not, each picture held four ticks of the BIOS clock. The engine's busy bit is never read:
+ * how long 86Box takes to draw follows the host's render threads, so the guest would run by it; the
+ * display shows every triangle sent before a line as drawn (KairoX86#222), whatever draws them. Any
+ * other card returns at once.
  *
  * Copyright 2026 MrJackSpade. GPL-2.0-or-later.
  */
@@ -40,17 +42,6 @@ static volatile u32 *regs;
 
 static void reg(u32 offset, u32 value) {
     regs[offset / 4] = value;
-}
-
-/* Waits until the engine has drawn everything sent (status bit 9: busy) */
-static void idle(void) {
-    reg(NOP_CMD, 0);
-    for (int stable = 0; stable < 3;) {
-        if (regs[STATUS / 4] & (1u << 9))
-            stable = 0;
-        else
-            stable++;
-    }
 }
 
 typedef struct {
@@ -144,7 +135,6 @@ void test_main(void) {
         reg(ZA_COLOR, 0xffff);
         reg(FBZ_MODE, FBZ_CLIP | FBZ_RGB_WRITE | FBZ_AUX_WRITE | d);
         reg(FASTFILL_CMD, 0);
-        idle();
         wait_ticks(4);
 
         /* Gouraud: iterated colour straight through the colour combine unit */
@@ -152,13 +142,11 @@ void test_main(void) {
         reg(ALPHA_MODE, 0);
         reg(FBZ_MODE, FBZ_CLIP | FBZ_RGB_WRITE | d);
         triangles(0x31 + (u32) dither, 24);
-        idle();
         wait_ticks(4);
 
         /* Depth: iterated Z tested less-than and written */
         reg(FBZ_MODE, FBZ_CLIP | FBZ_RGB_WRITE | FBZ_AUX_WRITE | FBZ_DEPTH | FBZ_DEPTH_LESS | d);
         triangles(0x47 + (u32) dither, 24);
-        idle();
         wait_ticks(4);
 
         /* Alpha blending: source alpha over the destination (alphaMode: blend on, src factor 1 = source
@@ -166,7 +154,6 @@ void test_main(void) {
         reg(ALPHA_MODE, (1u << 4) | (1u << 8) | (5u << 12));
         reg(FBZ_MODE, FBZ_CLIP | FBZ_RGB_WRITE | d);
         triangles(0x59 + (u32) dither, 24);
-        idle();
         wait_ticks(4);
     }
     reg(ALPHA_MODE, 0);

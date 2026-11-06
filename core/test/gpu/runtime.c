@@ -105,3 +105,34 @@ void wait_frames(u16 status_port, int n) {
     }
 }
 
+
+int vbe_modes(void) {
+    VBE_INFO->signature[0] = 'V';
+    VBE_INFO->signature[1] = 'B';
+    VBE_INFO->signature[2] = 'E';
+    VBE_INFO->signature[3] = '2';
+    if (int10(0x4f00, 0, 0, 0, 0x6000, 0) != 0x004f)
+        return -1;
+    const u16 *list = (const u16 *) (((VBE_INFO->modes >> 16) << 4) + (VBE_INFO->modes & 0xffff));
+    int count = 0;
+    while (count < 255 && list[count] != 0xffff) {
+        VBE_MODES[count] = list[count];
+        count++;
+    }
+    return count;
+}
+
+u16 vbe_find(u16 width, u16 height, u8 bpp) {
+    const int count = vbe_modes();
+    for (int i = 0; i < count; i++) {
+        const u16 mode = VBE_MODES[i];
+        if (int10(0x4f01, 0, mode, 0, 0x6200, 0) != 0x004f)
+            continue;
+        const struct vbe_mode_info *m = VBE_MODE;
+        if (((m->attributes & 0x81) != 0x81) || !m->framebuffer || (m->width != width) || (m->height != height))
+            continue;
+        if ((m->bpp == bpp) || ((bpp == 15) && (m->bpp == 16) && (m->green_size == 5)))
+            return mode;
+    }
+    return 0;
+}

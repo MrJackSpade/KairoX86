@@ -40,6 +40,8 @@
 #include <86box/vid_xga.h>
 #include <86box/vid_svga.h>
 #include <86box/vid_svga_render.h>
+#include <86box/kairo_gpu.h>       /* KairoX86#272 */
+#include <86box/kairo_gpu_virge.h>
 
 #ifdef MIN
     #undef MIN
@@ -304,6 +306,8 @@ typedef struct virge_t {
     ATOMIC_INT s3d_write_idx;
     ATOMIC_INT s3d_barrier_release_idx;
     ATOMIC_INT s3d_busy[S3D_RENDER_THREADS_MAX];
+    /* KairoX86#272: its triangles' GPU state (kairo_gpu_virge.h), NULL in software */
+    void *k_gpu;
 
     struct {
         uint32_t pri_ctrl;
@@ -1348,6 +1352,53 @@ s3_virge_wait_fifo_idle(virge_t *virge)
         wake_fifo_thread(virge);
         thread_wait_event(virge->fifo_not_full_event, 1);
     }
+}
+
+/* KairoX86#293: waits until the 3D engine has drawn every triangle queued to it */
+static void
+s3_virge_wait_3d_idle(virge_t *virge)
+{
+    /* KairoX86#272: on the GPU, the recorded triangles drawn */
+    if (virge->k_gpu != NULL) {
+        kairo_virge_gpu_drain(virge->k_gpu);
+        return;
+    }
+    while (s3d_engine_busy(virge)) {
+        thread_reset_event(virge->not_full_event);
+        wake_render_threads(virge);
+        if (s3d_engine_busy(virge))
+            thread_wait_event(virge->not_full_event, 1);
+    }
+}
+
+/* KairoX86#293: each line drawn with every write the guest queued before it applied */
+static void
+s3_virge_render_sync(svga_t *svga)
+{
+    virge_t *virge = (virge_t *) svga->priv;
+
+    s3_virge_wait_fifo_idle(virge);
+    /* KairoX86#272: on the GPU, what the line shows drawn (all of video memory when an overlay reads it
+       from elsewhere too) */
+    if (virge->k_gpu != NULL) {
+        if (svga->overlay_on)
+            kairo_virge_gpu_touch(virge->k_gpu, 0, virge->vram_mask + 1);
+        else
+            kairo_virge_gpu_touch(virge->k_gpu,
+                                  (svga->force_old_addr ? svga->memaddr : svga->remap_func(svga, svga->memaddr)) & svga->vram_display_mask,
+                                  (uint32_t) (svga->hdisp + svga->scrollcache + 64) * 4);
+        return;
+    }
+    s3_virge_wait_3d_idle(virge);
+}
+
+/* KairoX86#272: the processor's reads and writes of video memory (vid_svga.c's touch hook) */
+static void
+s3_virge_kairo_touch(svga_t *svga, uint32_t addr, uint32_t len)
+{
+    const virge_t *virge = (virge_t *) svga->priv;
+
+    kairo_virge_gpu_touch(virge->k_gpu, addr, len);
 }
 
 static uint8_t
@@ -3218,6 +3269,9 @@ s3_virge_mmio_write_l(uint32_t addr, uint32_t val, void *priv)
 static void
 s3_virge_bitblt(virge_t *virge, int count, uint32_t cpu_dat)
 {
+    /* KairoX86#272: the 2D engine works on memory the GPU may still draw on */
+    if (virge->k_gpu != NULL)
+        kairo_virge_gpu_drain(virge->k_gpu);
     uint8_t  *vram = virge->svga.vram;
     uint32_t  mono_pattern[64];
     int       count_mask;
@@ -4314,8 +4368,9 @@ tri(virge_t *virge, s3d_t *s3d_tri, s3d_state_t *state, int yc, int32_t dx1, int
             state->x1 += (dx1 * diff_y);
             state->x2 += (dx2 * diff_y);
             state->y -= diff_y;
-            dest_offset -= s3d_tri->dest_str;
-            z_offset -= s3d_tri->z_str;
+            /* KairoX86#292: the rows move with the lines skipped */
+            dest_offset -= s3d_tri->dest_str * diff_y;
+            z_offset -= s3d_tri->z_str * diff_y;
             y_count -= diff_y;
         }
         if ((state->y - y_count) < s3d_tri->clip_t)
@@ -5086,9 +5141,130 @@ static void (*const render_thread_entry[S3D_RENDER_THREADS_MAX])(void *) = {
     render_thread_0, render_thread_1, render_thread_2, render_thread_3
 };
 
+/* KairoX86#272: s3_virge_triangle's setup of a triangle as the GPU kernel's record (kairo_gpu_virge.h), and
+   the bytes its texture reads; 0 for a triangle s3_virge_triangle draws nothing of */
+static int
+s3_virge_gpu_record(const s3d_t *s3d_tri, uint32_t *r, uint32_t *tex_start, uint32_t *tex_len)
+{
+    const uint32_t cmd     = s3d_tri->cmd_set;
+    const int      command = (cmd >> 27) & 0xf;
+    const int      max_d   = (cmd >> 8) & 15;
+
+    switch (command) {
+        case 0:
+        case 2:
+        case 6:
+            break;
+        case 1:
+        case 5:
+            if (((cmd >> 15) & 3) == 3)
+                return 0;
+            break;
+        default:
+            return 0;
+    }
+    if ((command != 0) && (max_d > 9))
+        fatal("ViRGE on the GPU: texture level %d\n", max_d);
+    memset(r, 0, KV_WORDS * 4);
+    r[KV_CMD]       = cmd;
+    r[KV_CLIP_L]    = (uint32_t) s3d_tri->clip_l;
+    r[KV_CLIP_R]    = (uint32_t) s3d_tri->clip_r;
+    r[KV_CLIP_T]    = (uint32_t) s3d_tri->clip_t;
+    r[KV_CLIP_B]    = (uint32_t) s3d_tri->clip_b;
+    r[KV_DEST_BASE] = s3d_tri->dest_base;
+    r[KV_DEST_STR]  = s3d_tri->dest_str;
+    r[KV_Z_BASE]    = s3d_tri->z_base;
+    r[KV_Z_STR]     = s3d_tri->z_str;
+    uint32_t tex_base = s3d_tri->tex_base;
+    for (int c = 9; c >= 0; c--) {
+        r[KV_TEX_LEVEL + c] = tex_base;
+        if (c <= max_d)
+            tex_base += ((1 << (c * 2)) * tex_size[(cmd >> 5) & 7]) / 2;
+    }
+    *tex_start = s3d_tri->tex_base;
+    *tex_len   = (command != 0) ? (tex_base - s3d_tri->tex_base) : 0;
+    r[KV_TEX_BDR] = s3d_tri->tex_bdr_clr;
+    r[KV_TBU]     = s3d_tri->tbu << 11;
+    r[KV_TBV]     = s3d_tri->tbv << 11;
+    r[KV_FOG]     = s3d_tri->fog_b | (s3d_tri->fog_g << 8) | (s3d_tri->fog_r << 16);
+    r[KV_TYS]     = s3d_tri->tys;
+    r[KV_TY01]    = (uint32_t) s3d_tri->ty01;
+    r[KV_TY12]    = (uint32_t) s3d_tri->ty12;
+    r[KV_TLR]     = (uint32_t) s3d_tri->tlr;
+    r[KV_TXS]     = s3d_tri->txs;
+    r[KV_TXEND01] = s3d_tri->txend01;
+    r[KV_TXEND12] = s3d_tri->txend12;
+    r[KV_DX02]    = s3d_tri->TdXdY02;
+    r[KV_DX01]    = s3d_tri->TdXdY01;
+    r[KV_DX12]    = s3d_tri->TdXdY12;
+    const uint32_t start[9] = { s3d_tri->tus, s3d_tri->tvs, s3d_tri->tzs, s3d_tri->trs, s3d_tri->tgs, s3d_tri->tbs, s3d_tri->tas,
+                                s3d_tri->tds, s3d_tri->tws };
+    const int32_t  dx[9]    = { s3d_tri->TdUdX, s3d_tri->TdVdX, s3d_tri->TdZdX, s3d_tri->TdRdX, s3d_tri->TdGdX, s3d_tri->TdBdX,
+                                s3d_tri->TdAdX, s3d_tri->TdDdX, s3d_tri->TdWdX };
+    const int32_t  dy[9]    = { s3d_tri->TdUdY, s3d_tri->TdVdY, s3d_tri->TdZdY, s3d_tri->TdRdY, s3d_tri->TdGdY, s3d_tri->TdBdY,
+                                s3d_tri->TdAdY, s3d_tri->TdDdY, s3d_tri->TdWdY };
+    for (int i = 0; i < 9; i++) {
+        r[KV_START + i] = start[i];
+        r[KV_DX + i]    = (uint32_t) dx[i];
+        r[KV_DY + i]    = (uint32_t) dy[i];
+    }
+    return 1;
+}
+
+/* KairoX86#272: the changed-page marks tri() makes as it draws the triangle: each line it draws on, the
+   page its row starts in */
+static void
+s3_virge_gpu_mark_lines(virge_t *virge, const s3d_t *s3d_tri)
+{
+    const int x_dir = s3d_tri->tlr ? 1 : -1;
+    const int lines = s3d_tri->ty01 + s3d_tri->ty12;
+
+    for (int i = 0; i < lines; i++) {
+        const int y = (int) s3d_tri->tys - i;
+
+        if ((s3d_tri->cmd_set & CMD_SET_HC) && ((y < s3d_tri->clip_t) || (y > s3d_tri->clip_b)))
+            continue;
+        const int32_t x1 = (int32_t) (s3d_tri->txs + (uint32_t) i * s3d_tri->TdXdY02);
+        const int32_t x2 = (i < s3d_tri->ty01) ? (int32_t) (s3d_tri->txend01 + (uint32_t) i * s3d_tri->TdXdY01)
+                                               : (int32_t) (s3d_tri->txend12 + (uint32_t) (i - s3d_tri->ty01) * s3d_tri->TdXdY12);
+        int x  = (x1 + ((1 << 20) - 1)) >> 20;
+        int xe = (x2 + ((1 << 20) - 1)) >> 20;
+
+        if (x_dir < 0) {
+            x--;
+            xe--;
+        }
+        if (!((x != xe) && (((x_dir > 0) && (x < xe)) || ((x_dir < 0) && (x > xe)))))
+            continue;
+        if (s3d_tri->cmd_set & CMD_SET_HC) {
+            if ((x_dir > 0) && ((x > s3d_tri->clip_r) || (xe < s3d_tri->clip_l)))
+                continue;
+            if ((x_dir < 0) && ((x < s3d_tri->clip_l) || (xe > s3d_tri->clip_r)))
+                continue;
+        }
+        virge->svga.changedvram[((s3d_tri->dest_base + (uint32_t) y * s3d_tri->dest_str) & virge->vram_mask) >> 12] = changeframecount;
+    }
+}
+
 static void
 queue_triangle(virge_t *virge)
 {
+    /* KairoX86#272: on the GPU, recorded for its kernel */
+    if (virge->k_gpu != NULL) {
+        uint32_t record[KV_WORDS];
+        uint32_t tex_start;
+        uint32_t tex_len;
+
+        if (s3_virge_gpu_record(&virge->s3d_tri, record, &tex_start, &tex_len)) {
+            const uint32_t flags = (virge->bilinear_enabled ? KAIRO_VIRGE_BILINEAR : 0) | (virge->dithering_enabled ? KAIRO_VIRGE_DITHER : 0)
+                                   | (((virge->chip == S3_VIRGEDX) || (virge->chip >= S3_VIRGEGX2)) ? KAIRO_VIRGE_PERSP_375 : 0);
+
+            s3_virge_gpu_mark_lines(virge, &virge->s3d_tri);
+            kairo_virge_gpu_queue(virge->k_gpu, record, flags, tex_start, tex_len);
+            virge->tri_count++;
+        }
+        return;
+    }
     while (s3d_ring_full(virge)) {
         thread_reset_event(virge->not_full_event);
         if (s3d_ring_full(virge))
@@ -5913,12 +6089,7 @@ s3_virge_reset(void *priv)
 
     if (reset_state != NULL) {
         s3_virge_wait_fifo_idle(dev);
-        while (s3d_engine_busy(dev)) {
-            thread_reset_event(dev->not_full_event);
-            wake_render_threads(dev);
-            if (s3d_engine_busy(dev))
-                thread_wait_event(dev->not_full_event, 1);
-        }
+        s3_virge_wait_3d_idle(dev); /* KairoX86#293 */
 
         s3_virge_disable_handlers(dev);
         dev->virge_busy     = 0;
@@ -6021,6 +6192,11 @@ s3_virge_init(const device_t *info)
               s3_virge_overlay_draw);
     virge->svga.hwcursor.cur_ysize = 64;
     virge->svga.conv_16to32        = tvp3026_conv_16to32;
+    virge->svga.render_sync        = s3_virge_render_sync; /* KairoX86#293 */
+    if (kairo_gpu_on) { /* KairoX86#272 */
+        virge->k_gpu            = kairo_virge_gpu_open(virge->svga.vram, (virge->memory_size << 20) - 1);
+        virge->svga.kairo_touch = s3_virge_kairo_touch;
+    }
 
     if (bios_fn != NULL) {
         if (virge->type == S3_VIRGE_GX2)
@@ -6244,6 +6420,7 @@ s3_virge_close(void *priv)
     for (int lane = 0; lane < virge->render_threads; lane++)
         thread_destroy_event(virge->wake_render_thread[lane]);
 
+    kairo_virge_gpu_close(virge->k_gpu); /* KairoX86#272 */
     svga_close(&virge->svga);
 
     ddc_close(virge->ddc);

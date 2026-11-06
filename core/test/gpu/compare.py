@@ -10,7 +10,8 @@ fails). A mismatch writes a diff image beside the run and fails. Cards run --job
 Each card runs on its bus's test board (the bus from the core's hardware list): PCI and AGP cards on the 686BX,
 MCA cards on the PS/2 Model 55 SX, the rest (ISA, VLB, the boards' own) on the 486, period boards whose BIOSes
 they suit; a card its board does not take runs on the first that does. The add-on 3D cards (Voodoo Graphics,
-Voodoo2) run beside the 686BX's S3 Trio64. Every test ends halted at TEST_END: a run that does not get there
+Voodoo2) run beside the 686BX's S3 Trio64. The 3dfx cards' software side draws with 86Box's C rasteriser
+(their recompiler off: KairoX86#289). Every test ends halted at TEST_END: a run that does not get there
 fails. Frames match when their hashes do, or else when no channel of any pixel differs by more than
 MAX_CHANNEL and at most MAX_SHARE of the pixels differ at all.
 """
@@ -42,6 +43,9 @@ BUS_BOARD = {'pci': '686bx', 'agp': '686bx', 'mca': 'ibmps2_m55ls'}
 CARD_BOARD = {
     'quadcolor': '686bx',  # KairoX86#286: on the 486AP4 it hands over no picture and the machine never boots
 }
+# The 3dfx cards (Voodoo Graphics, Voodoo2, the Banshee family): the software side draws with 86Box's C
+# rasteriser, the reference its recompiler is meant to match and does not yet in every mode (KairoX86#289)
+VOODOO_FAMILY = ('voodoo', 'velocity', 'ctl3d_banshee', 'q3d_raven')
 # Where every test ends (runtime.c): its HLT with interrupts off, as the machine's stop reports it
 TEST_END = '0000:8003'
 # Each board's saved CMOS (booting A: first), from the repository's test set, where it has one
@@ -55,9 +59,13 @@ def query(tool, roms, q):
     return json.loads(out.stdout)
 
 
-def machine_config(board, card, test, accel):
+def machine_config(board, card, test, accel, name):
     video = f"gfxcard = {card}\n" if card not in ADD_ONS else "gfxcard = s3_trio64_pci\nvoodoo = 1\n"
-    voodoo = f"\n[3Dfx Voodoo Graphics]\ntype = {ADD_ONS[card]}\n" if card in ADD_ONS else ""
+    voodoo = f"\n[3Dfx Voodoo Graphics]\ntype = {ADD_ONS[card]}\nrecompiler = 0\n" if card in ADD_ONS else ""
+    if card not in ADD_ONS and card.startswith(VOODOO_FAMILY):
+        # A device reads its settings from its name's section, "<name> #<n>" for instance n > 0 (the AGP
+        # Banshee is instance 1)
+        voodoo = f"\n[{name}]\nrecompiler = 0\n\n[{name} #1]\nrecompiler = 0\n"
     return (f"[Machine]\n{BOARDS[board]}cpu_use_dynarec = 1\nfpu_type = internal\ntime_sync = disabled\n\n"
             f"[Video]\n{video}{voodoo}\n[Input devices]\nkeyboard_type = keyboard_ps2\nmouse_type = none\n\n"
             f"[Storage controllers]\nhdc = none\n\n"
@@ -102,6 +110,10 @@ def run(args, folder, config, test, board):
     # How many lines the GPU drew (the core reports it at the machine's end, KairoX86#233)
     drawn = [line.split()[1] for line in out.stderr.splitlines() if line.startswith('kairo-gpu: ')]
     hashes['gpu_lines'] = int(drawn[-1]) if drawn else 0
+    # And the 3D engines' triangles (the Voodoo's, KairoX86#278; the ViRGE's, #272): every "kairo-gpu-<engine>: N
+    # triangles drawn" report, summed
+    hashes['gpu_triangles'] = sum(int(line.split()[1]) for line in out.stderr.splitlines()
+                                  if line.startswith('kairo-gpu-') and line.endswith(' triangles drawn'))
     shutil.rmtree(work / 'machine')
     return hashes, work
 
@@ -160,10 +172,12 @@ def main():
 
     takes = {}
     bus = {}
+    names = {}
     for board in BOARDS:
         listed = [c for c in query(args.hardware_query, args.roms, f'machine {board}')['video'] if c['available']]
         takes[board] = {c['id'] for c in listed}
         bus.update({c['id']: c['bus'] for c in listed})
+        names.update({c['id']: c['name'] for c in listed})
 
     def board_of(card):
         """The card's test board: its bus's (BUS_BOARD), or else the first board that takes it."""
@@ -186,8 +200,8 @@ def main():
         for test in tests:
             folder = out / card / test
             try:
-                ha, wa = run(args, folder / f'a-{args.a}', machine_config(board, card, test, args.a), test, board)
-                hb, wb = run(args, folder / f'b-{args.b}', machine_config(board, card, test, args.b), test, board)
+                ha, wa = run(args, folder / f'a-{args.a}', machine_config(board, card, test, args.a, names.get(card)), test, board)
+                hb, wb = run(args, folder / f'b-{args.b}', machine_config(board, card, test, args.b, names.get(card)), test, board)
             except RuntimeError as e:
                 found.append((card, test, str(e)))
                 print(f'{card} {test}: {e}', flush=True)
@@ -197,9 +211,10 @@ def main():
                 found.append((card, test, problem))
             else:
                 shutil.rmtree(folder)
-            drawn = hb['gpu_lines'] if args.b == 'on' else ha['gpu_lines']
+            on = hb if args.b == 'on' else ha
+            drawn = f"GPU lines {on['gpu_lines']}" + (f", triangles {on['gpu_triangles']}" if on['gpu_triangles'] else '')
             print(f'{card} ({board}) {test}: ' + ('match' if problem is None else f'DIFFERS: {problem}')
-                  + (f' (GPU lines {drawn})' if 'on' in (args.a, args.b) else ''), flush=True)
+                  + (f' ({drawn})' if 'on' in (args.a, args.b) else ''), flush=True)
         return found
 
     with ThreadPoolExecutor(args.jobs) as pool:

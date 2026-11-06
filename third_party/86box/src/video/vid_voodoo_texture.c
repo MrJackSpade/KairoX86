@@ -367,6 +367,9 @@ voodoo_use_texture(voodoo_t *voodoo, voodoo_params_t *params, int tmu)
     for (int lod = lod_min; lod <= lod_max; lod++) {
         uint32_t     *base     = &voodoo->texture_cache[tmu][c].data[texture_offset[lod]];
         uint32_t      tex_addr = params->tex_base[tmu][lod] & texture_mask;
+        /* KairoX86#278: a Banshee's textures are in the memory the GPU draws on */
+        if ((voodoo->k_gpu != NULL) && (voodoo->type >= VOODOO_BANSHEE))
+            kairo_voodoo_gpu_touch(voodoo, tex_addr, params->tex_end[tmu][lod] - params->tex_base[tmu][lod]);
         int           x;
         int           y;
         int           shift = 8 - params->tex_lod[tmu][lod];
@@ -713,5 +716,7 @@ voodoo_tex_writel(uint32_t addr, uint32_t val, void *priv)
 #endif
         flush_texture_cache(voodoo, addr & other_texture_mask, tmu ^ 1);
     }
+    if ((voodoo->k_gpu != NULL) && (voodoo->type >= VOODOO_BANSHEE)) /* KairoX86#278 */
+        kairo_voodoo_gpu_touch(voodoo, addr & texture_mask, 4);
     *(uint32_t *) (&voodoo->tex_mem[tmu][addr & texture_mask]) = val;
 }

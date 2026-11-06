@@ -1,0 +1,1111 @@
+#version 450
+/*
+ * The 3dfx Voodoo's triangles on the GPU (KairoX86#277, #278): 86Box's software rasteriser
+ * (vid_voodoo_render.c: voodoo_half_triangle and what it calls) for a batch of triangles, in the order
+ * the guest sent them, into the card's own memory (its frame buffer: colour and depth/alpha buffers).
+ *
+ * Each invocation owns one 32-bit word of the colour buffer row and of the auxiliary buffer row: a pair
+ * of horizontally adjacent pixels. A work group is a 16 x 8 pixel tile; every invocation runs through
+ * the whole batch in order, so each pixel sees the triangles as the CPU draws them, and no two
+ * invocations touch one word. A pixel's iterated values are the CPU's sums in closed form: the CPU adds
+ * the same integer gradients line by line and pixel by pixel, and integer adds wrap alike.
+ *
+ * 64-bit values (S, T, W) are uvec2 (x the low word); doubles (the span parts' LOD) are float pairs.
+ * The record layout is core/kairo/gpu_voodoo.c's (kairo_voodoo_tri_t), as words.
+ *
+ * Copyright 2026 MrJackSpade. GPL-2.0-or-later.
+ */
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(std430, binding = 0) readonly buffer Tris { uint tri[]; };
+layout(std430, binding = 1) buffer Fb { uint fb[]; };
+layout(std430, binding = 2) readonly buffer Tex0 { uint tex0[]; };
+layout(std430, binding = 3) readonly buffer Tex1 { uint tex1[]; };
+layout(std430, binding = 4) readonly buffer Tables { uint tables[]; };
+layout(std430, binding = 5) buffer Counters { uint counters[]; };
+
+layout(push_constant) uniform Push {
+    uint draw_offset;
+    uint aux_offset;
+    uint row_width;
+    uint aux_row_width;
+    uint tiled; /* bit 0 colour, bit 1 aux */
+    uint fb_mask;
+    uint count;
+    int  x0; /* the dispatch's first pixel and row */
+    int  row0;
+} pc;
+
+/* The record (kairo_voodoo_tri_t), word offsets */
+const uint T_WORDS   = 168u;
+const uint T_AX      = 0u;  /* ax ay bx by cx cy */
+const uint T_DXAB    = 6u;
+const uint T_DXAC    = 7u;
+const uint T_DXBC    = 8u;
+const uint T_XDIR    = 9u;
+const uint T_YSTART  = 10u;
+const uint T_YEND    = 11u;
+const uint T_Y0      = 12u;
+const uint T_AXR     = 13u;
+const uint T_YORIGIN = 14u;
+const uint T_ROWLO   = 15u;
+const uint T_ROWHI   = 16u;
+const uint T_XLO     = 17u;
+const uint T_XHI     = 18u;
+const uint T_CLIPL   = 19u;
+const uint T_CLIPR   = 20u;
+const uint T_FLAGS   = 21u;
+const uint T_C       = 22u; /* r g b a z at (axr, y0) */
+const uint T_CDX     = 27u;
+const uint T_CDY     = 32u;
+const uint T_Q       = 37u; /* [7][3][2]: w, s0 t0 w0, s1 t1 w1; base dx dy; lo hi */
+const uint T_FBZMODE = 79u;
+const uint T_FBZCP   = 80u;
+const uint T_FOGMODE = 81u;
+const uint T_ALPHAMODE = 82u;
+const uint T_ZACOLOR = 83u;
+const uint T_COLOR0  = 84u;
+const uint T_COLOR1  = 85u;
+const uint T_FOGCOLOR = 86u; /* b | g << 8 | r << 16 */
+const uint T_CHROMA  = 87u;  /* b | g << 8 | r << 16 */
+const uint T_STIPPLE = 88u;
+const uint T_TMUCONFIG = 89u;
+const uint T_ODDEVEN = 90u; /* odd_even_mask | render_threads << 8 */
+const uint T_TEXMODE = 91u; /* [2] */
+const uint T_TLOD    = 93u; /* [2] */
+const uint T_ENTRY   = 95u; /* [2] */
+const uint T_LODMIN  = 97u;
+const uint T_LODMAX  = 99u;
+const uint T_LODTRI  = 101u;
+const uint T_LODBASE = 103u;
+const uint T_LODBIAS = 105u;
+const uint T_DMAX    = 107u;
+const uint T_DBIAS   = 109u;
+const uint T_DSCALE  = 111u;
+const uint T_MASKS   = 113u; /* [2][9]: w_mask | h_mask << 10 | tex_lod << 20 */
+const uint T_FOG     = 131u; /* [32]: two entries a word, each fog | dfog << 8 */
+const uint T_ENTRY_WORDS = 163u;
+
+const uint F_SPAN_PART = 1u;
+const uint F_DUAL_TMUS = 2u;
+const uint F_BILINEAR  = 4u;
+const uint F_DITHERSUB = 8u;
+const uint F_TREX_OVERRIDE = 16u;
+
+/* The tables (gpu_voodoo.c), byte offsets */
+const uint TB_DITHER_RB   = 0u;
+const uint TB_DITHER_G    = 4096u;
+const uint TB_DITHER_RB2  = 8192u;
+const uint TB_DITHER_G2   = 9216u;
+const uint TB_SUB_RB      = 10240u;
+const uint TB_SUB_G       = 14336u;
+const uint TB_SUB_RB2     = 18432u;
+const uint TB_SUB_G2      = 19456u;
+const uint TB_LOGTABLE    = 20480u;
+const uint TB_TEXOFFSET   = 20736u; /* LOD_MAX + 3 words */
+
+uint T;
+uint tw(uint o) { return tri[T + o]; }
+int  ti(uint o) { return int(tri[T + o]); }
+
+uint table_byte(uint offset) { return (tables[offset >> 2] >> ((offset & 3u) * 8u)) & 0xffu; }
+
+int clamp8(int v) { return (v < 0) ? 0 : ((v > 0xff) ? 0xff : v); }
+int clamp16(int v) { return (v < 0) ? 0 : ((v > 0xffff) ? 0xffff : v); }
+
+/* ---- 64-bit integers ---- */
+uvec2 add64(uvec2 a, uvec2 b) {
+    uint carry;
+    uint lo = uaddCarry(a.x, b.x, carry);
+    return uvec2(lo, a.y + b.y + carry);
+}
+uvec2 neg64(uvec2 a) { return add64(uvec2(~a.x, ~a.y), uvec2(1u, 0u)); }
+/* a * k, the low 64 bits, k signed */
+uvec2 mul64s32(uvec2 a, int k) {
+    uint hi, lo;
+    umulExtended(a.x, uint(k), hi, lo);
+    hi += a.y * uint(k);
+    if (k < 0)
+        hi -= a.x;
+    return uvec2(lo, hi);
+}
+/* a * b, the low 64 bits */
+uvec2 mul64(uvec2 a, uvec2 b) {
+    uint hi, lo;
+    umulExtended(a.x, b.x, hi, lo);
+    return uvec2(lo, hi + a.x * b.y + a.y * b.x);
+}
+/* Arithmetic shift right by n (0 < n < 32) */
+uvec2 sar64(uvec2 a, uint n) { return uvec2((a.x >> n) | (a.y << (32u - n)), uint(int(a.y) >> n)); }
+bool neg(uvec2 a) { return int(a.y) < 0; }
+bool zero64(uvec2 a) { return (a.x | a.y) == 0u; }
+bool ge64(uvec2 a, uvec2 b) { return (a.y > b.y) || ((a.y == b.y) && (a.x >= b.x)); }
+uvec2 sub64(uvec2 a, uvec2 b) { return add64(a, neg64(b)); }
+uvec2 shl64_1(uvec2 a) { return uvec2(a.x << 1, (a.y << 1) | (a.x >> 31)); }
+/* (1 << 48) / d, unsigned, d != 0 */
+uvec2 recip48(uvec2 d) {
+    /* d above 1 << 48: 0 */
+    if ((d.y > 0x10000u) || ((d.y == 0x10000u) && (d.x != 0u)))
+        return uvec2(0u);
+    uvec2 r = uvec2(0u);
+    uvec2 q = uvec2(0u);
+    for (int i = 48; i >= 0; i--) {
+        r = shl64_1(r);
+        if (i == 48)
+            r.x |= 1u;
+        q = shl64_1(q);
+        if (ge64(r, d)) {
+            r = sub64(r, d);
+            q.x |= 1u;
+        }
+    }
+    return q;
+}
+uvec2 q64(uint i, uint part) { return uvec2(tw(T_Q + (i * 3u + part) * 2u), tw(T_Q + (i * 3u + part) * 2u + 1u)); }
+/* An iterated 64-bit value at (dx, dy) from its plane's origin */
+uvec2 plane64(uint i, int dx, int dy) { return add64(add64(q64(i, 0u), mul64s32(q64(i, 1u), dx)), mul64s32(q64(i, 2u), dy)); }
+
+/* fastlog() */
+int fastlog(uvec2 val) {
+    if (zero64(val) || ((val.y & 0x80000000u) != 0u))
+        return int(0x80000000u);
+    int  e = (val.y != 0u) ? (32 + findMSB(val.y)) : findMSB(val.x);
+    uint frac;
+    if (e >= 8) {
+        uint s = uint(e - 8);
+        frac = (s >= 32u) ? (val.y >> (s - 32u)) : ((s == 0u) ? val.x : ((val.x >> s) | (val.y << (32u - s))));
+    } else
+        frac = val.x << uint(8 - e);
+    frac &= 0xffu;
+    return (e << 8) | int(table_byte(TB_LOGTABLE + frac));
+}
+
+/* ---- double-float (the span parts' LOD, double in the CPU's code) ---- */
+vec2 two_sum(float a, float b) {
+    precise float s  = a + b;
+    precise float bb = s - a;
+    precise float e  = (a - (s - bb)) + (b - bb);
+    return vec2(s, e);
+}
+vec2 fast_two_sum(float a, float b) {
+    precise float s = a + b;
+    precise float e = b - (s - a);
+    return vec2(s, e);
+}
+vec2 split(float a) {
+    precise float t  = 4097.0 * a;
+    precise float hi = t - (t - a);
+    precise float lo = a - hi;
+    return vec2(hi, lo);
+}
+vec2 two_prod(float a, float b) {
+    precise float p  = a * b;
+    vec2          as = split(a);
+    vec2          bs = split(b);
+    precise float e  = ((as.x * bs.x - p) + as.x * bs.y + as.y * bs.x) + as.y * bs.y;
+    return vec2(p, e);
+}
+vec2 df_add(vec2 a, vec2 b) {
+    vec2          s = two_sum(a.x, b.x);
+    precise float e = s.y + a.y + b.y;
+    return fast_two_sum(s.x, e);
+}
+vec2 df_mul(vec2 a, vec2 b) {
+    vec2          p = two_prod(a.x, b.x);
+    precise float e = p.y + (a.x * b.y + a.y * b.x);
+    return fast_two_sum(p.x, e);
+}
+vec2 df_div(vec2 a, vec2 b) {
+    precise float q1 = a.x / b.x;
+    vec2          r  = df_add(a, -df_mul(vec2(q1, 0.0), b));
+    precise float q2 = r.x / b.x;
+    return fast_two_sum(q1, q2);
+}
+/* A signed 64-bit integer, in three exactly representable parts */
+vec2 df_from64(uvec2 v) {
+    bool  n = neg(v);
+    uvec2 a = n ? neg64(v) : v;
+    float c0 = float(a.x & 0x3fffffu);
+    float c1 = float((a.x >> 22) | ((a.y & 0xfffu) << 10)) * 4194304.0;
+    float c2 = float(a.y >> 12) * 17592186044416.0;
+    vec2  r  = df_add(df_add(vec2(c2, 0.0), vec2(c1, 0.0)), vec2(c0, 0.0));
+    return n ? -r : r;
+}
+
+/* voodoo_lod_from_gradients() */
+int lod_from_gradients(float dsdx, float dtdx, float dsdy, float dtdy) {
+    float gx = dsdx * dsdx + dtdx * dtdx;
+    float gy = dsdy * dsdy + dtdy * dtdy;
+    float g  = (gx > gy) ? gx : gy;
+    if (g <= 0.0)
+        return -(64 << 8);
+    return int(log2(g) / 2.0 * 256.0);
+}
+
+/* voodoo_span_part_lod_base(): the gradients in units of 1 << 32 */
+int span_part_lod_base(uint tmu, uvec2 ms, uvec2 mt, uvec2 mw) {
+    if (neg(mw) || zero64(mw))
+        return ti(T_LODBASE + tmu);
+    vec2  w   = df_from64(mw);
+    vec2  ts  = df_div(df_from64(ms), w);
+    vec2  tt  = df_div(df_from64(mt), w);
+    uint  b   = 1u + tmu * 3u;
+    vec2  dwdx = df_from64(q64(b + 2u, 1u));
+    vec2  dwdy = df_from64(q64(b + 2u, 2u));
+    const float unit = 1.0 / 4294967296.0;
+    float dsdx = df_add(df_from64(q64(b, 1u)), -df_mul(ts, dwdx)).x * unit;
+    float dtdx = df_add(df_from64(q64(b + 1u, 1u)), -df_mul(tt, dwdx)).x * unit;
+    float dsdy = df_add(df_from64(q64(b, 2u)), -df_mul(ts, dwdy)).x * unit;
+    float dtdy = df_add(df_from64(q64(b + 1u, 2u)), -df_mul(tt, dwdy)).x * unit;
+    return lod_from_gradients(dsdx, dtdx, dsdy, dtdy);
+}
+
+/* ---- textures ---- */
+uint texel(uint tmu, uint index) { return (tmu == 0u) ? tex0[index] : tex1[index]; }
+
+int tex_r[2], tex_g[2], tex_b[2], tex_a[2];
+int lod_frac[2];
+
+void tex_read_point(uint tmu, uint base, int s, int t, int w_mask, int h_mask, int shift) {
+    bool clamp_s = (tw(T_TEXMODE + tmu) & (1u << 6)) != 0u;
+    bool clamp_t = (tw(T_TEXMODE + tmu) & (1u << 7)) != 0u;
+    if ((s & ~w_mask) != 0) {
+        if (clamp_s) {
+            if (s < 0)
+                s = 0;
+            if (s > w_mask)
+                s = w_mask;
+        } else
+            s &= w_mask;
+    }
+    if ((t & ~h_mask) != 0) {
+        if (clamp_t) {
+            if (t < 0)
+                t = 0;
+            if (t > h_mask)
+                t = h_mask;
+        } else
+            t &= h_mask;
+    }
+    uint dat   = texel(tmu, base + uint(s + (t << shift)));
+    tex_b[tmu] = int(dat & 0xffu);
+    tex_g[tmu] = int((dat >> 8) & 0xffu);
+    tex_r[tmu] = int((dat >> 16) & 0xffu);
+    tex_a[tmu] = int(dat >> 24);
+}
+
+void tex_read_4(uint tmu, uint base, int s, int t, int w_mask, int h_mask, int shift, ivec4 d) {
+    bool clamp_s = (tw(T_TEXMODE + tmu) & (1u << 6)) != 0u;
+    bool clamp_t = (tw(T_TEXMODE + tmu) & (1u << 7)) != 0u;
+    uint dat[4];
+    if ((((s | (s + 1)) & ~w_mask) != 0) || (((t | (t + 1)) & ~h_mask) != 0)) {
+        for (int c = 0; c < 4; c++) {
+            int _s = s + (c & 1);
+            int _t = t + ((c & 2) >> 1);
+            if ((_s & ~w_mask) != 0) {
+                if (clamp_s) {
+                    if (_s < 0)
+                        _s = 0;
+                    if (_s > w_mask)
+                        _s = w_mask;
+                } else
+                    _s &= w_mask;
+            }
+            if ((_t & ~h_mask) != 0) {
+                if (clamp_t) {
+                    if (_t < 0)
+                        _t = 0;
+                    if (_t > h_mask)
+                        _t = h_mask;
+                } else
+                    _t &= h_mask;
+            }
+            dat[c] = texel(tmu, base + uint(_s + (_t << shift)));
+        }
+    } else {
+        dat[0] = texel(tmu, base + uint(s + (t << shift)));
+        dat[1] = texel(tmu, base + uint(s + 1 + (t << shift)));
+        dat[2] = texel(tmu, base + uint(s + ((t + 1) << shift)));
+        dat[3] = texel(tmu, base + uint(s + 1 + ((t + 1) << shift)));
+    }
+    ivec4 b = ivec4(int(dat[0] & 0xffu), int(dat[1] & 0xffu), int(dat[2] & 0xffu), int(dat[3] & 0xffu));
+    ivec4 g = ivec4(int((dat[0] >> 8) & 0xffu), int((dat[1] >> 8) & 0xffu), int((dat[2] >> 8) & 0xffu), int((dat[3] >> 8) & 0xffu));
+    ivec4 r = ivec4(int((dat[0] >> 16) & 0xffu), int((dat[1] >> 16) & 0xffu), int((dat[2] >> 16) & 0xffu), int((dat[3] >> 16) & 0xffu));
+    ivec4 a = ivec4(int(dat[0] >> 24), int(dat[1] >> 24), int(dat[2] >> 24), int(dat[3] >> 24));
+    tex_r[tmu] = (r.x * d.x + r.y * d.y + r.z * d.z + r.w * d.w) >> 8;
+    tex_g[tmu] = (g.x * d.x + g.y * d.y + g.z * d.z + g.w * d.w) >> 8;
+    tex_b[tmu] = (b.x * d.x + b.y * d.y + b.z * d.z + b.w * d.w) >> 8;
+    tex_a[tmu] = (a.x * d.x + a.y * d.y + a.z * d.z + a.w * d.w) >> 8;
+}
+
+/* voodoo_tmu_fetch(): the TMU's texel for the pixel (its S, T, W), and its LOD (returned) */
+int tmu_fetch(uint tmu, uvec2 s64, uvec2 t64, uvec2 w64, int tmu_lod) {
+    int tex_s;
+    int tex_t;
+    int lod;
+    if ((tw(T_TEXMODE + tmu) & 1u) != 0u) {
+        uvec2 _w = zero64(w64) ? uvec2(0u) : recip48(w64);
+        tex_s = int(sar64(add64(mul64(sar64(add64(s64, uvec2(1u << 13, 0u)), 14u), _w), uvec2(1u << 29, 0u)), 30u).x);
+        tex_t = int(sar64(add64(mul64(sar64(add64(t64, uvec2(1u << 13, 0u)), 14u), _w), uvec2(1u << 29, 0u)), 30u).x);
+        lod   = int(uint(tmu_lod) + (uint(fastlog(_w)) - uint(16 << 8)));
+    } else {
+        tex_s = int(sar64(s64, 28u).x);
+        tex_t = int(sar64(t64, 28u).x);
+        lod   = tmu_lod;
+    }
+    int lod_min = ti(T_LODMIN + tmu);
+    int lod_max = ti(T_LODMAX + tmu);
+    if (lod < lod_min)
+        lod = lod_min;
+    else if (lod > lod_max)
+        lod = lod_max;
+    lod_frac[tmu] = lod & 0xff;
+    lod >>= 8;
+
+    /* voodoo_get_texture() */
+    uint m       = tw(T_MASKS + tmu * 9u + uint(lod));
+    int  w_mask  = int(m & 0x3ffu);
+    int  h_mask  = int((m >> 10) & 0x3ffu);
+    int  tex_lod = int(m >> 20);
+    int  shift   = 8 - tex_lod;
+    uint base    = tw(T_ENTRY + tmu) * tw(T_ENTRY_WORDS) + tables[(TB_TEXOFFSET >> 2) + uint(lod)];
+    uint tlod    = tw(T_TLOD + tmu);
+    if ((tlod & (1u << 28)) != 0u) {
+        if ((tex_s & 0x1000) != 0)
+            tex_s = ~tex_s;
+    }
+    if ((tlod & (1u << 29)) != 0u) {
+        if ((tex_t & 0x1000) != 0)
+            tex_t = ~tex_t;
+    }
+    if (((tw(T_FLAGS) & F_BILINEAR) != 0u) && ((tw(T_TEXMODE + tmu) & 6u) != 0u)) {
+        tex_s -= 1 << (3 + tex_lod);
+        tex_t -= 1 << (3 + tex_lod);
+        int s  = tex_s >> tex_lod;
+        int t  = tex_t >> tex_lod;
+        int ds = s & 0xf;
+        int dt = t & 0xf;
+        s >>= 4;
+        t >>= 4;
+        ivec4 d = ivec4((16 - ds) * (16 - dt), ds * (16 - dt), (16 - ds) * dt, ds * dt);
+        tex_read_4(tmu, base, s, t, w_mask, h_mask, shift, d);
+    } else
+        tex_read_point(tmu, base, tex_s >> (4 + tex_lod), tex_t >> (4 + tex_lod), w_mask, h_mask, shift);
+    return lod;
+}
+
+int detail_factor(uint tmu, int lod) {
+    int f = (ti(T_DBIAS + tmu) - lod) << ti(T_DSCALE + tmu);
+    if (f > ti(T_DMAX + tmu))
+        f = ti(T_DMAX + tmu);
+    return f;
+}
+
+/* voodoo_tmu_fetch_and_blend() */
+void tmu_fetch_and_blend(uvec2 s0, uvec2 t0, uvec2 w0, uvec2 s1, uvec2 t1, uvec2 w1, int lod0, int lod1) {
+    uint tm0 = tw(T_TEXMODE);
+    uint tm1 = tw(T_TEXMODE + 1u);
+    int  r, g, b, a;
+    int  factor_r = 0, factor_g = 0, factor_b = 0, factor_a = 0;
+    bool c_reverse, a_reverse;
+
+    int lod = tmu_fetch(1u, s1, t1, w1, lod1);
+    if (((tm1 & (1u << 30)) != 0u) && ((lod & 1) != 0)) {
+        c_reverse = (tm0 & (1u << 17)) != 0u;
+        a_reverse = (tm0 & (1u << 26)) != 0u;
+    } else {
+        c_reverse = (tm0 & (1u << 17)) == 0u;
+        a_reverse = (tm0 & (1u << 26)) == 0u;
+    }
+    if ((tm1 & (1u << 13)) != 0u) {
+        switch ((tm1 >> 14) & 7u) {
+            case 1u: factor_r = tex_r[1]; factor_g = tex_g[1]; factor_b = tex_b[1]; break;
+            case 3u: factor_r = factor_g = factor_b = tex_a[1]; break;
+            case 4u: factor_r = factor_g = factor_b = detail_factor(1u, lod); break;
+            case 5u: factor_r = factor_g = factor_b = lod_frac[1]; break;
+            default: factor_r = factor_g = factor_b = 0; break;
+        }
+        if (!c_reverse) {
+            r = (-tex_r[1] * (factor_r + 1)) >> 8;
+            g = (-tex_g[1] * (factor_g + 1)) >> 8;
+            b = (-tex_b[1] * (factor_b + 1)) >> 8;
+        } else {
+            r = (-tex_r[1] * ((factor_r ^ 0xff) + 1)) >> 8;
+            g = (-tex_g[1] * ((factor_g ^ 0xff) + 1)) >> 8;
+            b = (-tex_b[1] * ((factor_b ^ 0xff) + 1)) >> 8;
+        }
+        if ((tm1 & (1u << 18)) != 0u) {
+            r += tex_r[1];
+            g += tex_g[1];
+            b += tex_b[1];
+        } else if ((tm1 & (1u << 19)) != 0u) {
+            r += tex_a[1];
+            g += tex_a[1];
+            b += tex_a[1];
+        }
+        tex_r[1] = clamp8(r);
+        tex_g[1] = clamp8(g);
+        tex_b[1] = clamp8(b);
+    }
+    if ((tm1 & (1u << 22)) != 0u) {
+        switch ((tm1 >> 23) & 7u) {
+            case 1u: factor_a = tex_a[1]; break;
+            case 3u: factor_a = tex_a[1]; break;
+            case 4u: factor_a = detail_factor(1u, lod); break;
+            case 5u: factor_a = lod_frac[1]; break;
+            default: factor_a = 0; break;
+        }
+        if (!a_reverse)
+            a = (-tex_a[1] * ((factor_a ^ 0xff) + 1)) >> 8;
+        else
+            a = (-tex_a[1] * (factor_a + 1)) >> 8;
+        if ((tm1 & ((1u << 27) | (1u << 28))) != 0u)
+            a += tex_a[1];
+        tex_a[1] = clamp8(a);
+    }
+
+    lod = tmu_fetch(0u, s0, t0, w0, lod0);
+    if (((tm0 & (1u << 30)) != 0u) && ((lod & 1) != 0)) {
+        c_reverse = (tm0 & (1u << 17)) != 0u;
+        a_reverse = (tm0 & (1u << 26)) != 0u;
+    } else {
+        c_reverse = (tm0 & (1u << 17)) == 0u;
+        a_reverse = (tm0 & (1u << 26)) == 0u;
+    }
+    if ((tm0 & (1u << 12)) == 0u) {
+        r = tex_r[1];
+        g = tex_g[1];
+        b = tex_b[1];
+    } else
+        r = g = b = 0;
+    if ((tm0 & (1u << 13)) != 0u) {
+        r -= tex_r[0];
+        g -= tex_g[0];
+        b -= tex_b[0];
+    }
+    switch ((tm0 >> 14) & 7u) {
+        case 1u: factor_r = tex_r[0]; factor_g = tex_g[0]; factor_b = tex_b[0]; break;
+        case 2u: factor_r = factor_g = factor_b = tex_a[1]; break;
+        case 3u: factor_r = factor_g = factor_b = tex_a[0]; break;
+        case 4u: factor_r = factor_g = factor_b = detail_factor(0u, lod); break;
+        case 5u: factor_r = factor_g = factor_b = lod_frac[0]; break;
+        case 0u: factor_r = factor_g = factor_b = 0; break;
+        default: break;
+    }
+    if (!c_reverse) {
+        r = (r * (factor_r + 1)) >> 8;
+        g = (g * (factor_g + 1)) >> 8;
+        b = (b * (factor_b + 1)) >> 8;
+    } else {
+        r = (r * ((factor_r ^ 0xff) + 1)) >> 8;
+        g = (g * ((factor_g ^ 0xff) + 1)) >> 8;
+        b = (b * ((factor_b ^ 0xff) + 1)) >> 8;
+    }
+    if ((tm0 & (1u << 18)) != 0u) {
+        r += tex_r[0];
+        g += tex_g[0];
+        b += tex_b[0];
+    } else if ((tm0 & (1u << 19)) != 0u) {
+        r += tex_a[0];
+        g += tex_a[0];
+        b += tex_a[0];
+    }
+    if ((tm0 & (1u << 21)) == 0u)
+        a = tex_a[1];
+    else
+        a = 0;
+    if ((tm0 & (1u << 22)) != 0u)
+        a -= tex_a[0];
+    switch ((tm0 >> 23) & 7u) {
+        case 1u: factor_a = tex_a[0]; break;
+        case 2u: factor_a = tex_a[1]; break;
+        case 3u: factor_a = tex_a[0]; break;
+        case 4u: factor_a = detail_factor(0u, lod); break;
+        case 5u: factor_a = lod_frac[0]; break;
+        case 0u: factor_a = 0; break;
+        default: break;
+    }
+    if (a_reverse)
+        a = (a * ((factor_a ^ 0xff) + 1)) >> 8;
+    else
+        a = (a * (factor_a + 1)) >> 8;
+    if ((tm0 & ((1u << 27) | (1u << 28))) != 0u)
+        a += tex_a[0];
+    tex_r[0] = clamp8(r);
+    tex_g[0] = clamp8(g);
+    tex_b[0] = clamp8(b);
+    tex_a[0] = clamp8(a);
+    if ((tm0 & (1u << 20)) != 0u) {
+        tex_r[0] ^= 0xff;
+        tex_g[0] ^= 0xff;
+        tex_b[0] ^= 0xff;
+    }
+    if ((tm0 & (1u << 29)) != 0u)
+        tex_a[0] ^= 0xff;
+}
+
+/* ---- the counters, each invocation's own until its end ---- */
+uint n_in, n_chroma, n_zfail, n_afail, n_out;
+
+/* A span's first pixel, last pixel and direction, or false where the line draws none (the CPU's x, x2) */
+bool span(int y, out int xs, out int xe) {
+    int real_y = (y << 4) + 8;
+    int ax     = ti(T_AX);
+    int ay     = ti(T_AX + 1u);
+    int bx     = ti(T_AX + 2u);
+    int by     = ti(T_AX + 3u);
+    int x      = (ax << 12) + ((ti(T_DXAC) * (real_y - ay)) >> 4);
+    int x2;
+    if (real_y < by)
+        x2 = (ax << 12) + ((ti(T_DXAB) * (real_y - ay)) >> 4);
+    else
+        x2 = (bx << 12) + ((ti(T_DXBC) * (real_y - by)) >> 4);
+    int xdir = ti(T_XDIR);
+    if (xdir > 0)
+        x2 -= 1 << 16;
+    else
+        x -= 1 << 16;
+    x  = (x + 0x7000) >> 16;
+    x2 = (x2 + 0x7000) >> 16;
+    if ((tw(T_FBZMODE) & 1u) != 0u) {
+        int cl = ti(T_CLIPL);
+        int cr = ti(T_CLIPR);
+        if (xdir > 0) {
+            if (x < cl)
+                x = cl;
+            if (x2 >= cr)
+                x2 = cr - 1;
+        } else {
+            if (x >= cr)
+                x = cr - 1;
+            if (x2 < cl)
+                x2 = cl;
+        }
+    }
+    if ((x2 < x) && (xdir > 0))
+        return false;
+    if ((x2 > x) && (xdir < 0))
+        return false;
+    xs = x;
+    xe = x2;
+    return true;
+}
+
+/* The rotating stipple's state at the pixel (KairoX86#288): the triangle's start turned left once for every
+   pixel before it in raster order (the lines before its own, in full, and its own up to it) and once for it */
+uint stipple_rotated(int y, int x, int xs) {
+    uint n = uint(abs(x - xs)) + 1u;
+    for (int l = ti(T_YSTART); l < y; l++) {
+        int a, b;
+        if (span(l, a, b))
+            n += uint(abs(b - a)) + 1u;
+    }
+    uint s = tw(T_STIPPLE);
+    n &= 31u;
+    return (n == 0u) ? s : ((s << n) | (s >> (32u - n)));
+}
+
+/* One pixel of the triangle: x on its line y (buffer row row); col and aux the pixel's colour and
+   auxiliary words (16 bits). Returns whether it wrote either. */
+bool pixel(int x, int y, int row, int xs, inout uint col, inout uint aux) {
+    uint fbzmode = tw(T_FBZMODE);
+    uint fbzcp   = tw(T_FBZCP);
+    uint alphamode = tw(T_ALPHAMODE);
+    uint fogmode = tw(T_FOGMODE);
+    int  dx      = x - ti(T_AXR);
+    int  dy      = y - ti(T_Y0);
+
+    n_in++;
+
+    int ir = ti(T_C) + ti(T_CDX) * dx + ti(T_CDY) * dy;
+    int ig = ti(T_C + 1u) + ti(T_CDX + 1u) * dx + ti(T_CDY + 1u) * dy;
+    int ib = ti(T_C + 2u) + ti(T_CDX + 2u) * dx + ti(T_CDY + 2u) * dy;
+    int ia = ti(T_C + 3u) + ti(T_CDX + 3u) * dx + ti(T_CDY + 3u) * dy;
+    int z  = ti(T_C + 4u) + ti(T_CDX + 4u) * dx + ti(T_CDY + 4u) * dy;
+    uvec2 w = plane64(0u, dx, dy);
+
+    int w_depth;
+    if ((w.y & 0xffffu) != 0u)
+        w_depth = 0;
+    else if ((w.x & 0xffff0000u) == 0u)
+        w_depth = 0xf001;
+    else {
+        int e    = 15 - findMSB(w.x >> 16);
+        int mant = int((~w.x >> uint(19 - e)) & 0xfffu);
+        w_depth  = (e << 12) + mant + 1;
+        if (w_depth > 0xffff)
+            w_depth = 0xffff;
+    }
+
+    if ((fbzmode & (1u << 2)) != 0u) {
+        if ((fbzmode & (1u << 12)) != 0u) {
+            int index = ((row & 3) << 3) | (~x & 7);
+            if ((tw(T_STIPPLE) & (1u << uint(index))) == 0u)
+                return false;
+        } else {
+            if ((stipple_rotated(y, x, xs) & 0x80000000u) == 0u)
+                return false;
+        }
+    }
+
+    int new_depth;
+    if ((fbzmode & (1u << 3)) != 0u)
+        new_depth = w_depth;
+    else
+        new_depth = clamp16(z >> 12);
+    if ((fbzmode & (1u << 16)) != 0u)
+        new_depth = clamp16(new_depth + ((int(tw(T_ZACOLOR)) << 16) >> 16));
+
+    if ((fbzmode & (1u << 4)) != 0u) {
+        int old_depth = int(aux);
+        int comp      = ((fbzmode & (1u << 20)) != 0u) ? int(tw(T_ZACOLOR) & 0xffffu) : new_depth;
+        bool pass;
+        switch ((fbzmode >> 5) & 7u) {
+            case 0u: pass = false; break;
+            case 1u: pass = comp < old_depth; break;
+            case 2u: pass = comp == old_depth; break;
+            case 3u: pass = comp <= old_depth; break;
+            case 4u: pass = comp > old_depth; break;
+            case 5u: pass = comp != old_depth; break;
+            case 6u: pass = comp >= old_depth; break;
+            default: pass = true; break;
+        }
+        if (!pass) {
+            n_zfail++;
+            return false;
+        }
+    }
+
+    int dest_r = int((col >> 8) & 0xf8u);
+    int dest_g = int((col >> 3) & 0xfcu);
+    int dest_b = int((col << 3) & 0xf8u);
+    dest_r |= dest_r >> 5;
+    dest_g |= dest_g >> 6;
+    dest_b |= dest_b >> 5;
+    int dest_a = 0xff;
+    if ((fbzmode & (1u << 18)) != 0u)
+        dest_a = int(aux & 0xffu);
+
+    if ((fbzcp & (1u << 27)) != 0u) {
+        uint tm0 = tw(T_TEXMODE);
+        int  lod0 = ti(T_LODTRI);
+        int  lod1 = ti(T_LODTRI + 1u);
+        bool dual = (tw(T_FLAGS) & F_DUAL_TMUS) != 0u;
+        uvec2 s0 = plane64(1u, dx, dy), t0 = plane64(2u, dx, dy), w0 = plane64(3u, dx, dy);
+        uvec2 s1 = plane64(4u, dx, dy), t1 = plane64(5u, dx, dy), w1 = plane64(6u, dx, dy);
+        if ((tw(T_FLAGS) & F_SPAN_PART) != 0u) {
+            /* voodoo_update_span_part_lod(): the 8-pixel part of the span the pixel is in */
+            int xdir   = ti(T_XDIR);
+            int k      = abs(x - xs) / 8;
+            int pstart = xs + k * 8 * xdir;
+            int last   = xs;
+            int xe;
+            span(y, last, xe);
+            int pend   = (xdir > 0) ? min(pstart + 7, xe) : max(pstart - 7, xe);
+            int half_offset = (pend - pstart) / 2;
+            int pdx    = pstart - ti(T_AXR);
+            for (uint tmu = 0u; tmu < 2u; tmu++) {
+                if ((tw(T_TEXMODE + tmu) & 1u) == 0u)
+                    continue;
+                if ((tmu == 1u) && !dual)
+                    continue;
+                uint  b  = 1u + tmu * 3u;
+                uvec2 ms = add64(plane64(b, pdx, dy), mul64s32(q64(b, 1u), half_offset));
+                uvec2 mt = add64(plane64(b + 1u, pdx, dy), mul64s32(q64(b + 1u, 1u), half_offset));
+                uvec2 mw = add64(plane64(b + 2u, pdx, dy), mul64s32(q64(b + 2u, 1u), half_offset));
+                int   l  = span_part_lod_base(tmu, ms, mt, mw) + ti(T_LODBIAS + tmu);
+                if (tmu == 0u)
+                    lod0 = l;
+                else
+                    lod1 = l;
+            }
+        }
+        if (((tm0 & 0x00643000u) == 0x00241000u) || !dual) {
+            tmu_fetch(0u, s0, t0, w0, lod0);
+        } else if ((tm0 & 0x3ffff000u) == 0u) {
+            tmu_fetch(1u, s1, t1, w1, lod1);
+            tex_r[0] = tex_r[1];
+            tex_g[0] = tex_g[1];
+            tex_b[0] = tex_b[1];
+            tex_a[0] = tex_a[1];
+        } else
+            tmu_fetch_and_blend(s0, t0, w0, s1, t1, w1, lod0, lod1);
+    }
+
+    if ((tw(T_FLAGS) & F_TREX_OVERRIDE) != 0u) {
+        tex_r[0] = tex_g[0] = 0;
+        tex_b[0] = int(tw(T_TMUCONFIG) & 0xffu);
+    }
+
+    uint color0 = tw(T_COLOR0);
+    uint color1 = tw(T_COLOR1);
+    bool sel;
+    if ((fbzcp & (1u << 7)) != 0u)
+        sel = (tex_a[0] & 0x80) != 0;
+    else
+        sel = (fbzcp & (1u << 4)) != 0u;
+    int clocal_r, clocal_g, clocal_b;
+    if (sel) {
+        clocal_r = int((color0 >> 16) & 0xffu);
+        clocal_g = int((color0 >> 8) & 0xffu);
+        clocal_b = int(color0 & 0xffu);
+    } else {
+        clocal_r = clamp8(ir >> 12);
+        clocal_g = clamp8(ig >> 12);
+        clocal_b = clamp8(ib >> 12);
+    }
+    int cother_r = 0, cother_g = 0, cother_b = 0;
+    switch (fbzcp & 3u) {
+        case 0u:
+            cother_r = clamp8(ir >> 12);
+            cother_g = clamp8(ig >> 12);
+            cother_b = clamp8(ib >> 12);
+            break;
+        case 1u:
+            cother_r = tex_r[0];
+            cother_g = tex_g[0];
+            cother_b = tex_b[0];
+            break;
+        case 2u:
+            cother_r = int((color1 >> 16) & 0xffu);
+            cother_g = int((color1 >> 8) & 0xffu);
+            cother_b = int(color1 & 0xffu);
+            break;
+        default:
+            break; /* the LFB: src_r etc., 0 here */
+    }
+
+    uint chroma = tw(T_CHROMA);
+    if (((fbzmode & (1u << 1)) != 0u) && (cother_r == int((chroma >> 16) & 0xffu)) && (cother_g == int((chroma >> 8) & 0xffu))
+        && (cother_b == int(chroma & 0xffu))) {
+        n_chroma++;
+        return false;
+    }
+
+    int alocal;
+    switch ((fbzcp >> 5) & 3u) {
+        case 0u: alocal = clamp8(ia >> 12); break;
+        case 1u: alocal = int(color0 >> 24); break;
+        default: alocal = clamp8(z >> 20); break; /* 2; 3 is fatal in the CPU's code, refused when queued */
+    }
+    int aother;
+    switch ((fbzcp >> 2) & 3u) {
+        case 0u: aother = clamp8(ia >> 12); break;
+        case 1u: aother = tex_a[0]; break;
+        default: aother = int(color1 >> 24); break; /* 2; 3 refused when queued */
+    }
+
+    if (((fbzmode & (1u << 13)) != 0u) && ((aother & 1) == 0))
+        return false;
+
+    int src_r, src_g, src_b, src_a;
+    if ((fbzcp & (1u << 8)) != 0u) {
+        src_r = src_g = src_b = 0;
+    } else {
+        src_r = cother_r;
+        src_g = cother_g;
+        src_b = cother_b;
+    }
+    src_a = ((fbzcp & (1u << 17)) != 0u) ? 0 : aother;
+    if ((fbzcp & (1u << 9)) != 0u) {
+        src_r -= clocal_r;
+        src_g -= clocal_g;
+        src_b -= clocal_b;
+    }
+    if ((fbzcp & (1u << 18)) != 0u)
+        src_a -= alocal;
+
+    int msel_r, msel_g, msel_b, msel_a;
+    switch ((fbzcp >> 10) & 7u) {
+        case 0u: msel_r = msel_g = msel_b = 0; break;
+        case 1u: msel_r = clocal_r; msel_g = clocal_g; msel_b = clocal_b; break;
+        case 2u: msel_r = msel_g = msel_b = aother; break;
+        case 3u: msel_r = msel_g = msel_b = alocal; break;
+        case 4u: msel_r = msel_g = msel_b = tex_a[0]; break;
+        default: msel_r = tex_r[0]; msel_g = tex_g[0]; msel_b = tex_b[0]; break; /* 5; 6 and 7 refused when queued */
+    }
+    switch ((fbzcp >> 19) & 7u) {
+        case 0u: msel_a = 0; break;
+        case 1u: msel_a = alocal; break;
+        case 2u: msel_a = aother; break;
+        case 3u: msel_a = alocal; break;
+        default: msel_a = tex_a[0]; break; /* 4; above refused when queued */
+    }
+    if ((fbzcp & (1u << 13)) == 0u) {
+        msel_r ^= 0xff;
+        msel_g ^= 0xff;
+        msel_b ^= 0xff;
+    }
+    msel_r++;
+    msel_g++;
+    msel_b++;
+    if ((fbzcp & (1u << 22)) == 0u)
+        msel_a ^= 0xff;
+    msel_a++;
+    src_r = (src_r * msel_r) >> 8;
+    src_g = (src_g * msel_g) >> 8;
+    src_b = (src_b * msel_b) >> 8;
+    src_a = (src_a * msel_a) >> 8;
+    switch ((fbzcp >> 14) & 3u) {
+        case 1u:
+            src_r += clocal_r;
+            src_g += clocal_g;
+            src_b += clocal_b;
+            break;
+        case 2u:
+            src_r += alocal;
+            src_g += alocal;
+            src_b += alocal;
+            break;
+        default:
+            break; /* 0; 3 refused when queued */
+    }
+    if (((fbzcp >> 23) & 3u) != 0u)
+        src_a += alocal;
+    src_r = clamp8(src_r);
+    src_g = clamp8(src_g);
+    src_b = clamp8(src_b);
+    src_a = clamp8(src_a);
+    if ((fbzcp & (1u << 16)) != 0u) {
+        src_r ^= 0xff;
+        src_g ^= 0xff;
+        src_b ^= 0xff;
+    }
+    if ((fbzcp & (1u << 25)) != 0u)
+        src_a ^= 0xff;
+
+    int colbfog_r = src_r;
+    int colbfog_g = src_g;
+    int colbfog_b = src_b;
+
+    if ((fogmode & 1u) != 0u) {
+        /* APPLY_FOG */
+        uint fc = tw(T_FOGCOLOR);
+        int  fcr = int((fc >> 16) & 0xffu);
+        int  fcg = int((fc >> 8) & 0xffu);
+        int  fcb = int(fc & 0xffu);
+        if ((fogmode & 0x20u) != 0u) {
+            src_r += fcr;
+            src_g += fcg;
+            src_b += fcb;
+        } else {
+            int fog_r, fog_g, fog_b, fog_a = 0;
+            if ((fogmode & 0x02u) == 0u) {
+                fog_r = fcr;
+                fog_g = fcg;
+                fog_b = fcb;
+            } else
+                fog_r = fog_g = fog_b = 0;
+            if ((fogmode & 0x04u) == 0u) {
+                fog_r -= src_r;
+                fog_g -= src_g;
+                fog_b -= src_b;
+            }
+            switch (fogmode & 0x18u) {
+                case 0u: {
+                    int  fog_idx = (w_depth >> 10) & 0x3f;
+                    uint e       = (tw(T_FOG + uint(fog_idx >> 1)) >> ((uint(fog_idx) & 1u) * 16u)) & 0xffffu;
+                    fog_a        = int(e & 0xffu);
+                    fog_a += (int(e >> 8) * ((w_depth >> 2) & 0xff)) >> 10;
+                    break;
+                }
+                case 0x10u: fog_a = (z >> 20) & 0xff; break;
+                case 0x08u: fog_a = clamp8(ia >> 12); break;
+                default: fog_a = clamp8(int(w.y & 0xffu)); break;
+            }
+            fog_a++;
+            fog_r = (fog_r * fog_a) >> 8;
+            fog_g = (fog_g * fog_a) >> 8;
+            fog_b = (fog_b * fog_a) >> 8;
+            if ((fogmode & 0x04u) != 0u) {
+                src_r = fog_r;
+                src_g = fog_g;
+                src_b = fog_b;
+            } else {
+                src_r += fog_r;
+                src_g += fog_g;
+                src_b += fog_b;
+            }
+        }
+        src_r = clamp8(src_r);
+        src_g = clamp8(src_g);
+        src_b = clamp8(src_b);
+    }
+
+    if ((alphamode & 1u) != 0u) {
+        int  a_ref = int(alphamode >> 24);
+        bool pass;
+        switch ((alphamode >> 1) & 7u) {
+            case 0u: pass = false; break;
+            case 1u: pass = src_a < a_ref; break;
+            case 2u: pass = src_a == a_ref; break;
+            case 3u: pass = src_a <= a_ref; break;
+            case 4u: pass = src_a > a_ref; break;
+            case 5u: pass = src_a != a_ref; break;
+            case 6u: pass = src_a >= a_ref; break;
+            default: pass = true; break;
+        }
+        if (!pass) {
+            n_afail++;
+            return false;
+        }
+    }
+
+    int ry = row;
+    if ((alphamode & (1u << 4)) != 0u) {
+        bool dsub = ((fbzmode & (1u << 19)) != 0u) && ((tw(T_FLAGS) & F_DITHERSUB) != 0u);
+        if (dsub && ((fbzmode & (1u << 11)) == 0u)) {
+            uint i = uint((ry & 3) * 4 + (x & 3));
+            dest_r = int(table_byte(TB_SUB_RB + uint(dest_r) * 16u + i));
+            dest_g = int(table_byte(TB_SUB_G + uint(dest_g) * 16u + i));
+            dest_b = int(table_byte(TB_SUB_RB + uint(dest_b) * 16u + i));
+        }
+        if (dsub && ((fbzmode & (1u << 11)) != 0u)) {
+            uint i = uint((ry & 1) * 2 + (x & 1));
+            dest_r = int(table_byte(TB_SUB_RB2 + uint(dest_r) * 4u + i));
+            dest_g = int(table_byte(TB_SUB_G2 + uint(dest_g) * 4u + i));
+            dest_b = int(table_byte(TB_SUB_RB2 + uint(dest_b) * 4u + i));
+        }
+        /* ALPHA_BLEND */
+        int newdest_r = 0, newdest_g = 0, newdest_b = 0;
+        switch ((alphamode >> 12) & 0xfu) {
+            case 0x0u: newdest_r = newdest_g = newdest_b = 0; break;
+            case 0x1u: newdest_r = (dest_r * src_a) / 255; newdest_g = (dest_g * src_a) / 255; newdest_b = (dest_b * src_a) / 255; break;
+            case 0x2u: newdest_r = (dest_r * src_r) / 255; newdest_g = (dest_g * src_g) / 255; newdest_b = (dest_b * src_b) / 255; break;
+            case 0x3u: newdest_r = (dest_r * dest_a) / 255; newdest_g = (dest_g * dest_a) / 255; newdest_b = (dest_b * dest_a) / 255; break;
+            case 0x4u: newdest_r = dest_r; newdest_g = dest_g; newdest_b = dest_b; break;
+            case 0x5u: newdest_r = (dest_r * (255 - src_a)) / 255; newdest_g = (dest_g * (255 - src_a)) / 255; newdest_b = (dest_b * (255 - src_a)) / 255; break;
+            case 0x6u: newdest_r = (dest_r * (255 - src_r)) / 255; newdest_g = (dest_g * (255 - src_g)) / 255; newdest_b = (dest_b * (255 - src_b)) / 255; break;
+            case 0x7u: newdest_r = (dest_r * (255 - dest_a)) / 255; newdest_g = (dest_g * (255 - dest_a)) / 255; newdest_b = (dest_b * (255 - dest_a)) / 255; break;
+            case 0xfu: newdest_r = (dest_r * colbfog_r) / 255; newdest_g = (dest_g * colbfog_g) / 255; newdest_b = (dest_b * colbfog_b) / 255; break;
+            default: break;
+        }
+        switch ((alphamode >> 8) & 0xfu) {
+            case 0x0u: src_r = src_g = src_b = 0; break;
+            case 0x1u: src_r = (src_r * src_a) / 255; src_g = (src_g * src_a) / 255; src_b = (src_b * src_a) / 255; break;
+            case 0x2u: src_r = (src_r * dest_r) / 255; src_g = (src_g * dest_g) / 255; src_b = (src_b * dest_b) / 255; break;
+            case 0x3u: src_r = (src_r * dest_a) / 255; src_g = (src_g * dest_a) / 255; src_b = (src_b * dest_a) / 255; break;
+            case 0x4u: break;
+            case 0x5u: src_r = (src_r * (255 - src_a)) / 255; src_g = (src_g * (255 - src_a)) / 255; src_b = (src_b * (255 - src_a)) / 255; break;
+            case 0x6u: src_r = (src_r * (255 - dest_r)) / 255; src_g = (src_g * (255 - dest_g)) / 255; src_b = (src_b * (255 - dest_b)) / 255; break;
+            case 0x7u: src_r = (src_r * (255 - dest_a)) / 255; src_g = (src_g * (255 - dest_a)) / 255; src_b = (src_b * (255 - dest_a)) / 255; break;
+            case 0xfu: {
+                int _a = min(src_a, 255 - dest_a);
+                src_r  = (src_r * _a) / 255;
+                src_g  = (src_g * _a) / 255;
+                src_b  = (src_b * _a) / 255;
+                break;
+            }
+            default: break;
+        }
+        src_r = clamp8(src_r + newdest_r);
+        src_g = clamp8(src_g + newdest_g);
+        src_b = clamp8(src_b + newdest_b);
+        src_a = ((((alphamode >> 20) & 0xfu) == 4u ? dest_a * 256 : 0) + (((alphamode >> 16) & 0xfu) == 4u ? src_a * 256 : 0)) >> 8;
+    }
+
+    if ((fbzmode & (1u << 8)) != 0u) {
+        if ((fbzmode & (1u << 11)) != 0u) {
+            uint i = uint((ry & 1) * 2 + (x & 1));
+            src_r = int(table_byte(TB_DITHER_RB2 + uint(src_r) * 4u + i));
+            src_g = int(table_byte(TB_DITHER_G2 + uint(src_g) * 4u + i));
+            src_b = int(table_byte(TB_DITHER_RB2 + uint(src_b) * 4u + i));
+        } else {
+            uint i = uint((ry & 3) * 4 + (x & 3));
+            src_r = int(table_byte(TB_DITHER_RB + uint(src_r) * 16u + i));
+            src_g = int(table_byte(TB_DITHER_G + uint(src_g) * 16u + i));
+            src_b = int(table_byte(TB_DITHER_RB + uint(src_b) * 16u + i));
+        }
+    } else {
+        src_r >>= 3;
+        src_g >>= 2;
+        src_b >>= 3;
+    }
+
+    if ((fbzmode & (1u << 9)) != 0u)
+        col = uint(src_b | (src_g << 5) | (src_r << 11)) & 0xffffu;
+    if ((fbzmode & ((1u << 10) | (1u << 18))) == ((1u << 10) | (1u << 18)))
+        aux = uint(src_a) & 0xffffu;
+    else if ((fbzmode & ((1u << 10) | (1u << 4))) == ((1u << 10) | (1u << 4)))
+        aux = uint(new_depth) & 0xffffu;
+    n_out++;
+    return true;
+}
+
+shared uint group_counts[5];
+
+void main() {
+    if (gl_LocalInvocationIndex == 0u)
+        for (int i = 0; i < 5; i++)
+            group_counts[i] = 0u;
+    barrier();
+
+    n_in = n_chroma = n_zfail = n_afail = n_out = 0u;
+    int row = pc.row0 + int(gl_WorkGroupID.y * 8u + gl_LocalInvocationID.y);
+
+    /* The word's two pixels (the buffers and their rows are word aligned: gpu_voodoo.c) */
+    bool ctiled = (pc.tiled & 1u) != 0u;
+    bool atiled = (pc.tiled & 2u) != 0u;
+    uint crow   = ctiled ? (pc.draw_offset + uint(row >> 5) * pc.row_width + uint(row & 31) * 128u) : (pc.draw_offset + uint(row) * pc.row_width);
+    uint arow   = atiled ? (pc.aux_offset + uint(row >> 5) * pc.aux_row_width + uint(row & 31) * 128u) : (pc.aux_offset + uint(row) * pc.row_width);
+    int  x0     = pc.x0 + int(gl_WorkGroupID.x * 16u + gl_LocalInvocationID.x * 2u);
+
+    uint caddr[2], aaddr[2];
+    for (int i = 0; i < 2; i++) {
+        int  x  = x0 + i;
+        uint xt = uint((x & 63) | ((x >> 6) * 128 * 32 / 2));
+        caddr[i] = ((crow + (ctiled ? xt : uint(x)) * 2u) & pc.fb_mask);
+        aaddr[i] = ((arow + (atiled ? xt : uint(x)) * 2u) & pc.fb_mask);
+    }
+    uint cword = 0u, aword = 0u;
+    bool loaded = false, written = false;
+
+    for (uint t = 0u; t < pc.count; t++) {
+        T = t * T_WORDS;
+        if ((row < ti(T_ROWLO)) || (row > ti(T_ROWHI)) || (x0 + 1 < ti(T_XLO)) || (x0 > ti(T_XHI)))
+            continue;
+        uint fbzmode = tw(T_FBZMODE);
+        int  y       = ((fbzmode & (1u << 17)) != 0u) ? (ti(T_YORIGIN) - row) : row;
+        if ((y < ti(T_YSTART)) || (y >= ti(T_YEND)))
+            continue;
+        int xs, xe;
+        if (!span(y, xs, xe))
+            continue;
+        int lo = min(xs, xe);
+        int hi = max(xs, xe);
+        for (int i = 0; i < 2; i++) {
+            int x = x0 + i;
+            if ((x < lo) || (x > hi))
+                continue;
+            if (!loaded) {
+                cword  = fb[caddr[0] >> 2];
+                aword  = fb[aaddr[0] >> 2];
+                loaded = true;
+            }
+            uint cs  = (caddr[i] & 2u) * 8u;
+            uint as  = (aaddr[i] & 2u) * 8u;
+            uint col = (cword >> cs) & 0xffffu;
+            uint aux = (aword >> as) & 0xffffu;
+            if (pixel(x, y, row, xs, col, aux)) {
+                cword   = (cword & ~(0xffffu << cs)) | (col << cs);
+                aword   = (aword & ~(0xffffu << as)) | (aux << as);
+                written = true;
+            }
+        }
+    }
+    if (written) {
+        fb[caddr[0] >> 2] = cword;
+        fb[aaddr[0] >> 2] = aword;
+    }
+
+    atomicAdd(group_counts[0], n_in);
+    atomicAdd(group_counts[1], n_chroma);
+    atomicAdd(group_counts[2], n_zfail);
+    atomicAdd(group_counts[3], n_afail);
+    atomicAdd(group_counts[4], n_out);
+    barrier();
+    if (gl_LocalInvocationIndex == 0u)
+        for (int i = 0; i < 5; i++)
+            if (group_counts[i] != 0u)
+                atomicAdd(counters[i], group_counts[i]);
+}

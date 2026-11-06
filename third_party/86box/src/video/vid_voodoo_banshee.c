@@ -48,6 +48,7 @@
 #include <86box/vid_voodoo_fifo.h>
 #include <86box/vid_voodoo_regs.h>
 #include <86box/vid_voodoo_render.h>
+#include <86box/kairo_gpu.h> /* KairoX86#278 */
 #include <86box/vid_voodoo_texture.h>
 
 #define ROM_BANSHEE                 "roms/video/voodoo/Pci_sg.rom"
@@ -1540,18 +1541,28 @@ banshee_reg_readl(uint32_t addr, void *priv)
                     break;
 
                 case SST_fbiPixelsIn:
+                    if (voodoo->k_gpu != NULL) /* KairoX86#278: what the GPU has to draw, counted */
+                        kairo_voodoo_gpu_drain(voodoo);
                     ret = voodoo->fbiPixelsIn & 0xffffff;
                     break;
                 case SST_fbiChromaFail:
+                    if (voodoo->k_gpu != NULL) /* KairoX86#278: what the GPU has to draw, counted */
+                        kairo_voodoo_gpu_drain(voodoo);
                     ret = voodoo->fbiChromaFail & 0xffffff;
                     break;
                 case SST_fbiZFuncFail:
+                    if (voodoo->k_gpu != NULL) /* KairoX86#278: what the GPU has to draw, counted */
+                        kairo_voodoo_gpu_drain(voodoo);
                     ret = voodoo->fbiZFuncFail & 0xffffff;
                     break;
                 case SST_fbiAFuncFail:
+                    if (voodoo->k_gpu != NULL) /* KairoX86#278: what the GPU has to draw, counted */
+                        kairo_voodoo_gpu_drain(voodoo);
                     ret = voodoo->fbiAFuncFail & 0xffffff;
                     break;
                 case SST_fbiPixelsOut:
+                    if (voodoo->k_gpu != NULL) /* KairoX86#278: what the GPU has to draw, counted */
+                        kairo_voodoo_gpu_drain(voodoo);
                     ret = voodoo->fbiPixelsOut & 0xffffff;
                     break;
 
@@ -1969,6 +1980,9 @@ banshee_read_linear(uint32_t addr, void *priv)
     if (addr >= svga->vram_max)
         return 0xff;
 
+    /* KairoX86#278: what the GPU draws there, drawn first */
+    if (voodoo->k_gpu != NULL)
+        kairo_voodoo_gpu_touch((voodoo_t *) voodoo, addr & svga->vram_mask, 1);
     cycles -= svga->monitor->mon_video_timing_read_b;
 
 #if 0
@@ -2009,6 +2023,9 @@ banshee_read_linear_w(uint32_t addr, void *priv)
     if (addr >= svga->vram_max)
         return 0xff;
 
+    /* KairoX86#278: what the GPU draws there, drawn first */
+    if (voodoo->k_gpu != NULL)
+        kairo_voodoo_gpu_touch((voodoo_t *) voodoo, addr & svga->vram_mask, 2);
     cycles -= svga->monitor->mon_video_timing_read_w;
 
 #if 0
@@ -2050,6 +2067,9 @@ banshee_read_linear_l(uint32_t addr, void *priv)
     if (addr >= svga->vram_max)
         return 0xff;
 
+    /* KairoX86#278: what the GPU draws there, drawn first */
+    if (voodoo->k_gpu != NULL)
+        kairo_voodoo_gpu_touch((voodoo_t *) voodoo, addr & svga->vram_mask, 4);
     cycles -= svga->monitor->mon_video_timing_read_l;
 
 #if 0
@@ -2088,6 +2108,9 @@ banshee_write_linear(uint32_t addr, uint8_t val, void *priv)
     if (addr >= svga->vram_max)
         return;
 
+    /* KairoX86#278: what the GPU draws there, drawn first */
+    if (voodoo->k_gpu != NULL)
+        kairo_voodoo_gpu_touch((voodoo_t *) voodoo, addr & svga->vram_mask, 1);
     cycles -= svga->monitor->mon_video_timing_write_b;
 
     svga->changedvram[addr >> 12]      = changeframecount;
@@ -2128,6 +2151,9 @@ banshee_write_linear_w(uint32_t addr, uint16_t val, void *priv)
     if (addr >= svga->vram_max)
         return;
 
+    /* KairoX86#278: what the GPU draws there, drawn first */
+    if (voodoo->k_gpu != NULL)
+        kairo_voodoo_gpu_touch((voodoo_t *) voodoo, addr & svga->vram_mask, 2);
     cycles -= svga->monitor->mon_video_timing_write_w;
 
     svga->changedvram[addr >> 12]                     = changeframecount;
@@ -2177,6 +2203,9 @@ banshee_write_linear_l(uint32_t addr, uint32_t val, void *priv)
     if (addr >= svga->vram_max)
         return;
 
+    /* KairoX86#278: what the GPU draws there, drawn first */
+    if (voodoo->k_gpu != NULL)
+        kairo_voodoo_gpu_touch((voodoo_t *) voodoo, addr & svga->vram_mask, 4);
     cycles -= svga->monitor->mon_video_timing_write_l;
 
     svga->changedvram[addr >> 12]                     = changeframecount;
@@ -3383,6 +3412,16 @@ banshee_render_sync(svga_t *svga)
 
     if (banshee->voodoo != NULL)
         voodoo_settle(banshee->voodoo);
+    /* KairoX86#278: the desktop and the overlay as shown, drawn first where the GPU draws on them */
+    if ((banshee->voodoo != NULL) && (banshee->voodoo->k_gpu != NULL)) {
+        const uint32_t rows = (uint32_t) svga->vtotal + 1;
+        const uint32_t desktop = (banshee->vidProcCfg & VIDPROCCFG_DESKTOP_TILE)
+                                     ? banshee->desktop_stride_tiled * ((rows + 31) / 32)
+                                     : (banshee->vidDesktopOverlayStride & 0x3fff) * rows;
+        kairo_voodoo_gpu_touch(banshee->voodoo, banshee->vidDesktopStartAddr & svga->vram_mask, desktop);
+        if (banshee->vidProcCfg & VIDPROCCFG_OVERLAY_ENABLE)
+            kairo_voodoo_gpu_touch(banshee->voodoo, svga->overlay_latch.addr & svga->vram_mask, svga->overlay_latch.pitch * rows);
+    }
 }
 
 static void *
@@ -3489,6 +3528,8 @@ banshee_init_common(const device_t *info, const char *fn, const int has_sgram,
     banshee->voodoo->tex_mem[1]   = banshee->svga.vram;
     banshee->voodoo->tex_mem_w[1] = (uint16_t *) banshee->svga.vram;
     banshee->voodoo->texture_mask = banshee->svga.vram_mask;
+    if (kairo_gpu_on) /* KairoX86#278 */
+        banshee->voodoo->k_gpu = kairo_voodoo_gpu_open(banshee->voodoo);
     banshee->voodoo->cmd_status   = (1 << 28);
     banshee->voodoo->cmd_status_2 = (1 << 28);
     voodoo_generate_filter_v1(banshee->voodoo);

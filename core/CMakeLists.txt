@@ -54,7 +54,9 @@ set(KAIRO_LIBRARY ON)
 set(KAIRO_LIBCHDR ON)
 # The frontend, and its view of the hardware 86Box offers for the machine settings (Kairo#143).
 set(KAIRO_FRONTEND "${CMAKE_CURRENT_LIST_DIR}/kairo/frontend.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/hardware.c"
-    "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_scanout.c")
+    "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_scanout.c"
+    "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_voodoo.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_virge.c"
+    "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_pages.c")
 set(QT OFF CACHE BOOL "" FORCE)
 set(OPENAL OFF CACHE BOOL "" FORCE)
 set(RTMIDI OFF CACHE BOOL "" FORCE)
@@ -133,7 +135,7 @@ file(GLOB KAIROX86_GLSLC_HINTS "${ANDROID_NDK}/shader-tools/*" "$ENV{ANDROID_HOM
 find_program(KAIROX86_GLSLC glslc HINTS ${KAIROX86_GLSLC_HINTS} NO_DEFAULT_PATH REQUIRED)
 set(KAIROX86_SHADER_OUT "${CMAKE_CURRENT_BINARY_DIR}/kairo_shaders")
 set(KAIROX86_SHADER_INCS)
-foreach(shader scanout.comp)
+foreach(shader scanout.comp voodoo.comp virge.comp)
     set(source "${CMAKE_CURRENT_LIST_DIR}/kairo/shaders/${shader}")
     set(inc "${KAIROX86_SHADER_OUT}/${shader}.inc")
     add_custom_command(OUTPUT "${inc}"

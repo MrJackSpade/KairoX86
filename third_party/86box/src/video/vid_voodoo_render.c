@@ -93,7 +93,7 @@ typedef struct voodoo_state_t {
 
     int lod_frac[2];
 
-    int stipple;
+    uint32_t stipple; /* KairoX86#288: unsigned, so it turns (it sign-filled as an int) */
 } voodoo_state_t;
 
 #ifdef ENABLE_VOODOO_RENDER_LOG
@@ -819,6 +819,111 @@ voodoo_codegen_alpha_used(const voodoo_params_t *params)
 int voodoo_recomp = 0;
 #endif
 
+/* The triangle's vertices (12.4, sign extended) and its edges' slopes, from its parameters */
+static void
+voodoo_triangle_edges(const voodoo_params_t *params, voodoo_state_t *state)
+{
+    state->vertexAy = params->vertexAy & ~0xffff0000;
+    if (state->vertexAy & 0x8000)
+        state->vertexAy |= 0xffff0000;
+    state->vertexBy = params->vertexBy & ~0xffff0000;
+    if (state->vertexBy & 0x8000)
+        state->vertexBy |= 0xffff0000;
+    state->vertexCy = params->vertexCy & ~0xffff0000;
+    if (state->vertexCy & 0x8000)
+        state->vertexCy |= 0xffff0000;
+
+    state->vertexAx = params->vertexAx & ~0xffff0000;
+    if (state->vertexAx & 0x8000)
+        state->vertexAx |= 0xffff0000;
+    state->vertexBx = params->vertexBx & ~0xffff0000;
+    if (state->vertexBx & 0x8000)
+        state->vertexBx |= 0xffff0000;
+    state->vertexCx = params->vertexCx & ~0xffff0000;
+    if (state->vertexCx & 0x8000)
+        state->vertexCx |= 0xffff0000;
+
+    if (state->vertexBy - state->vertexAy)
+        state->dxAB = (int) ((((int64_t) state->vertexBx << 12) - ((int64_t) state->vertexAx << 12)) << 4) / (state->vertexBy - state->vertexAy);
+    else
+        state->dxAB = 0;
+    if (state->vertexCy - state->vertexAy)
+        state->dxAC = (int) ((((int64_t) state->vertexCx << 12) - ((int64_t) state->vertexAx << 12)) << 4) / (state->vertexCy - state->vertexAy);
+    else
+        state->dxAC = 0;
+    if (state->vertexCy - state->vertexBy)
+        state->dxBC = (int) ((((int64_t) state->vertexCx << 12) - ((int64_t) state->vertexBx << 12)) << 4) / (state->vertexCy - state->vertexBy);
+    else
+        state->dxBC = 0;
+    state->xdir = params->sign ? -1 : 1;
+}
+
+/* KairoX86#288: the pixels line y of the triangle draws: its span after clipping, as
+   voodoo_half_triangle finds it */
+static int
+voodoo_span_pixels(const voodoo_params_t *params, const voodoo_state_t *state, int y)
+{
+    const int real_y = (y << 4) + 8;
+    int       x      = (state->vertexAx << 12) + ((state->dxAC * (real_y - state->vertexAy)) >> 4);
+    int       x2;
+
+    if (real_y < state->vertexBy)
+        x2 = (state->vertexAx << 12) + ((state->dxAB * (real_y - state->vertexAy)) >> 4);
+    else
+        x2 = (state->vertexBx << 12) + ((state->dxBC * (real_y - state->vertexBy)) >> 4);
+    if (state->xdir > 0)
+        x2 -= (1 << 16);
+    else
+        x -= (1 << 16);
+    x  = (x + 0x7000) >> 16;
+    x2 = (x2 + 0x7000) >> 16;
+    if (params->fbzMode & 1) {
+        if (state->xdir > 0) {
+            if (x < params->clipLeft)
+                x = params->clipLeft;
+            if (x2 >= params->clipRight)
+                x2 = params->clipRight - 1;
+        } else {
+            if (x >= params->clipRight)
+                x = params->clipRight - 1;
+            if (x2 < params->clipLeft)
+                x2 = params->clipLeft;
+        }
+    }
+    if ((x2 < x && state->xdir > 0) || (x2 > x && state->xdir < 0))
+        return 0;
+    return ((x2 > x) ? (x2 - x) : (x - x2)) + 1;
+}
+
+/* KairoX86#288: every pixel the triangle draws on this card, as voodoo_half_triangle walks its lines */
+uint32_t
+voodoo_triangle_pixels(voodoo_t *voodoo, const voodoo_params_t *params)
+{
+    voodoo_state_t state  = { 0 };
+    const int      y_diff = SLI_ENABLED ? 2 : 1;
+    uint32_t       pixels = 0;
+    int            y;
+    int            yend;
+
+    voodoo_triangle_edges(params, &state);
+    y    = (state.vertexAy + 7) >> 4;
+    yend = (state.vertexCy + 7) >> 4;
+    if ((params->fbzMode & 1) && (y < params->clipLowY))
+        y = params->clipLowY;
+    if ((params->fbzMode & 1) && (yend >= params->clipHighY))
+        yend = params->clipHighY;
+    if (SLI_ENABLED) {
+        const int y_origin = (voodoo->type >= VOODOO_BANSHEE) ? voodoo->y_origin_swap : (voodoo->v_disp - 1);
+        const int test_y   = (params->fbzMode & (1 << 17)) ? (y_origin - y) : y;
+
+        if ((!(voodoo->initEnable & INITENABLE_SLI_MASTER_SLAVE) && (test_y & 1)) || ((voodoo->initEnable & INITENABLE_SLI_MASTER_SLAVE) && !(test_y & 1)))
+            y++;
+    }
+    for (; y < yend; y += y_diff)
+        pixels += (uint32_t) voodoo_span_pixels(params, &state, y);
+    return pixels;
+}
+
 static void
 voodoo_half_triangle(voodoo_t *voodoo, voodoo_params_t *params, voodoo_state_t *state, int ystart, int yend, int odd_even)
 {
@@ -961,7 +1066,17 @@ voodoo_half_triangle(voodoo_t *voodoo, voodoo_params_t *params, voodoo_state_t *
     voodoo_render_log("Start %i %i\n", ystart, voodoo->fbzMode & (1 << 17));
 #endif
 
+    /* KairoX86#288: the rotating stipple's turns before each line */
+    const int stipple_rotating = (params->fbzMode & (FBZ_STIPPLE | FBZ_STIPPLE_PATT)) == FBZ_STIPPLE;
+    uint32_t  stipple_pixels   = 0;
+
     for (; state->y < yend; state->y += y_diff) {
+        if (stipple_rotating) {
+            const uint32_t turns = stipple_pixels & 31;
+
+            state->stipple = turns ? ((params->stipple << turns) | (params->stipple >> (32 - turns))) : params->stipple;
+            stipple_pixels += (uint32_t) voodoo_span_pixels(params, state, state->y);
+        }
         int       x;
         int       x2;
         int       real_y = (state->y << 4) + 8;
@@ -1687,41 +1802,10 @@ voodoo_render_log("voodoo_triangle %i %i %i : vA %f, %f  vB %f, %f  vC %f, %f f 
 
     tris++;
 
-    state.vertexAy = params->vertexAy & ~0xffff0000;
-    if (state.vertexAy & 0x8000)
-        state.vertexAy |= 0xffff0000;
-    state.vertexBy = params->vertexBy & ~0xffff0000;
-    if (state.vertexBy & 0x8000)
-        state.vertexBy |= 0xffff0000;
-    state.vertexCy = params->vertexCy & ~0xffff0000;
-    if (state.vertexCy & 0x8000)
-        state.vertexCy |= 0xffff0000;
-
-    state.vertexAx = params->vertexAx & ~0xffff0000;
-    if (state.vertexAx & 0x8000)
-        state.vertexAx |= 0xffff0000;
-    state.vertexBx = params->vertexBx & ~0xffff0000;
-    if (state.vertexBx & 0x8000)
-        state.vertexBx |= 0xffff0000;
-    state.vertexCx = params->vertexCx & ~0xffff0000;
-    if (state.vertexCx & 0x8000)
-        state.vertexCx |= 0xffff0000;
+    voodoo_triangle_edges(params, &state); /* KairoX86#288: shared with voodoo_triangle_pixels */
 
     vertexAy_adjusted = (state.vertexAy + 7) >> 4;
     vertexCy_adjusted = (state.vertexCy + 7) >> 4;
-
-    if (state.vertexBy - state.vertexAy)
-        state.dxAB = (int) ((((int64_t) state.vertexBx << 12) - ((int64_t) state.vertexAx << 12)) << 4) / (state.vertexBy - state.vertexAy);
-    else
-        state.dxAB = 0;
-    if (state.vertexCy - state.vertexAy)
-        state.dxAC = (int) ((((int64_t) state.vertexCx << 12) - ((int64_t) state.vertexAx << 12)) << 4) / (state.vertexCy - state.vertexAy);
-    else
-        state.dxAC = 0;
-    if (state.vertexCy - state.vertexBy)
-        state.dxBC = (int) ((((int64_t) state.vertexCx << 12) - ((int64_t) state.vertexBx << 12)) << 4) / (state.vertexCy - state.vertexBy);
-    else
-        state.dxBC = 0;
 
     state.lod_min[0] = (params->tLOD[0] & 0x3f) << 6;
     state.lod_max[0] = ((params->tLOD[0] >> 6) & 0x3f) << 6;
@@ -1733,7 +1817,6 @@ voodoo_render_log("voodoo_triangle %i %i %i : vA %f, %f  vB %f, %f  vC %f, %f f 
         state.lod_max[1] = 0x800;
 
     state.xstart = state.xend = state.vertexAx << 8;
-    state.xdir                = params->sign ? -1 : 1;
 
     state.y    = (state.vertexAy + 8) >> 4;
     state.ydir = 1;
@@ -1845,6 +1928,27 @@ voodoo_mark_changed(voodoo_t *voodoo, uint32_t row, int tiled, int x0, int x1)
 void
 voodoo_queue_triangle(voodoo_t *voodoo, voodoo_params_t *params)
 {
+    /* KairoX86#288: the rotating stipple's register, turned on by the triangle's pixels once it is queued */
+    const int stipple_rotating = (params->fbzMode & (FBZ_STIPPLE | FBZ_STIPPLE_PATT)) == FBZ_STIPPLE;
+    uint32_t  stipple_next     = params->stipple;
+
+    if (stipple_rotating) {
+        const uint32_t turns = voodoo_triangle_pixels(voodoo, params) & 31;
+
+        if (turns)
+            stipple_next = (params->stipple << turns) | (params->stipple >> (32 - turns));
+    }
+
+    /* KairoX86#278: on the GPU, recorded for its kernel */
+    if (voodoo->k_gpu != NULL) {
+        voodoo_use_texture(voodoo, params, 0);
+        if (voodoo->dual_tmus)
+            voodoo_use_texture(voodoo, params, 1);
+        kairo_voodoo_gpu_queue(voodoo, params);
+        if (stipple_rotating)
+            voodoo->params.stipple = stipple_next;
+        return;
+    }
     voodoo_params_t *params_new = &voodoo->params_buffer[PARAMS_WRITE_IDX(voodoo) & PARAM_MASK];
 
     while (PARAM_FULL(0) || (voodoo->render_threads >= 2 && PARAM_FULL(1)) || (voodoo->render_threads == 4 && (PARAM_FULL(2) || PARAM_FULL(3)))) {
@@ -1870,6 +1974,8 @@ voodoo_queue_triangle(voodoo_t *voodoo, voodoo_params_t *params)
         voodoo_use_texture(voodoo, params, 1);
 
     memcpy(params_new, params, sizeof(voodoo_params_t));
+    if (stipple_rotating)
+        voodoo->params.stipple = stipple_next;
 
     PARAMS_WRITE_IDX(voodoo)++;
 

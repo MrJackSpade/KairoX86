@@ -35,6 +35,7 @@
 #include <86box/vid_svga.h>
 #include <86box/vid_voodoo_common.h>
 #include <86box/vid_voodoo_display.h>
+#include <86box/vid_voodoo_fifo.h> /* KairoX86#291: voodoo_settle() */
 #include <86box/vid_voodoo_regs.h>
 #include <86box/vid_voodoo_render.h>
 
@@ -533,8 +534,12 @@ voodoo_callback(void *priv)
                 draw_line   = voodoo->line;
             }
 
+            /* KairoX86#291: the line with every write queued before it drawn */
+            voodoo_settle(draw_voodoo);
             if (draw_voodoo->dirty_line[draw_line]) {
                 uint32_t *p   = &monitor->target_buffer->line[voodoo->line + v_y_add][v_x_add];
+                if (draw_voodoo->k_gpu != NULL) /* KairoX86#278: the line, drawn */
+                    kairo_voodoo_gpu_touch(draw_voodoo, draw_voodoo->front_offset + draw_line * draw_voodoo->row_width, draw_voodoo->row_width);
                 uint16_t *src = (uint16_t *) &draw_voodoo->fb_mem[draw_voodoo->front_offset + draw_line * draw_voodoo->row_width];
                 int       x;
 

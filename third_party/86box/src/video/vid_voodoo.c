@@ -47,6 +47,38 @@
 #include <86box/vid_voodoo_render.h>
 #include <86box/vid_voodoo_texture.h>
 #include <86box/config.h> /* KairoX86#228: config_kairo_int() */
+#include <86box/kairo_gpu.h> /* KairoX86#278 */
+
+/* KairoX86#278: a TMU's texture cache entry, and the caches: with the GPU on, one block of memory it
+   shares per TMU */
+#define VOODOO_TEXTURE_ENTRY_BYTES ((256 * 256 + 256 * 256 + 128 * 128 + 64 * 64 + 32 * 32 + 16 * 16 + 8 * 8 + 4 * 4 + 2 * 2) * 4)
+
+static void
+voodoo_alloc_texture_caches(voodoo_t *voodoo)
+{
+    for (int tmu = 0; tmu < (voodoo->dual_tmus ? 2 : 1); tmu++) {
+        uint8_t *block = kairo_gpu_on ? kairo_gpu_alloc((size_t) VOODOO_TEXTURE_ENTRY_BYTES * TEX_CACHE_MAX) : NULL;
+
+        for (int c = 0; c < TEX_CACHE_MAX; c++) {
+            voodoo->texture_cache[tmu][c].data     = kairo_gpu_on ? (uint32_t *) (block + (size_t) VOODOO_TEXTURE_ENTRY_BYTES * c)
+                                                                  : calloc(1, VOODOO_TEXTURE_ENTRY_BYTES);
+            voodoo->texture_cache[tmu][c].base     = -1; /*invalid*/
+            voodoo->texture_cache[tmu][c].refcount = 0;
+        }
+    }
+}
+
+static void
+voodoo_free_texture_caches(voodoo_t *voodoo)
+{
+    for (int tmu = 0; tmu < (voodoo->dual_tmus ? 2 : 1); tmu++) {
+        if (kairo_gpu_on)
+            kairo_gpu_free(voodoo->texture_cache[tmu][0].data);
+        else
+            for (int c = 0; c < TEX_CACHE_MAX; c++)
+                free(voodoo->texture_cache[tmu][c].data);
+    }
+}
 
 rgba8_t rgb332[0x100];
 rgba8_t ai44[0x100];
@@ -525,18 +557,28 @@ voodoo_readl(uint32_t addr, void *priv)
                 break;
 
             case SST_fbiPixelsIn:
+                if (voodoo->k_gpu != NULL) /* KairoX86#278: what the GPU has to draw, counted */
+                    kairo_voodoo_gpu_drain(voodoo);
                 temp = voodoo->fbiPixelsIn & 0xffffff;
                 break;
             case SST_fbiChromaFail:
+                if (voodoo->k_gpu != NULL) /* KairoX86#278: what the GPU has to draw, counted */
+                    kairo_voodoo_gpu_drain(voodoo);
                 temp = voodoo->fbiChromaFail & 0xffffff;
                 break;
             case SST_fbiZFuncFail:
+                if (voodoo->k_gpu != NULL) /* KairoX86#278: what the GPU has to draw, counted */
+                    kairo_voodoo_gpu_drain(voodoo);
                 temp = voodoo->fbiZFuncFail & 0xffffff;
                 break;
             case SST_fbiAFuncFail:
+                if (voodoo->k_gpu != NULL) /* KairoX86#278: what the GPU has to draw, counted */
+                    kairo_voodoo_gpu_drain(voodoo);
                 temp = voodoo->fbiAFuncFail & 0xffffff;
                 break;
             case SST_fbiPixelsOut:
+                if (voodoo->k_gpu != NULL) /* KairoX86#278: what the GPU has to draw, counted */
+                    kairo_voodoo_gpu_drain(voodoo);
                 temp = voodoo->fbiPixelsOut & 0xffffff;
                 break;
 
@@ -1281,23 +1323,16 @@ voodoo_card_init(const device_t *info)
 
     mem_mapping_add(&voodoo->mapping, 0, 0, NULL, voodoo_readw, voodoo_readl, NULL, voodoo_writew, voodoo_writel, NULL, MEM_MAPPING_EXTERNAL, voodoo);
 
-    voodoo->fb_mem     = calloc(1, 4 * 1024 * 1024);
+    voodoo->fb_mem     = kairo_gpu_on ? kairo_gpu_alloc(4 * 1024 * 1024) : calloc(1, 4 * 1024 * 1024); /* KairoX86#278 */
     voodoo->tex_mem[0] = calloc(1, voodoo->texture_size * 1024 * 1024);
     if (voodoo->dual_tmus)
         voodoo->tex_mem[1] = calloc(1, voodoo->texture_size * 1024 * 1024);
     voodoo->tex_mem_w[0] = (uint16_t *) voodoo->tex_mem[0];
     voodoo->tex_mem_w[1] = (uint16_t *) voodoo->tex_mem[1];
 
-    for (c = 0; c < TEX_CACHE_MAX; c++) {
-        voodoo->texture_cache[0][c].data     = calloc(1, (256 * 256 + 256 * 256 + 128 * 128 + 64 * 64 + 32 * 32 + 16 * 16 + 8 * 8 + 4 * 4 + 2 * 2) * 4);
-        voodoo->texture_cache[0][c].base     = -1; /*invalid*/
-        voodoo->texture_cache[0][c].refcount = 0;
-        if (voodoo->dual_tmus) {
-            voodoo->texture_cache[1][c].data     = calloc(1, (256 * 256 + 256 * 256 + 128 * 128 + 64 * 64 + 32 * 32 + 16 * 16 + 8 * 8 + 4 * 4 + 2 * 2) * 4);
-            voodoo->texture_cache[1][c].base     = -1; /*invalid*/
-            voodoo->texture_cache[1][c].refcount = 0;
-        }
-    }
+    voodoo_alloc_texture_caches(voodoo); /* KairoX86#278 */
+    if (kairo_gpu_on)
+        voodoo->k_gpu = kairo_voodoo_gpu_open(voodoo);
 
     timer_add(&voodoo->timer, voodoo_callback, voodoo, 1);
 
@@ -1450,16 +1485,7 @@ voodoo_2d3d_card_init(int type)
     /*generate filter lookup tables*/
     voodoo_generate_filter_v2(voodoo);
 
-    for (c = 0; c < TEX_CACHE_MAX; c++) {
-        voodoo->texture_cache[0][c].data     = calloc(1, (256 * 256 + 256 * 256 + 128 * 128 + 64 * 64 + 32 * 32 + 16 * 16 + 8 * 8 + 4 * 4 + 2 * 2) * 4);
-        voodoo->texture_cache[0][c].base     = -1; /*invalid*/
-        voodoo->texture_cache[0][c].refcount = 0;
-        if (voodoo->dual_tmus) {
-            voodoo->texture_cache[1][c].data     = calloc(1, (256 * 256 + 256 * 256 + 128 * 128 + 64 * 64 + 32 * 32 + 16 * 16 + 8 * 8 + 4 * 4 + 2 * 2) * 4);
-            voodoo->texture_cache[1][c].base     = -1; /*invalid*/
-            voodoo->texture_cache[1][c].refcount = 0;
-        }
-    }
+    voodoo_alloc_texture_caches(voodoo); /* KairoX86#278: its GPU state once the Banshee gives it memory */
 
     timer_add(&voodoo->timer, voodoo_callback, voodoo, 1);
 
@@ -1727,16 +1753,16 @@ voodoo_card_close(voodoo_t *voodoo)
               voodoo->readl_tex_count);
     }
 
-    for (uint8_t c = 0; c < TEX_CACHE_MAX; c++) {
-        if (voodoo->dual_tmus)
-            free(voodoo->texture_cache[1][c].data);
-        free(voodoo->texture_cache[0][c].data);
-    }
+    kairo_voodoo_gpu_close(voodoo); /* KairoX86#278 */
+    voodoo_free_texture_caches(voodoo);
 #ifndef NO_CODEGEN
     voodoo_codegen_close(voodoo);
 #endif
     if (voodoo->type < VOODOO_BANSHEE && voodoo->fb_mem) {
-        free(voodoo->fb_mem);
+        if (kairo_gpu_on) /* KairoX86#278 */
+            kairo_gpu_free(voodoo->fb_mem);
+        else
+            free(voodoo->fb_mem);
         if (voodoo->dual_tmus)
             free(voodoo->tex_mem[1]);
         free(voodoo->tex_mem[0]);

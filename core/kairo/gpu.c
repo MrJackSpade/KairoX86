@@ -276,6 +276,8 @@ kairo_gpu_close(void)
 {
     if (gpu.device != VK_NULL_HANDLE) {
         kairo_gpu_scanout_close();
+        kairo_gpu_voodoo_close();
+        kairo_gpu_virge_close();
         vkDestroyFence(gpu.device, gpu.done, NULL);
         vkDestroyCommandPool(gpu.device, gpu.commands, NULL);
         vkDestroyDevice(gpu.device, NULL);
@@ -324,6 +326,54 @@ kairo_gpu_buffer_free(kairo_gpu_buffer_t *buffer)
     vkFreeMemory(gpu.device, impl->memory, NULL);
     free(impl);
     free(buffer);
+}
+
+/* The card memory allocated (kairo_gpu_alloc), found by where it starts */
+#define CARD_MEMORY_MAX 64
+static kairo_gpu_buffer_t *card_memory[CARD_MEMORY_MAX];
+static pthread_mutex_t     card_memory_lock = PTHREAD_MUTEX_INITIALIZER;
+
+void *
+kairo_gpu_alloc(size_t size)
+{
+    kairo_gpu_buffer_t *buffer = kairo_gpu_buffer(size);
+    pthread_mutex_lock(&card_memory_lock);
+    int i = 0;
+    while ((i < CARD_MEMORY_MAX) && (card_memory[i] != NULL))
+        i++;
+    if (i == CARD_MEMORY_MAX)
+        fatal("The PC stopped: more than %d blocks of card memory on the GPU\n", CARD_MEMORY_MAX);
+    card_memory[i] = buffer;
+    pthread_mutex_unlock(&card_memory_lock);
+    return buffer->data;
+}
+
+kairo_gpu_buffer_t *
+kairo_gpu_buffer_of(const void *data)
+{
+    kairo_gpu_buffer_t *found = NULL;
+    pthread_mutex_lock(&card_memory_lock);
+    for (int i = 0; (i < CARD_MEMORY_MAX) && (found == NULL); i++)
+        if ((card_memory[i] != NULL) && (card_memory[i]->data == data))
+            found = card_memory[i];
+    pthread_mutex_unlock(&card_memory_lock);
+    if (found == NULL)
+        fatal("The PC stopped: card memory the GPU does not share\n");
+    return found;
+}
+
+void
+kairo_gpu_free(void *data)
+{
+    if (data == NULL)
+        return;
+    kairo_gpu_buffer_t *buffer = kairo_gpu_buffer_of(data);
+    pthread_mutex_lock(&card_memory_lock);
+    for (int i = 0; i < CARD_MEMORY_MAX; i++)
+        if (card_memory[i] == buffer)
+            card_memory[i] = NULL;
+    pthread_mutex_unlock(&card_memory_lock);
+    kairo_gpu_buffer_free(buffer);
 }
 
 kairo_gpu_kernel_t *

@@ -1462,6 +1462,9 @@ banshee_do_2d_launch(voodoo_t *voodoo)
 static void
 banshee_do_2d_blit(voodoo_t *voodoo, int count, uint32_t data)
 {
+    /* KairoX86#278: the 2D engine works on memory the GPU may still draw on */
+    if (voodoo->k_gpu != NULL)
+        kairo_voodoo_gpu_drain(voodoo);
     if (voodoo->launch_pending) {
         banshee_do_2d_launch(voodoo);
     }

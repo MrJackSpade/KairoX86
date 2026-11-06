@@ -220,6 +220,9 @@ typedef struct svga_t {
     /* Called before each line is rendered, so a card whose accelerator runs
        on another thread can finish the work queued so far. */
     void (*render_sync)(struct svga_t *svga);
+    /* KairoX86#272: before the processor reads or writes video memory, the card's GPU work there drawn
+       (addr and len: the bytes; NULL: no GPU work) */
+    void (*kairo_touch)(struct svga_t *svga, uint32_t addr, uint32_t len);
 
     void (*write)(uint32_t addr, uint8_t val, void *priv);
     void (*writew)(uint32_t addr, uint16_t val, void *priv);

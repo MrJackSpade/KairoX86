@@ -376,7 +376,9 @@ voodoo_settle(voodoo_t *voodoo)
         voodoo_wake_fifo_thread_now(voodoo);
         plat_delay_ms(0);
     }
-    voodoo_wait_for_render_thread_idle(voodoo);
+    /* KairoX86#278: on the GPU, the caller touches what the line shows instead */
+    if (voodoo->k_gpu == NULL)
+        voodoo_wait_for_render_thread_idle(voodoo);
 }
 
 void

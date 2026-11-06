@@ -2226,7 +2226,7 @@ voodoo_generate(uint8_t *code_block, voodoo_t *voodoo, voodoo_params_t *params, 
              * TBZ w4, #31, skip
              */
             addlong(ARM64_LDR_W(4, 0, STATE_stipple));
-            addlong(ARM64_ROR_IMM(4, 4, 1));
+            addlong(ARM64_ROR_IMM(4, 4, 31)); /* KairoX86#288: right by 31, left by 1, as the C code turns it */
             addlong(ARM64_STR_W(4, 0, STATE_stipple));
             /* TBZ w4, #31, stipple_skip (forward, patch later) */
             stipple_skip_pos = block_pos;

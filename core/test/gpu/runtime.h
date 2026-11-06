@@ -51,6 +51,40 @@ int card_class(void);
 /* Whether the card is a VGA */
 int is_vga(void);
 
+/* The VBE BIOS's information blocks (VBE 2.0), at fixed addresses below 64 KB so ES:DI (ES = 0) reaches them */
+struct vbe_info {
+    char signature[4];
+    u16  version;
+    u32  oem;
+    u32  caps;
+    u32  modes; /* far pointer: offset low, segment high */
+    u16  memory;
+    u8   rest[492];
+} __attribute__((packed));
+
+struct vbe_mode_info {
+    u16 attributes;
+    u8  window_a, window_b;
+    u16 granularity, window_size, segment_a, segment_b;
+    u32 window_func;
+    u16 pitch;
+    u16 width, height;
+    u8  char_w, char_h, planes, bpp, banks, model, bank_size, image_pages, reserved0;
+    u8  red_size, red_pos, green_size, green_pos, blue_size, blue_pos, rsv_size, rsv_pos, direct_info;
+    u32 framebuffer;
+    u8  rest[212];
+} __attribute__((packed));
+
+#define VBE_INFO  ((struct vbe_info *) 0x6000)
+#define VBE_MODE  ((struct vbe_mode_info *) 0x6200)
+#define VBE_MODES ((u16 *) 0x6400)
+
+/* The VBE BIOS's mode list, copied to VBE_MODES before any other call can change it: how many (-1: no VBE) */
+int vbe_modes(void);
+/* The first listed mode width x height of bpp bits a pixel with a linear frame buffer, its information in
+   VBE_MODE (bpp 15 also takes a 16-bit mode whose green is 5 bits): its number, or 0 when none is */
+u16 vbe_find(u16 width, u16 height, u8 bpp);
+
 /* A 32-bit pattern value for a pixel: changes from each pixel to the next across and down, so a
    misplaced, dropped or doubled pixel shows in the picture */
 static inline u32 pattern(u32 x, u32 y, u32 salt) {

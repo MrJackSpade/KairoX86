@@ -1,0 +1,420 @@
+#version 450
+/*
+ * The S3 ViRGE's triangles on the GPU (KairoX86#272): 86Box's software rasteriser (vid_s3_virge.c: tri()
+ * and the samplers and pixel functions s3_virge_triangle picks) for a batch of triangles, in the order the
+ * guest sent them, into the card's video memory.
+ *
+ * Each invocation owns four horizontally adjacent pixels of one row (x a multiple of 4): their colour
+ * bytes (8 at 15/16 bits, 12 at 24) and their depth words. Every invocation runs through the whole
+ * batch in order, so each pixel sees the triangles as the CPU draws them. A pixel's values are the CPU's
+ * sums in closed form: it adds the same integer gradients line by line and pixel by pixel.
+ *
+ * The record is core/kairo/gpu_virge.c's (kairo_virge_tri_t), as words.
+ *
+ * Copyright 2026 MrJackSpade. GPL-2.0-or-later.
+ */
+layout(local_size_x = 16, local_size_y = 4) in;
+
+layout(std430, binding = 0) readonly buffer Tris { uint tri[]; };
+layout(std430, binding = 1) buffer Vram { uint vram[]; };
+
+layout(push_constant) uniform Push {
+    uint count;
+    uint vram_mask;
+    int  x0;   /* the dispatch's first pixel (a multiple of 4) and row */
+    int  row0;
+    uint flags; /* bit 0 bilinear, bit 1 dithering, bit 2 the 375's perspective (ViRGE/DX, GX2 on) */
+} pc;
+
+/* The record (kairo_virge_tri_t in 86box/kairo_gpu_virge.h), word offsets */
+const uint T_CMD       = 0u;
+const uint T_CLIP_L    = 1u;
+const uint T_CLIP_R    = 2u;
+const uint T_CLIP_T    = 3u;
+const uint T_CLIP_B    = 4u;
+const uint T_DEST_BASE = 5u;
+const uint T_DEST_STR  = 6u;
+const uint T_Z_BASE    = 7u;
+const uint T_Z_STR     = 8u;
+const uint T_TEX_LEVEL = 9u;  /* [10]: each level's byte address */
+const uint T_TEX_BDR   = 19u;
+const uint T_TBU       = 20u; /* << 11 */
+const uint T_TBV       = 21u;
+const uint T_FOG       = 22u; /* b | g << 8 | r << 16 */
+const uint T_TYS       = 23u;
+const uint T_TY01      = 24u;
+const uint T_TY12      = 25u;
+const uint T_TLR       = 26u;
+const uint T_TXS       = 27u;
+const uint T_TXEND01   = 28u;
+const uint T_TXEND12   = 29u;
+const uint T_DX02      = 30u;
+const uint T_DX01      = 31u;
+const uint T_DX12      = 32u;
+const uint T_START     = 33u; /* [9]: u v z r g b a d w */
+const uint T_DX        = 42u; /* [9]: per pixel */
+const uint T_DY        = 51u; /* [9]: per line */
+const uint T_ROW_LO    = 60u;
+const uint T_ROW_HI    = 61u;
+const uint T_X_LO      = 62u;
+const uint T_X_HI      = 63u;
+const uint T_STRIDE    = 64u;
+
+uint T;
+uint tw(uint o) { return tri[T + o]; }
+int  ti(uint o) { return int(tri[T + o]); }
+
+/* The 9 values: u v z r g b a d w */
+const uint V_U = 0u, V_V = 1u, V_Z = 2u, V_R = 3u, V_G = 4u, V_B = 5u, V_A = 6u, V_D = 7u, V_W = 8u;
+
+/* The colour and depth bytes this invocation owns, read once and written once */
+uint cw[3];
+uint zw[2];
+bool written;
+bool z_written;
+
+uint vram_byte(uint addr) {
+    addr &= pc.vram_mask;
+    return (vram[addr >> 2] >> ((addr & 3u) * 8u)) & 0xffu;
+}
+uint vram_u16(uint addr) { return vram_byte(addr) | (vram_byte(addr + 1u) << 8); }
+uint vram_u32(uint addr) { return vram_u16(addr) | (vram_u16(addr + 2u) << 16); }
+
+/* The owned colour bytes: byte i of the group (0 to 11) */
+uint own_byte(uint i) { return (cw[i >> 2] >> ((i & 3u) * 8u)) & 0xffu; }
+void set_own_byte(uint i, uint v) { cw[i >> 2] = (cw[i >> 2] & ~(0xffu << ((i & 3u) * 8u))) | ((v & 0xffu) << ((i & 3u) * 8u)); }
+uint own_z(uint p) { return (zw[p >> 1] >> ((p & 1u) * 16u)) & 0xffffu; }
+void set_own_z(uint p, uint v) { zw[p >> 1] = (zw[p >> 1] & ~(0xffffu << ((p & 1u) * 16u))) | ((v & 0xffffu) << ((p & 1u) * 16u)); }
+
+/* n / 255 as C divides: toward zero (a GPU's signed division need not be) */
+int div255(int n) {
+    int q = int(uint(abs(n)) / 255u);
+    return (n < 0) ? -q : q;
+}
+
+int clamp_wrap8(int v) { return ((v & ~0xff) != 0) ? ((v < 0) ? 0 : 0xff) : v; }
+
+/* ---- textures (tex_ARGB8888, _4444, _1555 and their _nowrap forms) ---- */
+ivec4 tex_read(int level, int shift, int u, int v) {
+    uint cmd    = tw(T_CMD);
+    uint format = (cmd >> 5) & 7u;
+    bool wrap   = (cmd & (1u << 26)) != 0u;
+    uint offset = uint(((u & 0x7fc0000) >> shift) + (((v & 0x7fc0000) >> shift) << level));
+    uint base   = tw(T_TEX_LEVEL + uint(level));
+    bool border = !wrap && ((uint(u | v) & 0xf8000000u) == 0xf8000000u);
+    ivec4 o;
+    if (format == 0u) {
+        uint val = border ? tw(T_TEX_BDR) : vram_u32(base + offset * 4u);
+        o = ivec4(int((val >> 16) & 0xffu), int((val >> 8) & 0xffu), int(val & 0xffu), int((val >> 24) & 0xffu));
+    } else if (format == 1u) {
+        uint val = border ? (tw(T_TEX_BDR) & 0xffffu) : vram_u16(base + offset * 2u);
+        o = ivec4(int(((val & 0x0f00u) >> 4) | ((val & 0x0f00u) >> 8)), int((val & 0x00f0u) | ((val & 0x00f0u) >> 4)),
+                  int(((val & 0x000fu) << 4) | (val & 0x000fu)), int(((val & 0xf000u) >> 8) | ((val & 0xf000u) >> 12)));
+    } else {
+        uint val = border ? (tw(T_TEX_BDR) & 0xffffu) : vram_u16(base + offset * 2u);
+        o = ivec4(int(((val & 0x7c00u) >> 7) | ((val & 0x7000u) >> 12)), int(((val & 0x03e0u) >> 2) | ((val & 0x0380u) >> 7)),
+                  int(((val & 0x001fu) << 3) | ((val & 0x001cu) >> 2)), ((val & 0x8000u) != 0u) ? 0xff : 0);
+    }
+    return o;
+}
+
+ivec4 tex_point(int level, int u, int v) { return tex_read(level, 18 + (9 - level), u, v); }
+
+ivec4 tex_filter(int level, int u, int v) {
+    int   shift = 18 + (9 - level);
+    int   off   = 1 << shift;
+    ivec4 s0    = tex_read(level, shift, u, v);
+    int   du    = (u >> (shift - 8)) & 0xff;
+    int   dv    = (v >> (shift - 8)) & 0xff;
+    ivec4 s1    = tex_read(level, shift, u + off, v);
+    ivec4 s2    = tex_read(level, shift, u, v + off);
+    ivec4 s3    = tex_read(level, shift, u + off, v + off);
+    int   d0 = (256 - du) * (256 - dv), d1 = du * (256 - dv), d2 = (256 - du) * dv, d3 = du * dv;
+    return (s0 * d0 + s1 * d1 + s2 * d2 + s3 * d3) >> 16;
+}
+
+/* ((1ULL << 27) << 19) / (int64_t) w, as the CPU's int32_t cast keeps it: the left side unsigned, so the
+   division is unsigned and a negative w (a divisor above 2^63) gives 0 */
+int recip46(int w) {
+    if (w <= 0)
+        return 0;
+    /* The quotient's low 32 bits, by long division of 2^46 by w */
+    uint d = uint(w);
+    uint r = 0u;
+    uint q = 0u;
+    for (int i = 46; i >= 0; i--) {
+        /* r < d <= 2^31: r << 1 fits 33 bits; compare in two steps */
+        bool top = (r & 0x80000000u) != 0u;
+        r = (r << 1) | ((i == 46) ? 1u : 0u);
+        q <<= 1;
+        if (top || (r >= d)) {
+            r -= d;
+            q |= 1u;
+        }
+    }
+    return int(q);
+}
+
+/* (int32)(((int64) a * b) >> s), s 12 to 21 */
+int mul_shift(int a, int b, int s) {
+    int hi, lo;
+    imulExtended(a, b, hi, lo);
+    return int((uint(lo) >> uint(s)) | (uint(hi) << uint(32 - s)));
+}
+
+/* state->tex_sample(): the texel at the pixel's u, v (and d, w) */
+ivec4 tex_sample(int u, int v, int d, int w) {
+    uint cmd   = tw(T_CMD);
+    int  max_d = int((cmd >> 8) & 15u);
+    uint mode  = ((cmd >> 12) & 7u) | (((cmd & (1u << 29)) != 0u) ? 8u : 0u);
+    bool filt  = ((mode & 2u) != 0u) && ((pc.flags & 1u) != 0u);
+    bool mip   = (mode & 4u) == 0u;
+    bool persp = (mode & 8u) != 0u;
+    int  tbu   = ti(T_TBU);
+    int  tbv   = ti(T_TBV);
+    int  level = max_d;
+    if (mip) {
+        level = (d < 0) ? max_d : max_d - ((d >> 27) & 0xf);
+        if (level < 0)
+            level = 0;
+    }
+    int tu, tv;
+    if (persp) {
+        int wr = (w != 0) ? recip46(w) : 0;
+        int s  = (((pc.flags & 4u) != 0u) ? 8 : 12) + max_d;
+        tu = mul_shift(u, wr, s) + tbu;
+        tv = mul_shift(v, wr, s) + tbv;
+    } else {
+        tu = u + tbu;
+        tv = v + tbv;
+    }
+    return filt ? tex_filter(level, tu, tv) : tex_point(level, tu, tv);
+}
+
+/* One pixel: k pixels into its line's span (vals: the values at the span's start, after the clip), x its
+   column, y its row, p its place in the group */
+void pixel(int vals[9], int k, int x, int y, uint p) {
+    uint cmd   = tw(T_CMD);
+    int  bpp   = int((cmd >> 2) & 7u);
+    bool use_z = (cmd & (3u << 24)) == 0u;
+
+    int u = vals[V_U] + k * ti(T_DX + V_U);
+    int v = vals[V_V] + k * ti(T_DX + V_V);
+    uint z = uint(vals[V_Z]) + uint(k) * tw(T_DX + V_Z);
+    int r = vals[V_R] + k * ti(T_DX + V_R);
+    int g = vals[V_G] + k * ti(T_DX + V_G);
+    int b = vals[V_B] + k * ti(T_DX + V_B);
+    int a = vals[V_A] + k * ti(T_DX + V_A);
+    int d = vals[V_D] + k * ti(T_DX + V_D);
+    int w = vals[V_W] + k * ti(T_DX + V_W);
+
+    uint src_z = 0u;
+    if (use_z) {
+        src_z     = own_z(p);
+        uint zs   = z >> 16;
+        bool pass = true;
+        switch ((cmd >> 20) & 7u) {
+            case 0u: pass = false; break;
+            case 1u: pass = !(zs <= src_z); break;
+            case 2u: pass = !(zs != src_z); break;
+            case 3u: pass = !(zs < src_z); break;
+            case 4u: pass = !(zs >= src_z); break;
+            case 5u: pass = !(zs == src_z); break;
+            case 6u: pass = !(zs > src_z); break;
+            default: pass = true; break;
+        }
+        if (!pass)
+            return;
+        /* Z_CLIP: the passing value replaces the read one (case 7 keeps the read one) */
+        if (((cmd >> 20) & 7u) != 7u)
+            src_z = zs & 0xffffu;
+    }
+
+    /* state->dest_pixel() */
+    ivec4 c;
+    uint  command = (cmd >> 27) & 15u;
+    bool  abc_src = (cmd & (1u << 18)) != 0u;
+    if (command == 0u) {
+        c = ivec4(clamp_wrap8(r >> 7), clamp_wrap8(g >> 7), clamp_wrap8(b >> 7), clamp_wrap8(a >> 7));
+    } else if ((command == 2u) || (command == 6u)) {
+        c = tex_sample(u, v, d, w);
+        if (abc_src)
+            c.a = a >> 7;
+    } else {
+        uint lit = (cmd >> 15) & 3u;
+        if (lit == 0u) {
+            c = tex_sample(u, v, d, w);
+            c.r += r >> 7;
+            c.g += g >> 7;
+            c.b += b >> 7;
+            if (abc_src)
+                c.a += a >> 7;
+            c = ivec4(clamp_wrap8(c.r), clamp_wrap8(c.g), clamp_wrap8(c.b), clamp_wrap8(c.a));
+        } else if (lit == 1u) {
+            int lr = clamp_wrap8(r >> 7), lg = clamp_wrap8(g >> 7), lb = clamp_wrap8(b >> 7), la = clamp_wrap8(a >> 7);
+            c = tex_sample(u, v, d, w);
+            c.r = (c.r * lr) >> 8;
+            c.g = (c.g * lg) >> 8;
+            c.b = (c.b * lb) >> 8;
+            if (abc_src)
+                c.a = la;
+        } else {
+            c = tex_sample(u, v, d, w);
+            if (abc_src)
+                c.a = a >> 7;
+        }
+    }
+
+    if ((cmd & (1u << 17)) != 0u) {
+        int  fa  = a >> 7;
+        uint fog = tw(T_FOG);
+        c.r = div255((c.r * fa) + (int((fog >> 16) & 0xffu) * (255 - fa)));
+        c.g = div255((c.g * fa) + (int((fog >> 8) & 0xffu) * (255 - fa)));
+        c.b = div255((c.b * fa) + (int(fog & 0xffu) * (255 - fa)));
+    }
+
+    if ((cmd & (1u << 19)) != 0u) {
+        int sr = 0, sg = 0, sb = 0;
+        if (bpp == 1) {
+            uint col = own_byte(p * 2u) | (own_byte(p * 2u + 1u) << 8);
+            sb = int(((col & 0x001fu) << 3) | ((col & 0x001fu) >> 2));
+            sg = int(((col & 0x03e0u) >> 2) | ((col & 0x03e0u) >> 7));
+            sr = int(((col & 0x7c00u) >> 7) | ((col & 0x7c00u) >> 12));
+        } else if (bpp == 2) {
+            sb = int(own_byte(p * 3u));
+            sg = int(own_byte(p * 3u + 1u));
+            sr = int(own_byte(p * 3u + 2u));
+        }
+        /* As the C code computes it: its src_r an int, its src_g and src_b uint32_t, so green and blue are
+           unsigned arithmetic (a negative colour wraps) */
+        c.r = div255((c.r * c.a) + (sr * (255 - c.a)));
+        c.g = int((uint(c.g * c.a) + uint(sg) * uint(255 - c.a)) / 255u);
+        c.b = int((uint(c.b * c.a) + uint(sb) * uint(255 - c.a)) / 255u);
+    }
+
+    if (bpp == 1) {
+        uint col;
+        if ((pc.flags & 2u) != 0u) {
+            const int dither[16] = int[16](0, 4, 1, 5, 6, 2, 7, 3, 1, 5, 0, 4, 7, 3, 6, 2);
+            int add = dither[(y & 3) * 4 + (x & 3)];
+            int _r  = (c.r > 248) ? 248 : c.r + add;
+            int _g  = (c.g > 248) ? 248 : c.g + add;
+            int _b  = (c.b > 248) ? 248 : c.b + add;
+            col     = uint(((_b >> 3) & 0x1f) | (((_g >> 3) & 0x1f) << 5) | (((_r >> 3) & 0x1f) << 10));
+        } else
+            col = uint(((c.b >> 3) & 0x1f) | (((c.g >> 3) & 0x1f) << 5) | (((c.r >> 3) & 0x1f) << 10));
+        set_own_byte(p * 2u, col);
+        set_own_byte(p * 2u + 1u, col >> 8);
+    } else if (bpp == 2) {
+        uint col = uint(c.b | (c.g << 8) | (c.r << 16));
+        set_own_byte(p * 3u, col);
+        set_own_byte(p * 3u + 1u, col >> 8);
+        set_own_byte(p * 3u + 2u, col >> 16);
+    }
+    if (use_z && ((cmd & (1u << 23)) != 0u)) {
+        set_own_z(p, src_z);
+        z_written = true;
+    }
+    written = true;
+}
+
+void main() {
+    int row  = pc.row0 + int(gl_WorkGroupID.y * 4u + gl_LocalInvocationID.y);
+    int gx   = pc.x0 + int(gl_WorkGroupID.x * 64u + gl_LocalInvocationID.x * 4u);
+    bool loaded = false;
+    written = false;
+    z_written = false;
+    uint dest_addr = 0u, z_addr = 0u, bytes = 0u;
+
+    for (uint t = 0u; t < pc.count; t++) {
+        T = t * T_STRIDE;
+        if ((row < ti(T_ROW_LO)) || (row > ti(T_ROW_HI)) || (gx + 3 < ti(T_X_LO)) || (gx > ti(T_X_HI)))
+            continue;
+        uint cmd    = tw(T_CMD);
+        bool hc     = (cmd & 2u) != 0u;
+        int  bpp    = int((cmd >> 2) & 7u);
+        int  tys    = ti(T_TYS);
+        int  ty01   = ti(T_TY01);
+        int  lines  = ty01 + ti(T_TY12);
+        int  i      = tys - row;
+        if ((i < 0) || (i >= lines))
+            continue;
+        if (hc && ((row < ti(T_CLIP_T)) || (row > ti(T_CLIP_B))))
+            continue;
+        /* The line's edges */
+        int  x1     = int(tw(T_TXS) + uint(i) * tw(T_DX02));
+        int  x2     = (i < ty01) ? int(tw(T_TXEND01) + uint(i) * tw(T_DX01)) : int(tw(T_TXEND12) + uint(i - ty01) * tw(T_DX12));
+        int  x_dir  = (tw(T_TLR) != 0u) ? 1 : -1;
+        int  x      = (x1 + ((1 << 20) - 1)) >> 20;
+        int  xe     = (x2 + ((1 << 20) - 1)) >> 20;
+        if (x_dir < 0) {
+            x--;
+            xe--;
+        }
+        if (!((x != xe) && (((x_dir > 0) && (x < xe)) || ((x_dir < 0) && (x > xe)))))
+            continue;
+        int dx = (x_dir > 0) ? (((31 - ((x1 - 1) >> 15)) & 0x1f) + 1) : (((x1 - 1) >> 15) & 0x1f);
+        int vals[9];
+        for (uint n = 0u; n < 9u; n++) {
+            int base = int(tw(T_START + n) + uint(i) * tw(T_DY + n));
+            if (n == V_Z)
+                base = (uint(base) > 0u) ? int(uint(base) << 1) : 0;
+            vals[n] = base + ((ti(T_DX + n) * dx) >> 5);
+        }
+        if (hc) {
+            int cl = ti(T_CLIP_L), cr = ti(T_CLIP_R);
+            int diff = 0;
+            if (x_dir > 0) {
+                if ((x > cr) || (xe < cl))
+                    continue;
+                if (xe > cr)
+                    xe = cr + 1;
+                if (x < cl) {
+                    diff = cl - x;
+                    x    = cl;
+                }
+            } else {
+                if ((x < cl) || (xe > cr))
+                    continue;
+                if (xe < cl)
+                    xe = cl - 1;
+                if (x > cr) {
+                    diff = x - cr;
+                    x    = cr;
+                }
+            }
+            for (uint n = 0u; n < 9u; n++)
+                vals[n] += ti(T_DX + n) * diff;
+        }
+        /* The span: x (its first pixel) to xe (one past its last), in x_dir */
+        if (!loaded) {
+            uint dest_row = tw(T_DEST_BASE) + uint(row) * tw(T_DEST_STR);
+            uint z_row    = tw(T_Z_BASE) + uint(row) * tw(T_Z_STR);
+            bytes         = uint(bpp + 1) * 4u;
+            dest_addr     = (dest_row + uint(gx) * uint(bpp + 1)) & pc.vram_mask;
+            z_addr        = (z_row + uint(gx) * 2u) & pc.vram_mask;
+            for (uint w = 0u; w < 3u; w++)
+                cw[w] = (w * 4u < bytes) ? vram[(dest_addr >> 2) + w] : 0u;
+            zw[0] = vram[z_addr >> 2];
+            zw[1] = vram[(z_addr >> 2) + 1u];
+            loaded = true;
+        }
+        for (uint p = 0u; p < 4u; p++) {
+            int px = gx + int(p);
+            int k  = (px - x) * x_dir;
+            int n  = (xe - x) * x_dir;
+            if ((k < 0) || (k >= n))
+                continue;
+            pixel(vals, k, px & 0xfff, row, p);
+        }
+    }
+    if (written) {
+        for (uint w = 0u; w < 3u; w++)
+            if (w * 4u < bytes)
+                vram[(dest_addr >> 2) + w] = cw[w];
+    }
+    if (z_written) {
+        vram[z_addr >> 2]        = zw[0];
+        vram[(z_addr >> 2) + 1u] = zw[1];
+    }
+}

@@ -404,6 +404,8 @@ typedef struct voodoo_t {
     mutex_t  *fifo_mutex;
     /* KairoX86#222: what the FIFO thread is doing (KX86_FIFO_*), for voodoo_settle() */
     ATOMIC_INT k_fifo_state;
+    /* KairoX86#278: its triangles' GPU state (kairo_gpu_voodoo.h), NULL in software */
+    void *k_gpu;
     event_t  *render_not_full_event[4];
     event_t  *wake_render_thread[4];
 

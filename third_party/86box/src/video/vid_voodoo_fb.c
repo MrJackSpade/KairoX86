@@ -119,6 +119,8 @@ voodoo_fb_readw(uint32_t addr, void *priv)
 
     if (read_addr > voodoo->fb_mask)
         return 0xffff;
+    if (voodoo->k_gpu != NULL) /* KairoX86#278 */
+        kairo_voodoo_gpu_touch(voodoo, read_addr & ~3, 4);
 
     if (voodoo->lfbMode & (LFB_READ_WORD_SWAP | LFB_READ_BYTE_SWIZZLE)) {
         /* The swaps work on the 32 bits holding the pixel; this is half */
@@ -171,6 +173,8 @@ voodoo_fb_readl(uint32_t addr, void *priv)
 
     if (read_addr > voodoo->fb_mask)
         return 0xffffffff;
+    if (voodoo->k_gpu != NULL) /* KairoX86#278 */
+        kairo_voodoo_gpu_touch(voodoo, read_addr & ~3, 4);
 
     temp = lfb_read_swap(voodoo, *(uint32_t *) (&voodoo->fb_mem[read_addr & voodoo->fb_mask]));
 
