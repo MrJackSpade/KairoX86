@@ -39,6 +39,12 @@
 - **`kairox86-gpu-hercules` group:** the Hercules' display on the scanout queue (KairoX86#257): its text as the MDA's, its graphics at 1 bit a pixel; graphics with the blend option on stay on the CPU, and its borders and overscan bands draw a queued drawing of their rows first.
 - **`kairox86-gpu-hercules-plus` group:** the Hercules Plus' display on the scanout queue (KairoX86#259): its text cells as `draw_char_rom`, `_ram4` and `_ram48` resolve them, its graphics at 1 bit a pixel; a line the CPU draws draws a queued drawing of its row first.
 - **`kairox86-gpu-incolor` group:** the Hercules InColor's display on the scanout queue (KairoX86#258): its text cells as four planes' dots with the masks each dot's colour comes from (`draw_char_rom`, `_ram4`, `_ram48`: attributes, blink, bold, underline, strike-through, the cursor), its graphics as four planes, through the card's palette.
+- **`kairox86-gpu-ega` group:** the EGA's display on the scanout queue (KairoX86#234, #251): `ega_render_text` and `ega_render_graphics` hand each line, read as they read it, to the queue (text cells; four graphics planes with odd/even addressing and the CGA 2bpp remap applied as read, the blink and plane mask folded into the palette). A line with the CRTC in reset stays on the CPU.
+- **`kairox86-gpu-genius` group:** the Genius VHR's graphics on the scanout queue (KairoX86#255) when no text layer is drawn over them; its text layers, drawn over the pixels below, stay on the CPU.
+- **`kairox86-gpu-wy700` group:** the Wyse 700's display on the scanout queue (KairoX86#279): text as pairs of 8-dot cells, graphics at 1 or 2 bits a pixel repeated 1, 2 or 4 times.
+- **`kairox86-gpu-quadcolor` group:** the Quadram Quadcolor's display on the scanout queue with its second plane off (KairoX86#246); lines with the second plane on stay on the CPU.
+- **`kairox86-gpu-v6355` group:** the Yamaha V6355D's display on the scanout queue (KairoX86#247); lines its mouse pointer crosses, and composite output, stay on the CPU.
+- **`kairox86-gpu-svga-touch` group:** an SVGA line drawn again in a frame draws its queued GPU drawing first (`svga_do_render`), and the borders drawn over a line's ends after it (`scrollcache`) are cut out of the queued line (`kairo_gpu_scan_cut`).
 
 ## 86Box's translations
 

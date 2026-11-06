@@ -41,6 +41,7 @@
 #include <86box/vid_8514a.h>
 #include <86box/vid_xga.h>
 #include <86box/vid_svga.h>
+#include <86box/kairo_gpu.h> /* KairoX86#233 */
 #include <86box/vid_svga_render.h>
 #include <86box/vid_xga_device.h>
 
@@ -1424,6 +1425,12 @@ svga_recalctimings(svga_t *svga)
 static void
 svga_do_render(svga_t *svga)
 {
+    /* KairoX86#233: the row's queued GPU drawing, if any, before it is drawn again */
+    if (kairo_gpu_on && (svga->monitor->target_buffer != NULL) && ((svga->displine + svga->y_add) >= 0)
+        && ((svga->displine + svga->y_add) < svga->monitor->target_buffer->h)) {
+        bitmap_t *bitmap = svga->monitor->target_buffer;
+        kairo_gpu_scan_touch(bitmap, (uint32_t) (bitmap->line[svga->displine + svga->y_add] - bitmap->dat), (uint32_t) bitmap->w);
+    }
     /* Render a blank screen and nothing else while in DPMS mode, unless the device's monitors
        do not all sleep together and it has taken the sleep state over. */
     if (svga->dpms) {
@@ -1480,6 +1487,18 @@ svga_do_render(svga_t *svga)
         svga->x_add = svga->left_overscan;
         svga_render_overscan_left(svga);
         svga_render_overscan_right(svga);
+        /* KairoX86#233: the borders drawn over the line's ends (it was drawn scrollcache pixels further
+           left) stay: the queued line leaves those pixels */
+        if (kairo_gpu_on && !svga->scrblank && (svga->hdisp > 0) && ((svga->displine + svga->y_add) >= 0)
+            && (svga->monitor->target_buffer != NULL) && ((svga->displine + svga->y_add) < svga->monitor->target_buffer->h)) {
+            bitmap_t      *bitmap = svga->monitor->target_buffer;
+            const uint32_t row    = (uint32_t) (bitmap->line[svga->displine + svga->y_add] - bitmap->dat);
+            const int      right  = overscan_x - svga->left_overscan;
+            if (svga->x_add > 0)
+                kairo_gpu_scan_cut(bitmap, row, (uint32_t) svga->x_add);
+            if (right > 0)
+                kairo_gpu_scan_cut(bitmap, row + (uint32_t) (svga->x_add + svga->hdisp), (uint32_t) right);
+        }
         svga->x_add = svga->left_overscan - svga->scrollcache;
     }
 }

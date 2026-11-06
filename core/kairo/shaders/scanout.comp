@@ -22,7 +22,7 @@ struct Scan {
     uint src;
     uint palette;
     uint a;
-    uint b;
+    uint skip;
     uint flags;
 };
 
@@ -35,6 +35,7 @@ const uint SCAN_BITS = 6u;
 const uint SCAN_PLANES = 7u;
 const uint SCAN_TEXT4 = 8u;
 const uint SCAN_WIDE = 1u;
+const uint SCAN_WIDE4 = 2u;
 
 layout(std430, binding = 0) readonly buffer Lines { Scan lines[]; };
 layout(std430, binding = 1) readonly buffer Words { uint words[]; };
@@ -55,11 +56,12 @@ void main() {
     const uint src = lines[j].src;
     const uint palette = lines[j].palette;
     const uint a = lines[j].a;
-    const bool wide = (lines[j].flags & SCAN_WIDE) != 0u;
+    // Each source pixel drawn 2 (WIDE), 4 (WIDE4) or 8 times across
+    const uint repeat = ((lines[j].flags & SCAN_WIDE) != 0u ? 1u : 0u) + ((lines[j].flags & SCAN_WIDE4) != 0u ? 2u : 0u);
     const uint start = lines[j].out_;
-    for (uint i = gl_LocalInvocationID.x; i < count; i += gl_WorkGroupSize.x) {
-        // The source pixel: each drawn twice across when wide
-        const uint s = wide ? (i >> 1) : i;
+    const uint skip = lines[j].skip;
+    for (uint i = skip + gl_LocalInvocationID.x; i < count; i += gl_WorkGroupSize.x) {
+        const uint s = i >> repeat;
         uint v;
         if (kind == SCAN_8) {
             const uint word = words[src + (s >> 2)];

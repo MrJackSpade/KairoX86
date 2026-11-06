@@ -37,6 +37,8 @@
 #include <86box/vid_cga.h>
 #include <86box/vid_cga_comp.h>
 #include <86box/plat_unused.h>
+#include <stdbool.h>
+#include <86box/kairo_gpu.h> /* KairoX86#247 */
 
 /* Emulation of the Yamaha V6355 chipset. This is a CGA clone that was 
  * probably designed primarily for laptops, where the primary display was
@@ -540,6 +542,131 @@ v6355_line_graphics640(v6355_t *v6355, uint8_t *pixel)
     }
 }
 
+/* KairoX86#247: whether the mouse pointer draws on this line (v6355_pointer's own test) */
+static bool
+v6355_pointer_on_line(v6355_t *v6355)
+{
+    const int     y         = v6355->displine - v6355->firstline;
+    const int     pointer_y = v6355->v6355data[0x63];
+    const uint8_t mflags    = v6355->v6355data[0x64];
+    if (!(mflags & 6) || ((v6355->cgablink & 8) && (mflags & 1)))
+        return false;
+    return (y >= (pointer_y - 16)) && (y < pointer_y);
+}
+
+/* KairoX86#247: the line (v6355_render's, read as it reads it) between its borders to the GPU's
+   scanout queue, coloured as v6355_render_process colours it; returns whether the GPU draws it */
+static bool
+v6355_render_gpu(v6355_t *v6355, int line)
+{
+    if (!kairo_gpu_on || (v6355->display_type == V6355_COMPOSITE) || v6355_pointer_on_line(v6355))
+        return false;
+    const int width = v6355_width(v6355);
+    if (width <= 0)
+        return false;
+    /* Colours: 0-31 the indexes the drawing makes, 32-47 a cursor cell's (index ^ 0xffffff) */
+    uint32_t   colours[48];
+    const bool truecolor = (v6355->display_type == V6355_TRUECOLOR);
+    for (int i = 0; i < 32; i++)
+        colours[i] = truecolor ? v6355->v6355pal[i & 0xf] : pal_lookup[i];
+    for (int i = 0; i < 16; i++)
+        colours[32 + i] = truecolor ? v6355->v6355pal[i] : 0x00000000;
+    bitmap_t      *bitmap = buffer32;
+    const uint32_t out    = (uint32_t) (&bitmap->line[line][8] - bitmap->dat);
+    const uint16_t ca     = (v6355->crtc[15] | (v6355->crtc[14] << 8)) & 0x3fff;
+    if ((v6355->cgamode & 1) || !(v6355->cgamode & 2)) {
+        /* Text: 80 columns (cgamode bit 0, whatever bit 1 says, as v6355_render tests it) or 40 doubled */
+        const bool highres = (v6355->cgamode & 1) != 0;
+        const int  columns = width / (highres ? 8 : 16);
+        uint32_t  *cells   = kairo_gpu_scan(bitmap, bitmap->kairo_gpu, out, KAIRO_SCAN_TEXT, (uint32_t) width, (uint32_t) columns,
+                                            colours, 48, 8, 0, highres ? 0 : KAIRO_SCAN_WIDE);
+        /* v6355_line_text40 reads from the line's own start, while the copy moves ma on */
+        const uint16_t ma = v6355->ma;
+        for (int x = 0; x < columns; x++) {
+            uint8_t chr  = 0;
+            uint8_t attr = 0;
+            if (v6355->cgamode & 8) {
+                if (highres) {
+                    chr  = v6355->charbuffer[x << 1];
+                    attr = v6355->charbuffer[(x << 1) + 1];
+                } else {
+                    chr  = v6355->vram[((ma + x) << 1) & 0x3fff];
+                    attr = v6355->vram[(((ma + x) << 1) + 1) & 0x3fff];
+                }
+            }
+            uint8_t cols[2];
+            v6355_map_attrs(v6355, chr, attr, cols);
+            uint8_t data = fontdat[chr + v6355->fontbase][v6355->sc & 7];
+            if ((v6355->v6355data[0x66] & 0x80) && ((attr & 7) == 1) && ((v6355->sc & 7) == 7))
+                data = 0xff;
+            uint32_t fg = cols[1];
+            uint32_t bg = cols[0];
+            if ((v6355->ma == ca) && v6355->con && v6355->cursoron) {
+                fg = 32 + ((~fg) & 0xf);
+                bg = 32 + ((~bg) & 0xf);
+            }
+            cells[x] = data | (fg << 8) | (bg << 16);
+            v6355->ma++;
+        }
+        kairo_gpu_scan_commit();
+        return true;
+    }
+    /* Graphics: 2 bytes a character */
+    const int columns = width / 16;
+    uint32_t  bits;
+    uint32_t  flags;
+    uint32_t  pixel_colours[16];
+    uint32_t  count;
+    if (!(v6355->cgamode & 16)) {
+        if (v6355->cgamode & 0x40) {
+            /* 160 x 200 x 16: 4 bits a pixel, each four times */
+            bits  = 4;
+            flags = KAIRO_SCAN_WIDE4;
+            for (int v = 0; v < 16; v++)
+                pixel_colours[v] = colours[v | 16];
+        } else {
+            uint8_t       cols[4];
+            const uint8_t intensity = (v6355->cgacol & 16) ? 8 : 0;
+            cols[0]                 = (v6355->cgacol & 15) | 16;
+            if (v6355->cgamode & 4) {
+                cols[1] = intensity | 3;
+                cols[2] = intensity | 4;
+                cols[3] = intensity | 7;
+            } else if (v6355->cgacol & 32) {
+                cols[1] = intensity | 3;
+                cols[2] = intensity | 5;
+                cols[3] = intensity | 7;
+            } else {
+                cols[1] = intensity | 2;
+                cols[2] = intensity | 4;
+                cols[3] = intensity | 6;
+            }
+            for (int i = 1; i < 4; i++)
+                cols[i] |= 16;
+            bits  = 2;
+            flags = KAIRO_SCAN_WIDE;
+            for (int v = 0; v < 4; v++)
+                pixel_colours[v] = colours[cols[v]];
+        }
+    } else {
+        bits             = 1;
+        flags            = 0;
+        pixel_colours[0] = colours[16];
+        pixel_colours[1] = colours[(v6355->cgacol & 15) | 16];
+    }
+    count          = (uint32_t) columns * 16;
+    uint8_t *bytes = (uint8_t *) kairo_gpu_scan(bitmap, bitmap->kairo_gpu, out, KAIRO_SCAN_BITS, count, ((uint32_t) columns * 2 + 3) / 4,
+                                                pixel_colours, 1u << bits, bits, 0, flags);
+    for (int x = 0; x < columns; x++) {
+        const uint32_t at = ((v6355->ma << 1) & 0x1fff) + ((v6355->sc & 1) * 0x2000);
+        bytes[x * 2]      = (v6355->cgamode & 8) ? v6355->vram[at] : 0;
+        bytes[x * 2 + 1]  = (v6355->cgamode & 8) ? v6355->vram[at + 1] : 0;
+        v6355->ma++;
+    }
+    kairo_gpu_scan_commit();
+    return true;
+}
+
 static void
 v6355_render(v6355_t *v6355, int line)
 {
@@ -551,6 +678,10 @@ v6355_render(v6355_t *v6355, int line)
     uint32_t cols[4];
     uint8_t  pixel[640];
 
+    /* KairoX86#247: a line the GPU still has to draw is drawn before the CPU draws on it again */
+    if (kairo_gpu_on)
+        kairo_gpu_scan_touch(buffer32, (uint32_t) (buffer32->line[line] - buffer32->dat), (uint32_t) buffer32->w);
+
     /* Draw border */
     cols[0] = ((v6355->cgamode & 0x12) == 0x12) ? 0 : (v6355->cgacol & 15);
 
@@ -558,6 +689,10 @@ v6355_render(v6355_t *v6355, int line)
         ((uint32_t *) buffer32->line[line])[c] = cols[0];
         ((uint32_t *) buffer32->line[line])[c + width + 8] = cols[0];
     }
+
+    /* KairoX86#247: the GPU draws the line between the borders */
+    if (v6355_render_gpu(v6355, line))
+        return;
 
     /* Render screen data. */
     if (v6355->cgamode & 1) {
@@ -626,6 +761,9 @@ v6355_render_blank(v6355_t *v6355, int line)
     uint32_t cols[4];
 
     cols[0] = ((v6355->cgamode & 0x12) == 0x12) ? 0 : (v6355->cgacol & 15);
+    /* KairoX86#247: a line the GPU still has to draw is drawn before the CPU blanks it */
+    if (kairo_gpu_on)
+        kairo_gpu_scan_touch(buffer32, (uint32_t) (buffer32->line[line] - buffer32->dat), (uint32_t) buffer32->w);
     hline(buffer32, 0, line, width + 16, cols[0]);
 }
 

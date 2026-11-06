@@ -45,6 +45,8 @@
 #include <86box/vid_quadcolor.h>
 #include <86box/vid_cga_comp.h>
 #include <86box/plat_unused.h>
+#include <stdbool.h>
+#include <86box/kairo_gpu.h> /* KairoX86#246 */
 
 #define CGA_RGB       0
 #define CGA_COMPOSITE 1
@@ -290,6 +292,106 @@ get_next_qc2_pixel(quadcolor_t *quadcolor)
     return quadcolor->quadcolor_2_oe ? pixel : 0;
 }
 
+/* KairoX86#246: the second plane's position moved on as pixels get_next_qc2_pixel calls would move it */
+static void
+quadcolor_skip_qc2(quadcolor_t *quadcolor, uint32_t pixels)
+{
+    for (uint32_t i = 0; i < pixels; i++) {
+        quadcolor->qc2mask = ~quadcolor->qc2mask;
+        quadcolor->qc2idx += quadcolor->qc2mask >> 7;
+    }
+}
+
+/* KairoX86#246: the line (quadcolor_render's, read as it reads it) between its borders to the GPU's
+   scanout queue, coloured as video_process_8 colours it; returns whether the GPU draws it. Not with the
+   second plane on, nor with composite output, which reads the picture back. */
+static bool
+quadcolor_render_gpu(quadcolor_t *quadcolor, int line)
+{
+    if (!kairo_gpu_on || quadcolor->quadcolor_2_oe || quadcolor->composite)
+        return false;
+    const int hdisp = quadcolor->crtc[CGA_CRTC_HDISP];
+    if (hdisp <= 0)
+        return false;
+    bitmap_t       *bitmap     = buffer32;
+    const uint32_t  out        = (uint32_t) (&bitmap->line[line][8] - bitmap->dat);
+    const uint32_t *palette    = pal_lookup;
+    const bool      enabled    = (quadcolor->cgamode & CGA_MODE_FLAG_VIDEO_ENABLE) != 0;
+    uint16_t        cursoraddr = (quadcolor->crtc[CGA_CRTC_CURSOR_ADDR_LOW] | (quadcolor->crtc[CGA_CRTC_CURSOR_ADDR_HIGH] << 8)) & DEVICE_VRAM_MASK;
+    if (!(quadcolor->cgamode & CGA_MODE_FLAG_GRAPHICS)) {
+        const bool highres = (quadcolor->cgamode & CGA_MODE_FLAG_HIGHRES) != 0;
+        uint32_t  *cells   = kairo_gpu_scan(bitmap, bitmap->kairo_gpu, out, KAIRO_SCAN_TEXT, (uint32_t) hdisp * (highres ? 8 : 16),
+                                            (uint32_t) hdisp, palette, 256, 8, 0, highres ? 0 : KAIRO_SCAN_WIDE);
+        for (int x = 0; x < hdisp; x++) {
+            uint8_t chr  = 0;
+            uint8_t attr = 0;
+            if (enabled) {
+                if (highres) {
+                    chr  = quadcolor->charbuffer[x << 1];
+                    attr = quadcolor->charbuffer[(x << 1) + 1];
+                } else {
+                    chr  = quadcolor->vram[(quadcolor->page_offset ^ (quadcolor->memaddr << 1)) & DEVICE_VRAM_MASK];
+                    attr = quadcolor->vram[(quadcolor->page_offset ^ ((quadcolor->memaddr << 1) + 1)) & DEVICE_VRAM_MASK];
+                }
+            }
+            const bool drawcursor = ((quadcolor->memaddr == cursoraddr) && quadcolor->cursorvisible && quadcolor->cursoron);
+            uint32_t   fg         = (attr & 15) + 16;
+            uint32_t   bg;
+            if (quadcolor->cgamode & CGA_MODE_FLAG_BLINK) {
+                bg = ((attr >> 4) & 7) + 16;
+                if ((quadcolor->cgablink & 8) && (attr & 0x80) && (!highres || !quadcolor->drawcursor))
+                    fg = bg;
+            } else
+                bg = (attr >> 4) + 16;
+            const uint32_t flip = drawcursor ? 15 : 0;
+            cells[x] = fontdat[chr + quadcolor->fontbase][quadcolor->scanline & 7] | ((fg ^ flip) << 8) | ((bg ^ flip) << 16);
+            quadcolor->memaddr++;
+        }
+        kairo_gpu_scan_commit();
+        quadcolor_skip_qc2(quadcolor, (uint32_t) hdisp * (highres ? 8 : 16));
+        return true;
+    }
+    uint32_t   colours[4];
+    const bool hires = (quadcolor->cgamode & CGA_MODE_FLAG_HIGHRES_GRAPHICS) != 0;
+    if (!hires) {
+        const int col = (quadcolor->cgacol & 16) ? 24 : 16;
+        colours[0]    = palette[(quadcolor->cgacol & 15) | 16];
+        if (quadcolor->cgamode & CGA_MODE_FLAG_BW) {
+            colours[1] = palette[col | 3];
+            colours[2] = palette[col | 4];
+            colours[3] = palette[col | 7];
+        } else if (quadcolor->cgacol & 32) {
+            colours[1] = palette[col | 3];
+            colours[2] = palette[col | 5];
+            colours[3] = palette[col | 7];
+        } else {
+            colours[1] = palette[col | 2];
+            colours[2] = palette[col | 4];
+            colours[3] = palette[col | 6];
+        }
+    } else {
+        colours[0] = palette[quadcolor->quadcolor_ctrl & 15];
+        colours[1] = palette[(quadcolor->cgacol & 15) + 16];
+    }
+    uint8_t *bytes = (uint8_t *) kairo_gpu_scan(bitmap, bitmap->kairo_gpu, out, KAIRO_SCAN_BITS, (uint32_t) hdisp * 16,
+                                                ((uint32_t) hdisp * 2 + 3) / 4, colours, hires ? 2 : 4, hires ? 1 : 2, 0,
+                                                hires ? 0 : KAIRO_SCAN_WIDE);
+    for (int x = 0; x < hdisp; x++) {
+        uint16_t dat;
+        if (enabled) {
+            const uint32_t at = ((quadcolor->memaddr << 1) & 0x1fff) + ((quadcolor->scanline & 1) * 0x2000);
+            dat               = (quadcolor->vram[quadcolor->page_offset ^ at] << 8) | quadcolor->vram[quadcolor->page_offset ^ (at + 1)];
+        } else
+            dat = hires ? (quadcolor->quadcolor_ctrl & 15) : 0;
+        bytes[x * 2]     = (uint8_t) (dat >> 8);
+        bytes[x * 2 + 1] = (uint8_t) dat;
+        quadcolor->memaddr++;
+    }
+    kairo_gpu_scan_commit();
+    quadcolor_skip_qc2(quadcolor, (uint32_t) hdisp * 16);
+    return true;
+}
+
 static void
 quadcolor_render(quadcolor_t *quadcolor, int line)
 {
@@ -305,6 +407,10 @@ quadcolor_render(quadcolor_t *quadcolor, int line)
 
     int32_t  highres_graphics_flag = (CGA_MODE_FLAG_HIGHRES_GRAPHICS | CGA_MODE_FLAG_GRAPHICS);
 
+    /* KairoX86#246: a line the GPU still has to draw is drawn before the CPU draws on it again */
+    if (kairo_gpu_on)
+        kairo_gpu_scan_touch(buffer32, (uint32_t) (buffer32->line[line] - buffer32->dat), (uint32_t) buffer32->w);
+
     cols[0] = ((quadcolor->cgamode & highres_graphics_flag) == highres_graphics_flag) ? (quadcolor->quadcolor_ctrl & 15) :
                                                                                         (quadcolor->cgacol & 15);
 
@@ -315,6 +421,9 @@ quadcolor_render(quadcolor_t *quadcolor, int line)
         else
             buffer32->line[line][column + (quadcolor->crtc[CGA_CRTC_HDISP] << 4) + 8] = cols[0];
     }
+    /* KairoX86#246: the GPU draws the line between the borders */
+    if (quadcolor_render_gpu(quadcolor, line))
+        return;
     if (quadcolor->cgamode & CGA_MODE_FLAG_HIGHRES) { /* 80-column text */
         for (x = 0; x < quadcolor->crtc[CGA_CRTC_HDISP]; x++) {
             if (quadcolor->cgamode & CGA_MODE_FLAG_VIDEO_ENABLE) {
@@ -445,6 +554,10 @@ quadcolor_render_blank(quadcolor_t *quadcolor, int line)
     /* `+ 16` isn't in PCem's version */
     int col = ((quadcolor->cgamode & highres_graphics_flag) == highres_graphics_flag) ? (quadcolor->quadcolor_ctrl & 15) + 16 : (quadcolor->cgacol & 15) + 16;  /* TODO: Is Quadcolor bg color actually relevant, here? */
 
+    /* KairoX86#246: a line the GPU still has to draw is drawn before the CPU blanks it */
+    if (kairo_gpu_on)
+        kairo_gpu_scan_touch(buffer32, (uint32_t) (buffer32->line[line] - buffer32->dat), (uint32_t) buffer32->w);
+
     if (quadcolor->cgamode & CGA_MODE_FLAG_HIGHRES)
         hline(buffer32, 0, line, (quadcolor->crtc[CGA_CRTC_HDISP] << 3) + 16, col);
     else
@@ -558,6 +671,9 @@ quadcolor_interpolate(quadcolor_t *quadcolor, int x, int y, int w, int h)
 static void
 quadcolor_blit_memtoscreen(quadcolor_t *quadcolor, int x, int y, int w, int h)
 {
+    /* KairoX86#246: the lines the GPU draws, drawn before the doubling reads them */
+    if (kairo_gpu_on)
+        kairo_gpu_scan_drain();
     if (quadcolor->double_type > DOUBLE_SIMPLE)
         quadcolor_interpolate(quadcolor, x, y, w, h);
 

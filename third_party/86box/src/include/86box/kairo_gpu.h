@@ -71,8 +71,8 @@ typedef struct kairo_gpu_scan {
     uint32_t count;   /* the pixels it draws */
     uint32_t src;     /* its first dword in the byte ring */
     uint32_t palette; /* 0: none; else its palette's index in the palette ring + 1 */
-    uint32_t a;       /* the kind's own parameters */
-    uint32_t b;
+    uint32_t a;       /* the kind's own parameter */
+    uint32_t skip;    /* the first pixels not drawn: the CPU drew over them after the line was queued */
     uint32_t flags;   /* KAIRO_SCAN_WIDE */
 } kairo_gpu_scan_t;
 
@@ -103,6 +103,8 @@ enum {
 
 /* Each pixel drawn twice across */
 #define KAIRO_SCAN_WIDE 1u
+/* Each pixel drawn four times across (with KAIRO_SCAN_WIDE, eight) */
+#define KAIRO_SCAN_WIDE4 2u
 
 /* Queues a line of bitmap (its CPU pointer, to tell bitmaps apart; bitmap_gpu its buffer) starting at
    pixel out, drawing count pixels; returns where its words dwords go. palette (palette_count colours,
@@ -120,6 +122,10 @@ void kairo_gpu_scan_drain(void);
 /* The CPU is about to draw pixels start to start + count - 1 of bitmap: a queued line that draws any of
    them is drawn first, so the CPU's drawing, the later one, stays. */
 void kairo_gpu_scan_touch(const void *bitmap, uint32_t start, uint32_t count);
+/* The CPU has just drawn pixels start to start + count - 1 of bitmap, after lines that draw them were
+   queued (a border over a line's first or last pixels): the queued lines leave those pixels as the CPU
+   drew them; one they fall in the middle of is drawn first. */
+void kairo_gpu_scan_cut(const void *bitmap, uint32_t start, uint32_t count);
 /* bitmap is about to be freed: the lines queued for it are drawn first. */
 void kairo_gpu_scan_forget(const void *bitmap);
 /* 86Box's 15 and 16-bit colour tables (65536 entries each), copied to the GPU at the first call. */

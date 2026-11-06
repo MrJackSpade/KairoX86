@@ -99,6 +99,9 @@ def run(args, folder, config, test, board):
         else:
             frame, size, picture = line.split()[:3]
             hashes[int(frame)] = (size, picture)
+    # How many lines the GPU drew (the core reports it at the machine's end, KairoX86#233)
+    drawn = [line.split()[1] for line in out.stderr.splitlines() if line.startswith('kairo-gpu: ')]
+    hashes['gpu_lines'] = int(drawn[-1]) if drawn else 0
     shutil.rmtree(work / 'machine')
     return hashes, work
 
@@ -125,7 +128,7 @@ def compare_runs(args, ha, wa, hb, wb, folder):
         return f'the guest ended in another state ({ha["state"]} and {hb["state"]})'
     if set(ha) != set(hb):
         return f'{len(ha)} and {len(hb)} frames'
-    for frame in sorted(f for f in ha if f != 'state'):
+    for frame in sorted(f for f in ha if isinstance(f, int)):
         if ha[frame] == hb[frame]:
             continue
         shot_a, shot_b = wa / f'frame-{frame}.bmp', wb / f'frame-{frame}.bmp'
@@ -194,7 +197,9 @@ def main():
                 found.append((card, test, problem))
             else:
                 shutil.rmtree(folder)
-            print(f'{card} ({board}) {test}: ' + ('match' if problem is None else f'DIFFERS: {problem}'), flush=True)
+            drawn = hb['gpu_lines'] if args.b == 'on' else ha['gpu_lines']
+            print(f'{card} ({board}) {test}: ' + ('match' if problem is None else f'DIFFERS: {problem}')
+                  + (f' (GPU lines {drawn})' if 'on' in (args.a, args.b) else ''), flush=True)
         return found
 
     with ThreadPoolExecutor(args.jobs) as pool:

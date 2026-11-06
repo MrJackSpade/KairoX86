@@ -129,8 +129,10 @@ render_gpu_text(svga_t *svga, uint32_t *p, uint32_t dots, bool wide, uint32_t *c
     const uint32_t step  = dots * (wide ? 2 : 1);
     const int      end   = svga->hdisp + svga->scrollcache;
 
+    /* A plane mask above the low nibble makes a dot's colour depend on the dot before it (text_80's
+       shift register), which the cells do not carry */
     if (!kairo_gpu_on || !svga->render_async || (svga->attrregs[0x10] & 0x40) || (end <= 0) ||
-        (svga->render != (wide ? svga_render_text_40 : svga_render_text_80)))
+        (svga->plane_mask & ~0x0f) || (svga->render != (wide ? svga_render_text_40 : svga_render_text_80)))
         return false;
     const uint32_t cells = ((uint32_t) end + step - 1) / step;
     uint32_t       colours[16];

@@ -29,6 +29,7 @@
 #include <86box/device.h>
 #include <86box/plat.h>
 #include <86box/video.h>
+#include <86box/kairo_gpu.h> /* KairoX86#255 */
 
 #define BIOS_ROM_PATH "roms/video/genius/8x12.bin"
 
@@ -567,6 +568,21 @@ genius_textline(genius_t *genius, uint8_t background, int mda, int cols80)
     }
 }
 
+/* KairoX86#255: the graphics line genius_cgaline (cga) or genius_hiresline draws, to the GPU's scanout
+   queue, from vram at addr, dots of 1 bit, ink_f where set */
+static void
+genius_graphics_gpu(genius_t *genius, uint32_t addr, uint32_t bytes, uint8_t ink_f, uint8_t ink_b)
+{
+    bitmap_t      *bitmap     = buffer32;
+    const uint32_t colours[2] = { pal_lookup[ink_b], pal_lookup[ink_f] };
+    uint8_t       *line       = (uint8_t *) kairo_gpu_scan(bitmap, bitmap->kairo_gpu,
+                                                           (uint32_t) (bitmap->line[genius->displine] - bitmap->dat), KAIRO_SCAN_BITS,
+                                                           bytes * 8, (bytes + 3) / 4, colours, 2, 1, 0, 0);
+    for (uint32_t x = 0; x < bytes; x++)
+        line[x] = genius->vram[addr + x];
+    kairo_gpu_scan_commit();
+}
+
 /* Draw a line in the CGA 640x200 mode */
 void
 genius_cgaline(genius_t *genius)
@@ -586,6 +602,12 @@ genius_cgaline(genius_t *genius)
     addr = 0x18000 + 80 * ((genius->displine - 512) >> 2);
     if ((genius->displine - 512) & 2)
         addr += 0x2000;
+
+    /* KairoX86#255: the GPU draws it when no text is drawn over it */
+    if (kairo_gpu_on && !(genius->mda_ctrl & 8)) {
+        genius_graphics_gpu(genius, addr, 80, ink_f, ink_b);
+        return;
+    }
 
     for (uint8_t x = 0; x < 80; x++) {
         dat = genius->vram[addr];
@@ -619,6 +641,12 @@ genius_hiresline(genius_t *genius)
         addr = 128 * genius->displine;
     else /* The second 496 live at B8000 */
         addr = 0x18000 + (128 * (genius->displine - 512));
+
+    /* KairoX86#255: the GPU draws it when no text is drawn over it */
+    if (kairo_gpu_on && !(genius->mda_ctrl & 8)) {
+        genius_graphics_gpu(genius, addr, 91, ink_f, ink_b);
+        return;
+    }
 
     for (uint8_t x = 0; x < 91; x++) {
         dat = genius->vram[addr + x];
@@ -654,6 +682,10 @@ genius_poll(void *priv)
 
             if (genius->displine == 0)
                 video_wait_for_buffer();
+
+            /* KairoX86#255: a queued drawing of the row drawn before the CPU blanks it */
+            if (kairo_gpu_on)
+                kairo_gpu_scan_touch(buffer32, (uint32_t) (buffer32->line[genius->displine] - buffer32->dat), GENIUS_XSIZE);
 
             /* Start off with a blank line */
             for (uint16_t x = 0; x < GENIUS_XSIZE; x++)

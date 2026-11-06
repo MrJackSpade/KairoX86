@@ -27,6 +27,8 @@
 #include <86box/device.h>
 #include <86box/video.h>
 #include <86box/plat_unused.h>
+#include <stdbool.h>
+#include <86box/kairo_gpu.h> /* KairoX86#279 */
 
 #define WY700_XSIZE 1280
 #define WY700_YSIZE 800
@@ -762,6 +764,131 @@ wy700_hiresline(wy700_t *wy700)
     }
 }
 
+/* KairoX86#279: graphics bytes from vram (addr, each byte masked by mask) to the GPU's scanout queue,
+   bits a pixel, each repeated (flags), through inks (indexes) */
+static void
+wy700_bits_gpu(wy700_t *wy700, uint32_t addr, uint32_t mask, uint32_t bytes, uint32_t bits, uint32_t flags,
+               const uint8_t *inks, bool enabled)
+{
+    bitmap_t      *bitmap = buffer32;
+    uint32_t       colours[4];
+    const uint32_t values = 1u << bits;
+    for (uint32_t v = 0; v < values; v++)
+        colours[v] = pal_lookup[enabled ? inks[v] : 16];
+    const uint32_t repeat = ((flags & KAIRO_SCAN_WIDE) ? 2 : 1) * ((flags & KAIRO_SCAN_WIDE4) ? 4 : 1);
+    uint8_t       *line   = (uint8_t *) kairo_gpu_scan(bitmap, bitmap->kairo_gpu, (uint32_t) (bitmap->line[wy700->displine] - bitmap->dat),
+                                                       KAIRO_SCAN_BITS, bytes * (8 / bits) * repeat, (bytes + 3) / 4, colours, values,
+                                                       bits, 0, flags);
+    for (uint32_t x = 0; x < bytes; x++)
+        line[x] = wy700->vram[(addr + x) & mask];
+    kairo_gpu_scan_commit();
+}
+
+/* KairoX86#279: the line wy700_poll's mode draws, read as its drawing reads it, to the GPU's scanout
+   queue; returns whether the GPU draws it */
+static bool
+wy700_render_gpu(wy700_t *wy700, int mode)
+{
+    static const uint8_t inks2[4] = { 16 + 0, 16 + 8, 16 + 7, 16 + 15 };
+    static const uint8_t inks1[2] = { 16 + 0, 16 + 15 };
+    if (!kairo_gpu_on)
+        return false;
+    switch (mode) {
+        case 0x04:
+        case 0x06: {
+            uint16_t       memaddr = (wy700->cga_crtc[13] | (wy700->cga_crtc[12] << 8)) & 0x3fff;
+            const uint32_t addr    = ((wy700->displine >> 2) & 1) * 0x2000 + (wy700->displine >> 3) * 80 + ((memaddr & ~1) << 1);
+            const bool     enabled = wy700->enabled && (wy700->cga_ctrl & 8);
+            if (wy700->wy700_mode == 6)
+                wy700_bits_gpu(wy700, addr, 0x3fff, 80, 1, KAIRO_SCAN_WIDE, inks1, enabled);
+            else
+                wy700_bits_gpu(wy700, addr, 0x3fff, 80, 2, KAIRO_SCAN_WIDE4, inks2, enabled);
+            return true;
+        }
+        case 0x80:
+        case 0x90: {
+            const uint32_t addr    = (wy700->displine >> 1) * 80 + 4 * wy700->wy700_base;
+            const bool     enabled = (wy700->wy700_mode & 8) != 0;
+            if (wy700->wy700_mode & 0x10)
+                wy700_bits_gpu(wy700, addr, 0x1ffff, 80, 2, KAIRO_SCAN_WIDE4, inks2, enabled);
+            else
+                wy700_bits_gpu(wy700, addr, 0x1ffff, 80, 1, KAIRO_SCAN_WIDE, inks1, enabled);
+            return true;
+        }
+        case 0xA0:
+        case 0xB0:
+        case 0xC0:
+        case 0xD0:
+        case 0xE0:
+        case 0xF0: {
+            uint32_t addr = (wy700->displine >> 1) * 160 + 4 * wy700->wy700_base;
+            if ((wy700->wy700_mode & 0x40) && (wy700->displine & 1))
+                addr += 0x10000;
+            const bool enabled = (wy700->wy700_mode & 8) != 0;
+            if (wy700->wy700_mode & 0x10)
+                wy700_bits_gpu(wy700, addr, 0x1ffff, 160, 2, KAIRO_SCAN_WIDE, inks2, enabled);
+            else
+                wy700_bits_gpu(wy700, addr, 0x1ffff, 160, 1, 0, inks1, enabled);
+            return true;
+        }
+        default:
+            break;
+    }
+    /* Text (wy700_textline): each 16-dot character two 8-dot cells */
+    const int      w          = (wy700->wy700_mode == 0) ? 40 : 80;
+    const int      cw         = (wy700->wy700_mode == 0) ? 32 : 16;
+    const uint8_t *fontbase   = &fontdatw[0][0] + (wy700->font ? 256 * 32 : 0);
+    uint16_t       memaddr    = (wy700->cga_crtc[13] | (wy700->cga_crtc[12] << 8)) & 0x3fff;
+    const uint16_t cursoraddr = (wy700->cga_crtc[15] | (wy700->cga_crtc[14] << 8)) & 0x3fff;
+    const int      mda        = (wy700->cga_crtc[9] == 0 || wy700->cga_crtc[9] == 13);
+    const uint16_t addr       = ((memaddr & ~1) + (wy700->displine >> 5) * w) * 2;
+    const uint8_t  scanline   = (wy700->displine >> 1) & 15;
+    memaddr += ((wy700->displine >> 5) * w);
+    int cursorline;
+    if ((wy700->real_crtc[10] & 0x60) == 0x20)
+        cursorline = 0;
+    else
+        cursorline = ((wy700->real_crtc[10] & 0x1F) <= scanline) && ((wy700->real_crtc[11] & 0x1F) >= scanline);
+    bitmap_t *bitmap = buffer32;
+    uint32_t *cells  = kairo_gpu_scan(bitmap, bitmap->kairo_gpu, (uint32_t) (bitmap->line[wy700->displine] - bitmap->dat), KAIRO_SCAN_TEXT,
+                                      (uint32_t) (w * cw), (uint32_t) (w * 2), pal_lookup, 256, 8, 0, (w == 40) ? KAIRO_SCAN_WIDE : 0);
+    for (int x = 0; x < w; x++) {
+        const uint8_t chr        = wy700->vram[(addr + 2 * x) & 0x3FFF];
+        uint8_t       attr       = wy700->vram[(addr + 2 * x + 1) & 0x3FFF];
+        const int     drawcursor = ((memaddr == cursoraddr) && cursorline && wy700->enabled && (wy700->cga_ctrl & 8) && (wy700->blink & 16));
+        const int     blink      = ((wy700->blink & 16) && (wy700->cga_ctrl & 0x20) && (attr & 0x80) && !drawcursor);
+        if (wy700->cga_ctrl & 0x20)
+            attr &= 0x7F;
+        int(*table)[2][2] = mda ? mda_attr_to_color_table : cga_attr_to_color_table;
+        uint32_t bits0;
+        uint32_t bits1;
+        uint32_t fg;
+        uint32_t bg;
+        if ((scanline == 14) && mda && ((attr & 7) == 1)) {
+            /* Underline: no cursor, and the address does not move on (as wy700_textline) */
+            bits0 = bits1 = 0xff;
+            fg = bg = mda_attr_to_color_table[attr][blink][1];
+        } else {
+            bits0 = fontbase[chr * 32 + 2 * scanline];
+            bits1 = fontbase[chr * 32 + 2 * scanline + 1];
+            fg    = table[attr][blink][1];
+            bg    = table[attr][blink][0];
+            if (!(wy700->enabled) || !(wy700->cga_ctrl & 8))
+                fg = bg = mda_attr_to_color_table[0][0][0];
+            if (drawcursor) {
+                fg ^= table[attr][0][1];
+                bg ^= table[attr][0][1];
+            }
+            ++memaddr;
+        }
+        const uint32_t colours = ((fg & 0xff) << 8) | ((bg & 0xff) << 16);
+        cells[x * 2]           = bits0 | colours;
+        cells[x * 2 + 1]       = bits1 | colours;
+    }
+    kairo_gpu_scan_commit();
+    return true;
+}
+
 void
 wy700_poll(void *priv)
 {
@@ -783,7 +910,9 @@ wy700_poll(void *priv)
             else
                 mode = wy700->wy700_mode & 0x0F;
 
-            switch (mode) {
+            if (wy700_render_gpu(wy700, mode)) {
+                /* KairoX86#279: the GPU draws the line */
+            } else switch (mode) {
                 default:
                 case 0x00:
                 case 0x02:

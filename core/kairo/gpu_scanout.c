@@ -10,6 +10,7 @@
 #include <pthread.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 #include <86box/86box.h>
@@ -41,6 +42,8 @@ static uint32_t            palettes_used;
 static const void         *queued_bitmap; /* the queued lines' bitmap, and its buffer */
 static kairo_gpu_buffer_t *queued_bitmap_gpu;
 static uint32_t            queued_out;    /* the last queued line's first pixel */
+static uint32_t            queued_end;    /* the end of the queued pixels furthest on (they come in order) */
+static unsigned long long  lines_drawn;   /* every line the GPU drew this machine, reported at its end */
 /* Held from kairo_gpu_scan to kairo_gpu_scan_commit, and by a drain */
 static pthread_mutex_t queue_lock = PTHREAD_MUTEX_INITIALIZER;
 
@@ -68,6 +71,7 @@ drain_locked(void)
     kairo_gpu_buffer_t *const buffers[6] = { lines, words, palettes, table15, table16, queued_bitmap_gpu };
     const uint32_t            unused     = 0;
     kairo_gpu_run(scanout, buffers, &unused, line_count, 1, 1);
+    lines_drawn += line_count;
     line_count    = 0;
     words_used    = 0;
     palettes_used = 0;
@@ -96,13 +100,47 @@ void
 kairo_gpu_scan_touch(const void *bitmap, uint32_t start, uint32_t count)
 {
     pthread_mutex_lock(&queue_lock);
-    if ((line_count != 0) && (queued_bitmap == bitmap)) {
+    /* The lines come in order: pixels past the last queued one's end touch none (the usual case, the
+       CPU drawing the line about to be queued) */
+    if ((line_count != 0) && (queued_bitmap == bitmap) && (start < queued_end)) {
         const kairo_gpu_scan_t *queued = lines->data;
         for (uint32_t i = 0; i < line_count; i++)
             if ((queued[i].out < (start + count)) && (start < (queued[i].out + queued[i].count))) {
                 drain_locked();
                 break;
             }
+    }
+    pthread_mutex_unlock(&queue_lock);
+}
+
+void
+kairo_gpu_scan_cut(const void *bitmap, uint32_t start, uint32_t count)
+{
+    pthread_mutex_lock(&queue_lock);
+    if ((line_count != 0) && (queued_bitmap == bitmap)) {
+        kairo_gpu_scan_t *queued = lines->data;
+        const uint32_t    end    = start + count;
+        for (uint32_t i = 0; i < line_count; i++) {
+            const uint32_t from = queued[i].out + queued[i].skip;
+            const uint32_t to   = queued[i].out + queued[i].count;
+            if ((end <= from) || (start >= to))
+                continue;
+            if ((start <= from) && (end >= to))
+                queued[i].count = queued[i].skip; /* all of it drawn over */
+            else if (start <= from)
+                queued[i].skip = end - queued[i].out; /* its head */
+            else if (end >= to)
+                queued[i].count = start - queued[i].out; /* its tail */
+            else {
+                /* Its middle: the line split in two, its head here and its tail queued after it */
+                if (line_count == LINES)
+                    fatal("GPU scanout: no room to split a line the CPU drew over\n");
+                queued[line_count]      = queued[i];
+                queued[line_count].skip = end - queued[i].out;
+                queued[i].count         = start - queued[i].out;
+                line_count++;
+            }
+        }
     }
     pthread_mutex_unlock(&queue_lock);
 }
@@ -133,6 +171,8 @@ kairo_gpu_scan(const void *bitmap, kairo_gpu_buffer_t *bitmap_gpu, uint32_t out,
         && ((bitmap != queued_bitmap) || (out <= queued_out) || (line_count == LINES)
             || ((words_used + word_count) > WORDS) || ((palette != NULL) && (palettes_used == PALETTES))))
         drain_locked();
+    if ((line_count == 0) || (bitmap != queued_bitmap) || ((out + count) > queued_end))
+        queued_end = out + count;
     queued_bitmap     = bitmap;
     queued_bitmap_gpu = bitmap_gpu;
     queued_out        = out;
@@ -154,7 +194,7 @@ kairo_gpu_scan(const void *bitmap, kairo_gpu_buffer_t *bitmap_gpu, uint32_t out,
     line->src              = words_used;
     line->palette          = index;
     line->a                = a;
-    line->b                = b;
+    line->skip             = b;
     line->flags            = flags;
     uint32_t *at           = (uint32_t *) words->data + words_used;
     words_used += word_count;
@@ -164,6 +204,9 @@ kairo_gpu_scan(const void *bitmap, kairo_gpu_buffer_t *bitmap_gpu, uint32_t out,
 void
 kairo_gpu_scanout_close(void)
 {
+    /* How much the GPU drew, for the graphics batch (core/test/gpu/compare.py reports it per card) */
+    fprintf(stderr, "kairo-gpu: %llu lines drawn\n", lines_drawn);
+    lines_drawn = 0;
     kairo_gpu_kernel_free(scanout);
     kairo_gpu_buffer_free(lines);
     kairo_gpu_buffer_free(words);
