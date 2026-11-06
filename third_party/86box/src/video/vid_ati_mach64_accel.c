@@ -20,6 +20,9 @@
  */
 
 #include "vid_ati_mach64.h"
+#include <86box/kairo_gpu.h>        /* KairoX86#237 */
+#include <86box/kairo_gpu_seg.h>
+#include <86box/kairo_gpu_mach64.h>
 
 static void
 mach64_accel_write_fifo_l(mach64_t *mach64, uint32_t addr, uint32_t val);
@@ -1605,6 +1608,8 @@ mach64_accel_common(mach64_t *mach64)
     mach64->accel.skip_byte = -1;
 }
 
+static void mach64_2d_begin(mach64_t *mach64); /* KairoX86#237 */
+
 void
 mach64_start_fill(mach64_t *mach64)
 {
@@ -1642,6 +1647,7 @@ mach64_start_fill(mach64_t *mach64)
     mach64->accel.src_height2 = mach64->src_height2_width2 & 0x7fff;
 
     if ((mach64->src_cntl & SRC_8x8x8_BRUSH) && !(mach64->src_cntl & SRC_8x8x8_BRUSH_LOADED)) {
+        mach64_2d_kairo_touch(mach64, mach64->accel.src_offset & ~7, 64); /* KairoX86#237 */
         for (int y = 0; y < 8; y++)
             for (int x = 0; x < 8; x++)
                 mach64->accel.pattern_clr8x8[y][x] = mach64->svga.vram[((mach64->accel.src_offset & ~7) + (y * 8) + x) & mach64->vram_mask];
@@ -1659,6 +1665,8 @@ mach64_start_fill(mach64_t *mach64)
 
     if (mach64->timing)
         mach64_timing_op(mach64, OP_RECT);
+    if (mach64->k_2d != NULL) /* KairoX86#237 */
+        mach64_2d_begin(mach64);
 }
 
 void
@@ -1682,6 +1690,8 @@ mach64_start_line(mach64_t *mach64)
 
     if (mach64->timing)
         mach64_timing_op(mach64, OP_LINE);
+    if (mach64->k_2d != NULL) /* KairoX86#237 */
+        mach64_2d_begin(mach64);
 }
 
 // calculates colour compare function for mach64 blit
@@ -1715,11 +1725,11 @@ mach64_rot_byte(mach64_t *mach64, uint32_t v)
     return (v >> (8 * mach64->accel.rot)) & 0xff;
 }
 
-/* One destination pixel of a rectangle fill or blit. host is the host
-   pixel (colour, or the mono bit) for this pixel when the host feeds it.
-   Returns 1 when the operation has finished. */
-static int
-mach64_rect_pixel(mach64_t *mach64, uint32_t host)
+/* One destination pixel of a rectangle fill or blit, at the engine's
+   position. host is the host pixel (colour, or the mono bit) for this pixel
+   when the host feeds it. */
+static void
+mach64_rect_draw(mach64_t *mach64, uint32_t host)
 {
     svga_t  *svga    = &mach64->svga;
     int      rot     = !!(mach64->dst_cntl & DST_24_ROT_EN);
@@ -1820,7 +1830,15 @@ mach64_rect_pixel(mach64_t *mach64, uint32_t host)
 
         WRITE(mach64->accel.dst_offset + (dst_y * mach64->accel.dst_pitch) + dst_x, mach64->accel.dst_size);
     }
+}
 
+static void mach64_rect_finish(mach64_t *mach64);
+
+/* The engine's position moved on past a rectangle's pixel. Returns 1 when
+   the operation has finished. */
+static int
+mach64_rect_advance(mach64_t *mach64)
+{
     /* Next pixel: the source trajectory, then the destination. */
     if (mach64->src_cntl & SRC_LINEAR_EN)
         mach64->accel.src_x++;
@@ -1883,6 +1901,14 @@ mach64_rect_pixel(mach64_t *mach64, uint32_t host)
     if (--mach64->accel.dst_height > 0)
         return 0;
 
+    mach64_rect_finish(mach64);
+    return 1;
+}
+
+/* A rectangle's end: the engine idle, and DST_Y_X moved on when tiling */
+static void
+mach64_rect_finish(mach64_t *mach64)
+{
     /*Blit finished*/
     mach64_log("mach64 blit finished\n");
     mach64->accel.busy = 0;
@@ -1898,24 +1924,51 @@ mach64_rect_pixel(mach64_t *mach64, uint32_t host)
 
         mach64->dst_y_x = (mach64->dst_y_x & 0x1fff0000) | ((uint32_t) y & 0x7fff);
     }
-    return 1;
 }
 
-/* One pixel of a Bresenham line. There is no 24 bpp line: "the line draw
-   engine does not function in 24bpp packed mode" (PRG 4-7). The source
-   is rectangular and never advances in Y; its X goes by SRC_LINE_X_DIR
-   (RRG 3-86, 3-87). Returns 1 when the line has finished. */
+/* Whether a line's error term is positive: the minor axis moves, and a
+   polygon outline draws (DST_BRES_SIGN breaks a zero). */
 static int
-mach64_line_pixel(mach64_t *mach64, uint32_t host)
+mach64_line_err_pos(const mach64_t *mach64)
+{
+    return (mach64->accel.err > 0) || ((mach64->accel.err == 0) && !(mach64->dst_cntl & DST_BRES_SIGN));
+}
+
+/* Whether a line draws its pixel at the engine's position, and where in X
+   (a polygon outline's pixel saturates to the left scissor). */
+static int
+mach64_line_draws(const mach64_t *mach64, int *dx)
+{
+    int draw = 1;
+
+    *dx = mach64->accel.dst_x;
+    /* Polygon outline: one pixel a scan line, none for horizontal lines,
+       saturated to the left scissor (RRG 3-47). */
+    if (mach64->dst_cntl & DST_POLYGON_EN) {
+        draw = (mach64->dst_cntl & DST_Y_MAJOR) || mach64_line_err_pos(mach64);
+        if (*dx < mach64->accel.sc_left)
+            *dx = mach64->accel.sc_left;
+    }
+
+    if ((mach64->accel.x_count == 1) && !(mach64->dst_cntl & DST_LAST_PEL))
+        draw = 0;
+    return draw;
+}
+
+/* One pixel of a Bresenham line, at the engine's position. There is no 24
+   bpp line: "the line draw engine does not function in 24bpp packed mode"
+   (PRG 4-7). The source is rectangular and never advances in Y; its X goes
+   by SRC_LINE_X_DIR (RRG 3-86, 3-87). */
+static void
+mach64_line_draw(mach64_t *mach64, uint32_t host)
 {
     svga_t  *svga    = &mach64->svga;
     int      mix     = 0;
     uint32_t src_dat = 0;
     uint32_t dest_dat;
     uint32_t old_dest_dat;
-    int      err_pos = (mach64->accel.err > 0) || ((mach64->accel.err == 0) && !(mach64->dst_cntl & DST_BRES_SIGN));
-    int      draw    = 1;
-    int      dx      = mach64->accel.dst_x;
+    int      dx;
+    int      draw = mach64_line_draws(mach64, &dx);
 
     switch (mach64->accel.source_mix) {
         case MONO_SRC_HOST:
@@ -1933,17 +1986,6 @@ mach64_line_pixel(mach64_t *mach64, uint32_t host)
         default:
             break;
     }
-
-    /* Polygon outline: one pixel a scan line, none for horizontal lines,
-       saturated to the left scissor (RRG 3-47). */
-    if (mach64->dst_cntl & DST_POLYGON_EN) {
-        draw = (mach64->dst_cntl & DST_Y_MAJOR) || err_pos;
-        if (dx < mach64->accel.sc_left)
-            dx = mach64->accel.sc_left;
-    }
-
-    if ((mach64->accel.x_count == 1) && !(mach64->dst_cntl & DST_LAST_PEL))
-        draw = 0;
 
     if (draw && (dx >= mach64->accel.sc_left) && (dx <= mach64->accel.sc_right) &&
         (mach64->accel.dst_y >= mach64->accel.sc_top) && (mach64->accel.dst_y <= mach64->accel.sc_bottom)) {
@@ -1984,6 +2026,14 @@ mach64_line_pixel(mach64_t *mach64, uint32_t host)
 
         WRITE(mach64->accel.dst_offset + (mach64->accel.dst_y * mach64->accel.dst_pitch) + dx, mach64->accel.dst_size);
     }
+}
+
+/* The engine's position moved on past a line's pixel. Returns 1 when the
+   line has finished. */
+static int
+mach64_line_advance(mach64_t *mach64)
+{
+    const int err_pos = mach64_line_err_pos(mach64);
 
     if (--mach64->accel.x_count <= 0) {
         /*Blit finished: DST_X and DST_Y rest on the last pixel (PRG 2-43).*/
@@ -2015,9 +2065,469 @@ mach64_line_pixel(mach64_t *mach64, uint32_t host)
 static int
 mach64_pixel(mach64_t *mach64, uint32_t host)
 {
-    if (mach64->accel.op == OP_LINE)
-        return mach64_line_pixel(mach64, host);
-    return mach64_rect_pixel(mach64, host);
+    if (mach64->accel.op == OP_LINE) {
+        mach64_line_draw(mach64, host);
+        return mach64_line_advance(mach64);
+    }
+    mach64_rect_draw(mach64, host);
+    return mach64_rect_advance(mach64);
+}
+
+/* ---- KairoX86#237: the 2D engine on the GPU (86box/kairo_gpu_seg.h; core/kairo/shaders/mach64_2d.comp) ----
+
+   With Hardware acceleration on, an operation is recorded where it starts (its record from the engine's state) and
+   its rows (a rectangle's) or pixels (a line's) as the engine walks them, instead of drawn: all of them at once
+   when nothing comes from the host, else as the host's data feeds them, a rectangle's row once complete. The
+   engine's walk (mach64_rect_advance, mach64_line_advance) stays the CPU's. A drain records the row being fed so
+   far first (mach64_2d_flush), and an operation that outlives a drain records itself again. */
+
+typedef struct mach64_2d_gpu_t {
+    kairo_seg_t *seg;
+    mutex_t     *lock;
+    uint32_t     record[M2_WORDS];
+    uint64_t     generation; /* the batch's drains when the record went in */
+    int          issued;     /* the record is in the batch (for this generation) */
+    int          host;       /* a rectangle fed from the host: rows still to come */
+    int          row;        /* its row being fed */
+    int          row_done;   /* pixels of it fed */
+    int          row_flushed; /* of them recorded */
+    int          row_appended; /* of them in the stream for the record in the batch */
+    uint32_t     values[8192];
+} mach64_2d_gpu_t;
+
+/* The record in the batch, again after a drain: a rectangle's host data restarts at the row being fed */
+static void
+mach64_2d_issue(mach64_2d_gpu_t *g, int in_order)
+{
+    uint32_t *op = kairo_seg_op(g->seg, in_order);
+
+    g->generation = kairo_seg_generation(g->seg);
+    g->issued     = 1;
+    if (g->host) {
+        g->record[M2_HOST] = kairo_seg_stream(g->seg, NULL, 0) - (uint32_t) g->row * g->record[M2_WIDTH];
+        g->row_appended    = 0;
+    }
+    memcpy(op, g->record, sizeof(g->record));
+}
+
+static void
+mach64_2d_current(mach64_2d_gpu_t *g)
+{
+    if (!g->issued || (kairo_seg_generation(g->seg) != g->generation))
+        mach64_2d_issue(g, g->record[M2_FLAGS] >> 31);
+}
+
+/* A rectangle's pixels [p0, p1) of row r, inside the scissors */
+static void
+mach64_2d_rect_row(mach64_t *mach64, mach64_2d_gpu_t *g, int r, int p0, int p1)
+{
+    const int *rec  = (const int *) g->record;
+    const int  xinc = rec[M2_XINC];
+    const int  y    = rec[M2_DST_Y] + r * rec[M2_YINC];
+    const int  bits = mach64_pix_bits(mach64->accel.dst_size);
+    int        lo, hi;
+
+    if ((y < rec[M2_SC_TOP]) || (y > rec[M2_SC_BOTTOM]))
+        return;
+    if (xinc > 0) {
+        lo = rec[M2_SC_LEFT] - rec[M2_DST_X];
+        hi = rec[M2_SC_RIGHT] - rec[M2_DST_X] + 1;
+    } else {
+        lo = rec[M2_DST_X] - rec[M2_SC_RIGHT];
+        hi = rec[M2_DST_X] - rec[M2_SC_LEFT] + 1;
+    }
+    if (p0 < lo)
+        p0 = lo;
+    if (p1 > hi)
+        p1 = hi;
+    if (p0 >= p1)
+        return;
+    const uint32_t px = g->record[M2_DST_OFFSET] + (uint32_t) y * g->record[M2_DST_PITCH] + (uint32_t) (rec[M2_DST_X] + p0 * xinc);
+    kairo_seg_add(g->seg, (uint32_t) r, (uint32_t) p0, (uint32_t) (p1 - p0),
+                  (uint32_t) ((uint64_t) px * (uint64_t) bits) & (((mach64->vram_mask + 1) << 3) - 1), (uint32_t) bits, xinc);
+}
+
+/* A line's pixel at the engine's position, if it draws one */
+static void
+mach64_2d_line_pixel(mach64_t *mach64, mach64_2d_gpu_t *g, uint32_t host)
+{
+    int dx;
+
+    if (!mach64_line_draws(mach64, &dx) || (dx < mach64->accel.sc_left) || (dx > mach64->accel.sc_right) ||
+        (mach64->accel.dst_y < mach64->accel.sc_top) || (mach64->accel.dst_y > mach64->accel.sc_bottom))
+        return;
+    const uint32_t words[M2_LINE_PIXEL_WORDS] = { (uint32_t) mach64->accel.dst_x, (uint32_t) dx, (uint32_t) mach64->accel.dst_y,
+                                                  (uint32_t) mach64->accel.src_x, host };
+    const int      bits = mach64_pix_bits(mach64->accel.dst_size);
+    const uint32_t px   = mach64->accel.dst_offset + (uint32_t) mach64->accel.dst_y * mach64->accel.dst_pitch + (uint32_t) dx;
+
+    thread_wait_mutex(g->lock);
+    mach64_2d_current(g);
+    kairo_seg_add(g->seg, kairo_seg_stream(g->seg, words, M2_LINE_PIXEL_WORDS), 0, 1,
+                  (uint32_t) ((uint64_t) px * (uint64_t) bits) & (((mach64->vram_mask + 1) << 3) - 1), (uint32_t) bits, 1);
+    thread_release_mutex(g->lock);
+}
+
+/* The row being fed from the host, recorded up to its pixel p1 (the lock held) */
+static void
+mach64_2d_host_row(mach64_t *mach64, mach64_2d_gpu_t *g, int p1)
+{
+    mach64_2d_current(g);
+    if (p1 > g->row_appended) {
+        kairo_seg_stream(g->seg, &g->values[g->row_appended], (uint32_t) (p1 - g->row_appended));
+        g->row_appended = p1;
+    }
+    if (p1 > g->row_flushed) {
+        mach64_2d_rect_row(mach64, g, g->row, g->row_flushed, p1);
+        g->row_flushed = p1;
+    }
+}
+
+/* Before every drain of the batch: the row being fed so far */
+static void
+mach64_2d_flush(void *ctx)
+{
+    mach64_t        *mach64 = ctx;
+    mach64_2d_gpu_t *g      = mach64->k_2d;
+
+    thread_wait_mutex(g->lock);
+    if (g->host && (g->row_done > g->row_flushed))
+        mach64_2d_host_row(mach64, g, g->row_done);
+    thread_release_mutex(g->lock);
+}
+
+/* Bytes [lo, hi) of video memory as a pixel range [p_lo, p_hi] of a width at an offset (pixel addresses) */
+static void
+mach64_2d_bytes(uint32_t p_lo, uint32_t p_hi, int size, uint64_t *lo, uint64_t *hi)
+{
+    const uint64_t bits = (uint64_t) mach64_pix_bits(size);
+
+    *lo = ((uint64_t) p_lo * bits) >> 3;
+    *hi = (((uint64_t) p_hi + 1) * bits + 7) >> 3;
+}
+
+static int
+mach64_2d_overlap(uint64_t a_lo, uint64_t a_hi, uint64_t b_lo, uint64_t b_hi)
+{
+    return (a_lo < b_hi) && (b_lo < a_hi);
+}
+
+/* The operation the engine has just started, recorded: the record from the engine's state, and the memory it
+   draws on and reads. In order when it reads what it draws on or its rows run past the end of video memory; a
+   batch that draws on what it reads is drawn first. */
+static void
+mach64_2d_begin(mach64_t *mach64)
+{
+    mach64_2d_gpu_t *g    = mach64->k_2d;
+    uint32_t        *rec  = g->record;
+    const int        line = (mach64->accel.op == OP_LINE);
+    const int        rect_rows = line ? 0 : mach64->accel.dst_height;
+    const int        width     = line ? 0 : mach64->accel.dst_width;
+    const uint64_t   vram_size = (uint64_t) mach64->vram_mask + 1;
+    int              in_order  = 0;
+    int              reads_src = ((mach64->accel.source_fg == SRC_BLITSRC) || (mach64->accel.source_bg == SRC_BLITSRC) ||
+                                  (mach64->accel.source_mix == MONO_SRC_BLITSRC));
+    int              poly      = !line && (mach64->dst_cntl & DST_POLYGON_EN);
+    int              per       = 1;
+
+    memset(rec, 0, sizeof(g->record));
+    rec[M2_FLAGS] = (line ? M2F_LINE : 0) | ((mach64->dst_cntl & DST_24_ROT_EN) ? M2F_ROT : 0) |
+                    ((mach64->dp_pix_width & DP_BYTE_PIX_ORDER) ? M2F_PIX_ORDER : 0) |
+                    ((mach64->src_cntl & SRC_LINEAR_EN) ? M2F_LINEAR : 0) | (poly ? M2F_POLYGON : 0) |
+                    (((mach64->type >= MACH64_CT) && (mach64->dst_cntl & DST_POLYGON_RTEDGE_DIS)) ? M2F_RTEDGE : 0) |
+                    (((mach64->accel.src_size == 0) && (mach64->type == MACH64_VT3) && (mach64->src_cntl & SRC_8x8x8_BRUSH)) ? M2F_BRUSH : 0) |
+                    (((mach64->src_cntl & (SRC_PATT_ROT_EN | SRC_PATT_EN)) == (SRC_PATT_ROT_EN | SRC_PATT_EN)) ? M2F_PATT_ROT : 0) |
+                    ((mach64->src_cntl & SRC_PATT_EN) ? M2F_PATT_EN : 0) | (mach64_mem_bndry_en(mach64) ? M2F_BNDRY : 0);
+    rec[M2_DST_SIZE]    = (uint32_t) mach64->accel.dst_size;
+    rec[M2_SRC_SIZE]    = (uint32_t) mach64->accel.src_size;
+    rec[M2_DST_OFFSET]  = mach64->accel.dst_offset;
+    rec[M2_DST_PITCH]   = mach64->accel.dst_pitch;
+    rec[M2_SRC_OFFSET]  = mach64->accel.src_offset;
+    rec[M2_SRC_PITCH]   = mach64->accel.src_pitch;
+    rec[M2_POLY_OFFSET] = mach64->accel.poly_offset;
+    rec[M2_MIX_FG]      = (uint32_t) mach64->accel.mix_fg;
+    rec[M2_MIX_BG]      = (uint32_t) mach64->accel.mix_bg;
+    rec[M2_SOURCE_FG]   = (uint32_t) mach64->accel.source_fg;
+    rec[M2_SOURCE_BG]   = (uint32_t) mach64->accel.source_bg;
+    rec[M2_SOURCE_MIX]  = (uint32_t) mach64->accel.source_mix;
+    rec[M2_PAT_CNTL]    = mach64->pat_cntl;
+    for (int y = 0; y < 8; y++)
+        for (int x = 0; x < 8; x++) {
+            if (mach64->accel.pattern[y][x])
+                rec[M2_PATTERN + (y >> 2)] |= 1u << (((y & 3) << 3) + x);
+            rec[M2_CLR8X8 + ((y * 8 + x) >> 2)] |= (uint32_t) mach64->accel.pattern_clr8x8[y][x] << (((y * 8 + x) & 3) * 8);
+        }
+    for (int i = 0; i < 8; i++) {
+        rec[M2_CLR4X2 + (i >> 2)] |= (uint32_t) mach64->accel.pattern_clr4x2[i >> 2][i & 3] << ((i & 3) * 8);
+        rec[M2_CLR8X1 + (i >> 2)] |= (uint32_t) mach64->accel.pattern_clr8x1[i] << ((i & 3) * 8);
+    }
+    rec[M2_SC_LEFT]    = (uint32_t) mach64->accel.sc_left;
+    rec[M2_SC_RIGHT]   = (uint32_t) mach64->accel.sc_right;
+    rec[M2_SC_TOP]     = (uint32_t) mach64->accel.sc_top;
+    rec[M2_SC_BOTTOM]  = (uint32_t) mach64->accel.sc_bottom;
+    rec[M2_FG]         = mach64->accel.dp_frgd_clr;
+    rec[M2_BG]         = mach64->accel.dp_bkgd_clr;
+    rec[M2_WRITE_MASK] = mach64->accel.write_mask;
+    rec[M2_CMP_CLR]    = mach64->accel.clr_cmp_clr;
+    rec[M2_CMP_MASK]   = mach64->accel.clr_cmp_mask;
+    rec[M2_CMP_FN]     = (uint32_t) mach64->accel.clr_cmp_fn;
+    rec[M2_CMP_SRC]    = mach64->accel.clr_cmp_src ? 1 : 0;
+    rec[M2_XINC]       = (uint32_t) mach64->accel.xinc;
+    rec[M2_YINC]       = (uint32_t) mach64->accel.yinc;
+    rec[M2_ROT0]       = (uint32_t) mach64->accel.rot0;
+    rec[M2_DST_X]      = (uint32_t) mach64->accel.dst_x_start;
+    rec[M2_DST_Y]      = (uint32_t) mach64->accel.dst_y_start;
+    rec[M2_WIDTH]      = (uint32_t) width;
+    rec[M2_SX1]        = (uint32_t) mach64->accel.src_x_start;
+    rec[M2_SY1]        = (uint32_t) mach64->accel.src_y_start;
+    rec[M2_SX2]        = (uint32_t) mach64_sext((mach64->src_y_x_start >> 16) & 0x1fff, 13);
+    rec[M2_SY2]        = (uint32_t) mach64_sext(mach64->src_y_x_start & 0x7fff, 15);
+    rec[M2_W1]         = (uint32_t) mach64->accel.src_width1;
+    rec[M2_H1]         = (uint32_t) mach64->accel.src_height1;
+    rec[M2_W2]         = (uint32_t) mach64->accel.src_width2;
+    rec[M2_H2]         = (uint32_t) mach64->accel.src_height2;
+    rec[M2_CHAIN]      = mach64->chain_mask;
+    rec[M2_BNDRY]      = mach64_mem_bndry(mach64);
+    rec[M2_LINE_SRC_Y] = (uint32_t) mach64->accel.src_y;
+
+    /* A linear source's rows: the first ends where a byte-aligned 1 or 4 bpp source rounds it up to, the rest a whole
+       aligned row on (mach64_rect_advance) */
+    if (mach64->src_cntl & SRC_BYTE_ALIGN) {
+        const int sz = ((mach64->accel.source_mix == MONO_SRC_BLITSRC) || (mach64->accel.src_size == WIDTH_1BIT)) ? WIDTH_1BIT : mach64->accel.src_size;
+        per          = (sz == WIDTH_1BIT) ? 8 : (sz == WIDTH_4BIT) ? 2 : 1;
+    }
+    rec[M2_LIN_L1]   = (uint32_t) (((mach64->accel.src_offset + (uint32_t) width + (uint32_t) per - 1) & ~((uint32_t) per - 1)) - mach64->accel.src_offset);
+    rec[M2_LIN_STEP] = (uint32_t) ((width + per - 1) & ~(per - 1));
+
+    /* What it draws on: a rectangle's rows, a line's square around its start */
+    uint64_t d_lo, d_hi;
+    {
+        int y_lo = line ? (mach64->accel.dst_y - mach64->accel.x_count) : mach64->accel.dst_y_start;
+        int y_hi = line ? (mach64->accel.dst_y + mach64->accel.x_count) : (mach64->accel.dst_y_start + (rect_rows - 1) * mach64->accel.yinc);
+        int x_lo = line ? (mach64->accel.dst_x - mach64->accel.x_count) : mach64->accel.dst_x_start;
+        int x_hi = line ? (mach64->accel.dst_x + mach64->accel.x_count) : (mach64->accel.dst_x_start + (width - 1) * mach64->accel.xinc);
+        if (y_lo > y_hi) {
+            int t = y_lo;
+            y_lo  = y_hi;
+            y_hi  = t;
+        }
+        if (x_lo > x_hi) {
+            int t = x_lo;
+            x_lo  = x_hi;
+            x_hi  = t;
+        }
+        const int64_t p_lo = (int64_t) mach64->accel.dst_offset + (int64_t) y_lo * mach64->accel.dst_pitch + x_lo;
+        const int64_t p_hi = (int64_t) mach64->accel.dst_offset + (int64_t) y_hi * mach64->accel.dst_pitch + x_hi;
+        if ((p_lo < 0) || (((uint64_t) p_hi * mach64_pix_bits(mach64->accel.dst_size)) >> 3) >= vram_size)
+            in_order = 1;
+        mach64_2d_bytes((uint32_t) (p_lo < 0 ? 0 : p_lo), (uint32_t) (p_hi < 0 ? 0 : p_hi), mach64->accel.dst_size, &d_lo, &d_hi);
+    }
+
+    /* What it draws on, where the batch's operations read (before its own reads go in) */
+    kairo_seg_draws(g->seg, (uint32_t) d_lo, (uint32_t) (d_hi - d_lo));
+
+    /* What it reads: its source (a line's around its start, a rectangle's every row), the polygon's boundary */
+    for (int pass = 0; pass < 2; pass++) {
+        const int reads = pass ? poly : reads_src;
+        if (!reads)
+            continue;
+        const uint32_t base = pass ? mach64->accel.poly_offset : mach64->accel.src_offset;
+        const int      size = pass ? WIDTH_1BIT : ((mach64->accel.source_mix == MONO_SRC_BLITSRC) && (mach64->accel.source_fg != SRC_BLITSRC) && (mach64->accel.source_bg != SRC_BLITSRC)) ? WIDTH_1BIT : mach64->accel.src_size;
+        int64_t        p_lo, p_hi;
+        if (line) {
+            p_lo = (int64_t) base + (int64_t) mach64->accel.src_y * mach64->accel.src_pitch + mach64->accel.src_x - mach64->accel.x_count;
+            p_hi = p_lo + 2 * (int64_t) mach64->accel.x_count;
+        } else if (mach64->src_cntl & SRC_LINEAR_EN) {
+            /* the linear position's last value; the boundary of a polygon on the row its source Y stays on */
+            const int64_t end = (rect_rows > 1 ? (int64_t) rec[M2_LIN_L1] + (int64_t) (rect_rows - 2) * (int64_t) rec[M2_LIN_STEP] : 0) + width;
+            p_lo = (int64_t) base + (pass ? (int64_t) mach64->accel.src_y_start * mach64->accel.src_pitch : 0);
+            p_hi = p_lo + end;
+        } else {
+            int sy_lo = 0x7fffffff, sy_hi = -0x7fffffff, sx_lo = 0x7fffffff, sx_hi = -0x7fffffff;
+            for (int r = 0; r < rect_rows; r++) {
+                const int c1 = (mach64->src_cntl & SRC_PATT_EN) ? mach64->accel.src_height1 : 0x7fffffff;
+                int       sy;
+                if (!(mach64->src_cntl & SRC_PATT_EN) || (r < (c1 < 1 ? 1 : c1)))
+                    sy = mach64->accel.src_y_start + r * mach64->accel.yinc;
+                else {
+                    const int rot = (rec[M2_FLAGS] & M2F_PATT_ROT) != 0;
+                    const int c   = rot ? mach64->accel.src_height2 : mach64->accel.src_height1;
+                    sy = (rot ? (int) rec[M2_SY2] : mach64->accel.src_y_start) + ((r - (c1 < 1 ? 1 : c1)) % (c < 1 ? 1 : c)) * mach64->accel.yinc;
+                }
+                sy_lo = (sy < sy_lo) ? sy : sy_lo;
+                sy_hi = (sy > sy_hi) ? sy : sy_hi;
+            }
+            for (int p = 0; p < width; p++) {
+                const int c1 = (mach64->accel.src_width1 < 1) ? 1 : mach64->accel.src_width1;
+                int       sx;
+                if (p < c1)
+                    sx = mach64->accel.src_x_start + p * mach64->accel.xinc;
+                else {
+                    const int rot = (rec[M2_FLAGS] & M2F_PATT_ROT) != 0;
+                    const int c   = rot ? mach64->accel.src_width2 : mach64->accel.src_width1;
+                    sx = (rot ? (int) rec[M2_SX2] : mach64->accel.src_x_start) + ((p - c1) % (c < 1 ? 1 : c)) * mach64->accel.xinc;
+                }
+                sx_lo = (sx < sx_lo) ? sx : sx_lo;
+                sx_hi = (sx > sx_hi) ? sx : sx_hi;
+            }
+            if (rect_rows <= 0 || width <= 0)
+                continue;
+            p_lo = (int64_t) base + (int64_t) sy_lo * mach64->accel.src_pitch + sx_lo;
+            p_hi = (int64_t) base + (int64_t) sy_hi * mach64->accel.src_pitch + sx_hi;
+        }
+        uint64_t s_lo, s_hi;
+        if ((p_lo < 0) || (((uint64_t) p_hi * mach64_pix_bits(size)) >> 3) >= vram_size) {
+            s_lo = 0;
+            s_hi = vram_size;
+        } else
+            mach64_2d_bytes((uint32_t) p_lo, (uint32_t) p_hi, size, &s_lo, &s_hi);
+        if (mach64_2d_overlap(s_lo, s_hi, d_lo, d_hi))
+            in_order = 1;
+        if (kairo_seg_reads_pending(g->seg, (uint32_t) s_lo, (uint32_t) (s_hi - s_lo)))
+            kairo_seg_drain(g->seg);
+        kairo_seg_reads(g->seg, (uint32_t) s_lo, (uint32_t) (s_hi - s_lo));
+    }
+    /* The brush the VT3 took from video memory at the start (mach64_start_fill) */
+    if (in_order)
+        rec[M2_FLAGS] |= 1u << 31;
+
+    thread_wait_mutex(g->lock);
+    g->host         = !line && mach64->accel.source_host;
+    g->row          = 0;
+    g->row_done     = 0;
+    g->row_flushed  = 0;
+    g->row_appended = 0;
+    g->issued       = 0;
+    mach64_2d_current(g);
+    if (!line && !g->host) {
+        for (int r = 0; r < rect_rows; r++)
+            mach64_2d_rect_row(mach64, g, r, 0, width);
+    }
+    thread_release_mutex(g->lock);
+}
+
+/* A rectangle's host pixel, at the engine's position: recorded with its row, then the engine walks on */
+static int
+mach64_2d_host_pixel(mach64_t *mach64, uint32_t host)
+{
+    mach64_2d_gpu_t *g = mach64->k_2d;
+    int              finished;
+
+    thread_wait_mutex(g->lock);
+    if (g->row_done < (int) (sizeof(g->values) / sizeof(g->values[0])))
+        g->values[g->row_done] = host;
+    g->row_done++;
+    thread_release_mutex(g->lock);
+    finished = mach64_rect_advance(mach64);
+    if (mach64->accel.row_ended || finished) {
+        thread_wait_mutex(g->lock);
+        mach64_2d_host_row(mach64, g, g->row_done);
+        g->row++;
+        g->row_done     = 0;
+        g->row_flushed  = 0;
+        g->row_appended = 0;
+        if (finished)
+            g->host = 0;
+        thread_release_mutex(g->lock);
+    }
+    return finished;
+}
+
+/* The operation under way, on the GPU: as mach64_blit runs it */
+static void
+mach64_2d_blit(uint32_t cpu_dat, int count, mach64_t *mach64)
+{
+    uint32_t pix[32];
+    uint8_t  byte_of[32];
+    int      n;
+
+    if (count == -1) {
+        if (mach64->accel.op == OP_LINE) {
+            do
+                mach64_2d_line_pixel(mach64, mach64->k_2d, 0);
+            while (mach64->accel.busy && !mach64_line_advance(mach64));
+        } else {
+            /* every row went in at the start */
+            mach64->accel.poly_draw = 0;
+            mach64->accel.row_ended = 1;
+            mach64_rect_finish(mach64);
+        }
+        return;
+    }
+
+    n = mach64_host_pixels(mach64, cpu_dat, count, pix, byte_of);
+    for (int i = 0; (i < n) && mach64->accel.busy; i++) {
+        /* HOST_BYTE_ALIGN, as mach64_blit skips */
+        if (mach64->accel.row_ended) {
+            mach64->accel.row_ended = 0;
+            if ((mach64->host_cntl & HOST_BYTE_ALIGN) && (mach64->accel.op == OP_RECT) && (i > 0)) {
+                int w = (mach64->accel.source_mix == MONO_SRC_HOST) ? 1 : mach64_pix_bits(mach64->accel.host_size);
+
+                if (w < 8) {
+                    while ((i < n) && (byte_of[i] == byte_of[i - 1]))
+                        i++;
+                    if (i >= n)
+                        break;
+                }
+            }
+        }
+        if (mach64->accel.op == OP_LINE) {
+            mach64_2d_line_pixel(mach64, mach64->k_2d, pix[i]);
+            mach64_line_advance(mach64);
+        } else
+            mach64_2d_host_pixel(mach64, pix[i]);
+    }
+}
+
+/* KairoX86#237: the 2D engine's recorded work drawn first where something else meets the memory it draws on or
+   reads (no-ops in software) */
+void
+mach64_2d_kairo_touch(mach64_t *mach64, uint32_t addr, uint32_t len)
+{
+    if (mach64->k_2d != NULL)
+        kairo_seg_touch(((mach64_2d_gpu_t *) mach64->k_2d)->seg, addr & mach64->vram_mask, len);
+}
+
+/* Both engines' recorded work drawn first where something else meets its memory */
+void
+mach64_kairo_touch(mach64_t *mach64, uint32_t addr, uint32_t len)
+{
+    mach64_3d_kairo_touch(mach64, addr, len);
+    mach64_2d_kairo_touch(mach64, addr, len);
+}
+
+void
+mach64_2d_kairo_drain(mach64_t *mach64)
+{
+    if (mach64->k_2d != NULL)
+        kairo_seg_drain(((mach64_2d_gpu_t *) mach64->k_2d)->seg);
+}
+
+void
+mach64_2d_kairo_open(mach64_t *mach64)
+{
+    mach64_2d_gpu_t *g = calloc(1, sizeof(mach64_2d_gpu_t));
+
+    if (g == NULL)
+        fatal("Mach64 2D on the GPU: no memory\n");
+    g->seg      = kairo_mach64_2d_open(mach64->svga.vram, mach64->vram_mask, mach64->svga.changedvram,
+                                       &mach64->svga.monitor->mon_changeframecount);
+    g->lock     = thread_create_mutex();
+    mach64->k_2d = g;
+    kairo_seg_set_flush(g->seg, mach64_2d_flush, mach64);
+}
+
+void
+mach64_2d_kairo_close(mach64_t *mach64)
+{
+    mach64_2d_gpu_t *g = mach64->k_2d;
+
+    if (g == NULL)
+        return;
+    kairo_seg_close(g->seg);
+    thread_close_mutex(g->lock);
+    free(g);
+    mach64->k_2d = NULL;
 }
 
 /* Runs the operation under way. count is -1 when nothing comes from the
@@ -2036,6 +2546,11 @@ mach64_blit(uint32_t cpu_dat, int count, mach64_t *mach64)
         return;
     }
     mach64_3d_kairo_drain(mach64); /* KairoX86#237: rows recorded since the operation started */
+    if (mach64->k_2d != NULL) {
+        /* KairoX86#237: recorded for the GPU */
+        mach64_2d_blit(cpu_dat, count, mach64);
+        return;
+    }
 
     if (count == -1) {
         while (mach64->accel.busy && !mach64_pixel(mach64, 0))
@@ -2084,6 +2599,7 @@ mach64_load_context(mach64_t *mach64)
         [26] = 0x308, [27] = 0x330
     };
     mach64_3d_kairo_drain(mach64); /* KairoX86#237: the context is read from video memory */
+    mach64_2d_kairo_drain(mach64);
 
     if (cntl & (1u << 31))
         return;

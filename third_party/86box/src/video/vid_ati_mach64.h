@@ -383,6 +383,7 @@ typedef struct mach64_t {
 
     /* 3D Rage II+ (GT-B) */
     mach64_3d_t     *gt3d;        /* 3D engine and scaler, vid_ati_mach64_3d.c */
+    void            *k_2d;        /* KairoX86#237: the 2D engine's GPU batch, NULL in software */
     mach64_timing_t *timing;      /* draw engine timing, vid_ati_mach64_accel.c */
     int              render_threads; /* threads drawing a large trapezoid's rows */
     mem_mapping_t    aux_mapping; /* the register aperture at BAR2 */
@@ -512,6 +513,12 @@ void             mach64_3d_close(mach64_3d_t *ctx);
    (no-ops in software) */
 void mach64_3d_kairo_touch(mach64_t *mach64, uint32_t addr, uint32_t len);
 void mach64_3d_kairo_drain(mach64_t *mach64);
+/* KairoX86#237: the 2D engine's batch on the GPU (vid_ati_mach64_accel.c), and both engines' touch */
+void mach64_2d_kairo_open(mach64_t *mach64);
+void mach64_2d_kairo_close(mach64_t *mach64);
+void mach64_2d_kairo_touch(mach64_t *mach64, uint32_t addr, uint32_t len);
+void mach64_2d_kairo_drain(mach64_t *mach64);
+void mach64_kairo_touch(mach64_t *mach64, uint32_t addr, uint32_t len);
 int              mach64_3d_read(mach64_t *mach64, uint32_t addr, uint32_t *val);
 int              mach64_3d_write(mach64_t *mach64, uint32_t addr, uint32_t val, uint32_t type);
 mach64_timing_t *mach64_timing_init(void);

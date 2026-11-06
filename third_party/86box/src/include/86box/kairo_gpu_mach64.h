@@ -107,6 +107,36 @@ enum {
 /* The palettes a draw reads: the texture palette, then the RAMDAC's (svga pallook) */
 #define KAIRO_M64_PALETTE_WORDS 512
 
+/* The 2D engine's operation record (vid_ati_mach64_accel.c, core/kairo/shaders/mach64_2d.comp), as words */
+enum {
+    M2_FLAGS = 0, M2_DST_SIZE = 1, M2_SRC_SIZE = 2, M2_DST_OFFSET = 3, M2_DST_PITCH = 4, M2_SRC_OFFSET = 5, M2_SRC_PITCH = 6,
+    M2_POLY_OFFSET = 7, M2_MIX_FG = 8, M2_MIX_BG = 9, M2_SOURCE_FG = 10, M2_SOURCE_BG = 11, M2_SOURCE_MIX = 12,
+    M2_PAT_CNTL = 13, M2_PATTERN = 14 /* [2]: bit y * 8 + x */, M2_CLR4X2 = 16 /* [2] */, M2_CLR8X1 = 18 /* [2] */,
+    M2_CLR8X8 = 20 /* [16] */, M2_SC_LEFT = 36, M2_SC_RIGHT = 37, M2_SC_TOP = 38, M2_SC_BOTTOM = 39, M2_FG = 40,
+    M2_BG = 41, M2_WRITE_MASK = 42, M2_CMP_CLR = 43, M2_CMP_MASK = 44, M2_CMP_FN = 45, M2_CMP_SRC = 46, M2_XINC = 47,
+    M2_YINC = 48, M2_ROT0 = 49, M2_DST_X = 50, M2_DST_Y = 51, M2_WIDTH = 52, M2_SX1 = 53, M2_SY1 = 54, M2_SX2 = 55,
+    M2_SY2 = 56, M2_W1 = 57, M2_H1 = 58, M2_W2 = 59, M2_H2 = 60, M2_CHAIN = 61, M2_BNDRY = 62,
+    M2_HOST = 63 /* host data: row r's pixel p at stream[M2_HOST + r * M2_WIDTH + p] */, M2_LIN_L1 = 64,
+    M2_LIN_STEP = 65, M2_LINE_SRC_Y = 66, M2_WORDS = 72
+};
+/* M2_FLAGS */
+#define M2F_LINE      0x001u
+#define M2F_ROT       0x002u /* DST_24_ROT_EN */
+#define M2F_PIX_ORDER 0x004u /* DP_BYTE_PIX_ORDER */
+#define M2F_LINEAR    0x008u /* SRC_LINEAR_EN */
+#define M2F_POLYGON   0x010u /* a rectangle's DST_POLYGON_EN */
+#define M2F_RTEDGE    0x020u /* DST_POLYGON_RTEDGE_DIS, on the CT and later */
+#define M2F_BRUSH     0x040u /* the VT3's 8x8x8 brush */
+#define M2F_PATT_ROT  0x080u /* SRC_PATT_EN and SRC_PATT_ROT_EN */
+#define M2F_PATT_EN   0x100u
+#define M2F_BNDRY     0x400u /* MEM_BNDRY_EN */
+/* A line pixel's stream words: dst_x, its drawn X, dst_y, src_x, the host pixel */
+#define M2_LINE_PIXEL_WORDS 5
+
+/* The 2D engine's batch on the GPU (kairo_gpu_seg.h) */
+struct kairo_seg;
+struct kairo_seg *kairo_mach64_2d_open(uint8_t *vram, uint32_t vram_mask, uint8_t *changed, const int *stamp);
+
 /* The card's GPU state, its video memory shared with the GPU (kairo_gpu_alloc); dither is the 3D engine's X error
    diffusion state (valid, y, three errors), which the GPU carries while it draws */
 void *kairo_mach64_gpu_open(uint8_t *vram, uint32_t vram_mask, int32_t *dither);

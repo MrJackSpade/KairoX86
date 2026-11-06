@@ -2273,6 +2273,9 @@ mach64_3d_gpu_rows(mach64_3d_t *ctx, const mach64_3d_rows_job_t *job)
     uint32_t                 palettes[KAIRO_M64_PALETTE_WORDS];
     uint32_t                 rows[MACH64_3D_ROWS * KR_WORDS];
 
+    /* the 2D engine's recorded work first: it ran before these rows */
+    mach64_2d_kairo_drain((mach64_t *) mach64);
+
     record[KM_FLAGS] = (px->textured ? KAIRO_M64_TEXTURED : 0) | (px->z_enabled ? KAIRO_M64_Z_ENABLED : 0) |
                        (px->z_write ? KAIRO_M64_Z_WRITE : 0) | (px->dst_compare ? KAIRO_M64_DST_COMPARE : 0) |
                        (job->dp_constant ? KAIRO_M64_DP_CONSTANT : 0) | (job->line ? KAIRO_M64_LINE : 0) |
@@ -2367,13 +2370,6 @@ mach64_3d_kairo_touch(mach64_t *mach64, uint32_t addr, uint32_t len)
 {
     if ((mach64->gt3d != NULL) && (mach64->gt3d->k_gpu != NULL))
         kairo_mach64_gpu_touch(mach64->gt3d->k_gpu, addr & mach64->vram_mask, len);
-}
-
-/* The SVGA core's memory handlers and display (svga->kairo_touch) */
-static void
-mach64_3d_svga_touch(svga_t *svga, uint32_t addr, uint32_t len)
-{
-    mach64_3d_kairo_touch((mach64_t *) svga->priv, addr, len);
 }
 
 void
@@ -3193,6 +3189,7 @@ mach64_scaler_gpu(mach64_3d_t *ctx, const mach64_scaler_t *sc)
     int first = (sc->x_dir > 0) ? sc->dst_x : (sc->dst_x - (sc->dst_width - 1));
     int last  = (sc->x_dir > 0) ? (sc->dst_x + (sc->dst_width - 1)) : sc->dst_x;
 
+    mach64_2d_kairo_drain((mach64_t *) mach64); /* the 2D engine's recorded work first */
     if (first < 0)
         first = 0;
     if (first < sc->sc_left)
@@ -3584,8 +3581,7 @@ mach64_3d_init(mach64_t *mach64)
     ctx->threads = ((mach64->render_threads == 2) || (mach64->render_threads == 4)) ? mach64->render_threads : 1;
     /* KairoX86#237: with Hardware acceleration on, the rows drawn on the GPU */
     if (kairo_gpu_on) {
-        ctx->k_gpu              = kairo_mach64_gpu_open(mach64->svga.vram, mach64->vram_mask, (int32_t *) &ctx->dither);
-        mach64->svga.kairo_touch = mach64_3d_svga_touch;
+        ctx->k_gpu = kairo_mach64_gpu_open(mach64->svga.vram, mach64->vram_mask, (int32_t *) &ctx->dither);
     }
     return ctx;
 }

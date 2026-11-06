@@ -22,6 +22,7 @@
  */
 
 #include "vid_ati_mach64.h"
+#include <86box/kairo_gpu.h> /* KairoX86#237 */
 
 video_timings_t timing_mach64_isa = { .type = VIDEO_ISA, .write_b = 3, .write_w = 3, .write_l = 6, .read_b = 5, .read_w = 5, .read_l = 10 };
 /* In an 8-bit slot every access is an 8-bit ISA cycle, a word two of them:
@@ -2988,7 +2989,7 @@ mach64_read_linear(uint32_t addr, void *priv)
     addr &= svga->decode_mask;
     if (addr >= svga->vram_max)
         return 0xff;
-    mach64_3d_kairo_touch((mach64_t *) svga->priv, addr, 1); /* KairoX86#237 */
+    mach64_kairo_touch((mach64_t *) svga->priv, addr, 1); /* KairoX86#237 */
 
     return svga->vram[addr & svga->vram_mask];
 }
@@ -3003,7 +3004,7 @@ mach64_readw_linear(uint32_t addr, void *priv)
     addr &= svga->decode_mask;
     if (addr >= svga->vram_max)
         return 0xffff;
-    mach64_3d_kairo_touch((mach64_t *) svga->priv, addr, 2); /* KairoX86#237 */
+    mach64_kairo_touch((mach64_t *) svga->priv, addr, 2); /* KairoX86#237 */
 
     return *(uint16_t *) &svga->vram[addr & svga->vram_mask];
 }
@@ -3018,7 +3019,7 @@ mach64_readl_linear(uint32_t addr, void *priv)
     addr &= svga->decode_mask;
     if (addr >= svga->vram_max)
         return 0xffffffff;
-    mach64_3d_kairo_touch((mach64_t *) svga->priv, addr, 4); /* KairoX86#237 */
+    mach64_kairo_touch((mach64_t *) svga->priv, addr, 4); /* KairoX86#237 */
 
     return *(uint32_t *) &svga->vram[addr & svga->vram_mask];
 }
@@ -3033,7 +3034,7 @@ mach64_write_linear(uint32_t addr, uint8_t val, void *priv)
     if (addr >= svga->vram_max)
         return;
     addr &= svga->vram_mask;
-    mach64_3d_kairo_touch((mach64_t *) svga->priv, addr, 1); /* KairoX86#237 */
+    mach64_kairo_touch((mach64_t *) svga->priv, addr, 1); /* KairoX86#237 */
     svga->changedvram[addr >> 12] = svga->monitor->mon_changeframecount;
     svga->vram[addr]              = val;
 }
@@ -3049,7 +3050,7 @@ mach64_writew_linear(uint32_t addr, uint16_t val, void *priv)
     if (addr >= svga->vram_max)
         return;
     addr &= svga->vram_mask;
-    mach64_3d_kairo_touch((mach64_t *) svga->priv, addr, 2); /* KairoX86#237 */
+    mach64_kairo_touch((mach64_t *) svga->priv, addr, 2); /* KairoX86#237 */
     svga->changedvram[addr >> 12]   = svga->monitor->mon_changeframecount;
     *(uint16_t *) &svga->vram[addr] = val;
 }
@@ -3068,7 +3069,7 @@ mach64_writel_linear(uint32_t addr, uint32_t val, void *priv)
             bswap32s(&val);
         if (((mach64->scaler_yuv_aper >> 4) & 0xc) == 0x4) { // Y plane
             offset_from_base <<= 1;
-            mach64_3d_kairo_touch(mach64, offset_from_base, 6); /* KairoX86#237 */
+            mach64_kairo_touch(mach64, offset_from_base, 6); /* KairoX86#237 */
             svga->vram[offset_from_base & svga->vram_mask] = (val & 0xFF);
             svga->vram[(offset_from_base + 1) & svga->vram_mask] = ((val >> 8) & 0xFF);
             svga->vram[(offset_from_base + 4) & svga->vram_mask] = ((val >> 16) & 0xFF);
@@ -3076,7 +3077,7 @@ mach64_writel_linear(uint32_t addr, uint32_t val, void *priv)
         }
         else if (((mach64->scaler_yuv_aper >> 4) & 0xc) == 0x8 || ((mach64->scaler_yuv_aper >> 4) & 0xc) == 0xc) {
             offset_from_base <<= 2;
-            mach64_3d_kairo_touch(mach64, offset_from_base, 16); /* KairoX86#237 */
+            mach64_kairo_touch(mach64, offset_from_base, 16); /* KairoX86#237 */
             if (((mach64->scaler_yuv_aper >> 4) & 0xc) == 0x8) { // U plane
                 svga->vram[(offset_from_base + 3) & svga->vram_mask] = (val & 0xFF);
                 svga->vram[(offset_from_base + 7) & svga->vram_mask] = ((val >> 8) & 0xFF);
@@ -3096,7 +3097,7 @@ mach64_writel_linear(uint32_t addr, uint32_t val, void *priv)
     if (addr >= svga->vram_max)
         return;
     addr &= svga->vram_mask;
-    mach64_3d_kairo_touch(mach64, addr, 4); /* KairoX86#237 */
+    mach64_kairo_touch(mach64, addr, 4); /* KairoX86#237 */
     svga->changedvram[addr >> 12]   = svga->monitor->mon_changeframecount;
     *(uint32_t *) &svga->vram[addr] = val;
 }
@@ -3416,6 +3417,22 @@ mach64_reset(void *priv)
     }
 }
 
+/* KairoX86#295: each line drawn once every operation the guest queued before it has run (the 2D engine's FIFO,
+   run here on the display's thread as mach64_wait_fifo_idle runs it), as the ViRGE's and the Voodoos' displays
+   settle */
+static void
+mach64_render_sync(svga_t *svga)
+{
+    mach64_wait_fifo_idle((mach64_t *) svga->priv);
+}
+
+/* KairoX86#237: the SVGA core's memory handlers and display (svga->kairo_touch) */
+static void
+mach64_svga_touch(svga_t *svga, uint32_t addr, uint32_t len)
+{
+    mach64_kairo_touch((mach64_t *) svga->priv, addr, len);
+}
+
 static void *
 mach64_common_init(const device_t *info)
 {
@@ -3452,6 +3469,13 @@ mach64_common_init(const device_t *info)
                   mach64_in, mach64_out,
                   NULL,
                   mach64_overlay_draw);
+    svga->render_sync = mach64_render_sync; /* KairoX86#295 */
+    /* KairoX86#237: with Hardware acceleration on, the 2D engine's operations drawn on the GPU, and both engines' work
+       drawn first where the SVGA core's handlers or the display meet it */
+    if (kairo_gpu_on) {
+        mach64_2d_kairo_open(mach64);
+        svga->kairo_touch = mach64_svga_touch;
+    }
 
     mem_mapping_add(&mach64->linear_mapping, 0, 0, mach64_read_linear, mach64_readw_linear, mach64_readl_linear, mach64_write_linear, mach64_writew_linear, mach64_writel_linear, NULL, MEM_MAPPING_EXTERNAL, svga);
     mem_mapping_add(&mach64->linear_mapping_big_endian, 0, 0, mach64_readb_be, mach64_readw_be, mach64_readl_be, mach64_writeb_be, mach64_writew_be, mach64_writel_be, NULL, MEM_MAPPING_EXTERNAL, svga);
@@ -3828,6 +3852,7 @@ mach64_close(void *priv)
 #ifdef DMA_BM
     thread_close_mutex(mach64->dma.lock);
 #endif
+    mach64_2d_kairo_close(mach64); /* KairoX86#237: after the FIFO thread, before video memory goes */
 
     if (mach64->type == MACH64_GTB) {
         io_removehandler(0x0102, 0x0001, mach64_gtb_genvs_in, NULL, NULL, mach64_gtb_genvs_out, NULL, NULL, mach64);

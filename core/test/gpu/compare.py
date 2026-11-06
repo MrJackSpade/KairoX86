@@ -33,7 +33,8 @@ MAX_SHARE = 0.002
 # The test boards, in order of choice for a card its bus's board does not take
 BOARDS = {
     '686bx': "machine = 686bx\ncpu_family = pentiumpro\ncpu_speed = 200000000\ncpu_multi = 3\nmem_size = 65536\n",
-    '486ap4': "machine = 486ap4\ncpu_family = i486dx2\ncpu_speed = 66666666\ncpu_multi = 2\nmem_size = 32768\n",
+    # 8 MB: a Mach64 GX's aperture must fit above the memory and below an ISA card's 16 MB
+    '486ap4': "machine = 486ap4\ncpu_family = i486dx2\ncpu_speed = 66666666\ncpu_multi = 2\nmem_size = 8192\n",
     'ibmps2_m55ls': "machine = ibmps2_m55ls\ncpu_family = i386sx\ncpu_speed = 16000000\ncpu_multi = 1\nmem_size = 4096\n",
 }
 # The add-on cards, beside an S3 Trio64: each one's [Video] line and its own section (the Voodoos drawn by the C

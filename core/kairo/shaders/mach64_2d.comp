@@ -1,0 +1,322 @@
+#version 450
+#extension GL_EXT_control_flow_attributes : require
+/*
+ * The ATI Mach64's 2D engine on the GPU (KairoX86#237): 86Box's mach64_rect_draw and mach64_line_draw
+ * (vid_ati_mach64_accel.c) for a batch of operations, on the drawing engines' shared batches (seg.glsl,
+ * 86box/kairo_gpu_seg.h). A rectangle's segments are its rows (the pixel number its place along the row); a line's,
+ * its pixels one each (the row the place of its pixel's position in the stream). A rectangle pixel's position
+ * along the source (its trajectory, the pattern's wrap, a linear source's byte-aligned rows) is the CPU's walk in
+ * closed form.
+ *
+ * The operation record's layout is vid_ati_mach64_accel.c's (M2_*), as words.
+ *
+ * Copyright 2026 MrJackSpade. GPL-2.0-or-later.
+ */
+#include "seg.glsl"
+
+const uint M2_FLAGS = 0u, M2_DST_SIZE = 1u, M2_SRC_SIZE = 2u, M2_DST_OFFSET = 3u, M2_DST_PITCH = 4u, M2_SRC_OFFSET = 5u,
+           M2_SRC_PITCH = 6u, M2_POLY_OFFSET = 7u, M2_MIX_FG = 8u, M2_MIX_BG = 9u, M2_SOURCE_FG = 10u, M2_SOURCE_BG = 11u,
+           M2_SOURCE_MIX = 12u, M2_PAT_CNTL = 13u, M2_PATTERN = 14u, M2_CLR4X2 = 16u, M2_CLR8X1 = 18u, M2_CLR8X8 = 20u,
+           M2_SC_LEFT = 36u, M2_SC_RIGHT = 37u, M2_SC_TOP = 38u, M2_SC_BOTTOM = 39u, M2_FG = 40u, M2_BG = 41u,
+           M2_WRITE_MASK = 42u, M2_CMP_CLR = 43u, M2_CMP_MASK = 44u, M2_CMP_FN = 45u, M2_CMP_SRC = 46u, M2_XINC = 47u,
+           M2_YINC = 48u, M2_ROT0 = 49u, M2_DST_X = 50u, M2_DST_Y = 51u, M2_WIDTH = 52u, M2_SX1 = 53u, M2_SY1 = 54u,
+           M2_SX2 = 55u, M2_SY2 = 56u, M2_W1 = 57u, M2_H1 = 58u, M2_W2 = 59u, M2_H2 = 60u, M2_CHAIN = 61u,
+           M2_BNDRY = 62u, M2_HOST = 63u, M2_LIN_L1 = 64u, M2_LIN_STEP = 65u, M2_LINE_SRC_Y = 66u, M2_WORDS = 72u;
+/* M2_FLAGS */
+const uint F_LINE = 1u, F_ROT = 2u, F_PIX_ORDER = 4u, F_LINEAR = 8u, F_POLYGON = 16u, F_RTEDGE = 32u, F_BRUSH = 64u,
+           F_PATT_ROT = 128u, F_PATT_EN = 256u, F_ALIGN = 512u, F_BNDRY = 1024u;
+/* Sources (DP_SRC) */
+const uint SRC_BG = 0u, SRC_FG = 1u, SRC_HOST = 2u, SRC_BLITSRC = 3u, SRC_PAT = 4u;
+const uint MONO_SRC_1 = 0u, MONO_SRC_PAT = 1u, MONO_SRC_HOST = 2u, MONO_SRC_BLITSRC = 3u;
+const uint WIDTH_1BIT = 3u, WIDTH_4BIT = 4u;
+
+uint o;     /* the operation's record */
+uint flags;
+
+uint ow(uint i) { return ops[o + i]; }
+int  oi(uint i) { return int(ops[o + i]); }
+
+uint pix_bits(uint size)
+{
+    switch (size) {
+        case WIDTH_1BIT: return 1u;
+        case WIDTH_4BIT: return 4u;
+        case 0u: return 8u;
+        case 1u: return 16u;
+        default: return 32u;
+    }
+}
+
+/* READ: a pixel of the given width at pixel address a */
+uint read_px(uint a, uint width)
+{
+    bool order = (flags & F_PIX_ORDER) != 0u;
+    switch (width) {
+        case 0u: return rd8(a);
+        case 1u: return rd16(a << 1);
+        case 2u: return rd32(a << 2);
+        case WIDTH_4BIT: {
+            uint nb = rd8(a >> 1);
+            if (order)
+                return ((a & 1u) != 0u) ? (nb >> 4) : (nb & 0xfu);
+            return ((a & 1u) != 0u) ? (nb & 0xfu) : (nb >> 4);
+        }
+        default:
+            return order ? ((rd8(a >> 3) >> (a & 7u)) & 1u) : ((rd8(a >> 3) >> (7u - (a & 7u))) & 1u);
+    }
+}
+
+/* mach64_below_bndry */
+bool below_bndry(uint a, uint width)
+{
+    if ((flags & F_BNDRY) == 0u)
+        return false;
+    uint byte;
+    switch (width) {
+        case 0u: byte = a; break;
+        case 1u: byte = a << 1; break;
+        case 2u: byte = a << 2; break;
+        case WIDTH_4BIT: byte = a >> 1; break;
+        default: byte = a >> 3; break;
+    }
+    return (byte & pc.vram_mask) < ow(M2_BNDRY);
+}
+
+/* WRITE */
+void write_px(uint a, uint width, uint v)
+{
+    if (below_bndry(a, width))
+        return;
+    bool order = (flags & F_PIX_ORDER) != 0u;
+    switch (width) {
+        case 0u: wr8(a, v); break;
+        case 1u: wr16(a << 1, v); break;
+        case 2u: wr32(a << 2, v); break;
+        case WIDTH_4BIT: {
+            uint nb = rd8(a >> 1);
+            bool hi = order ? ((a & 1u) != 0u) : ((a & 1u) == 0u);
+            wr8(a >> 1, hi ? ((nb & 0x0fu) | ((v & 0xfu) << 4)) : ((nb & 0xf0u) | (v & 0xfu)));
+            break;
+        }
+        default: {
+            uint nb  = rd8(a >> 3);
+            uint bit = order ? (a & 7u) : (7u - (a & 7u));
+            wr8(a >> 3, ((v & 1u) != 0u) ? (nb | (1u << bit)) : (nb & ~(1u << bit)));
+            break;
+        }
+    }
+}
+
+/* mach64_mix_avg */
+uint mix_avg(uint s, uint d)
+{
+    int  bits  = int(pix_bits(ow(M2_DST_SIZE)));
+    uint chain = (ow(M2_CHAIN) & 0x7fffu) | 0x8000u;
+    uint ret   = 0u;
+    int  start = 0;
+    int  top   = (bits < 16) ? bits : 32;
+    if (bits < 16)
+        chain |= 1u << uint(bits - 1);
+    for (int i = 0; i < top; i++) {
+        if ((((chain >> uint(i & 15)) & 1u) != 0u) || (i == top - 1)) {
+            int  w   = i - start + 1;
+            uint m   = (w >= 32) ? 0xffffffffu : ((1u << uint(w)) - 1u);
+            uint sum = ((s >> uint(start)) & m) + ((d >> uint(start)) & m);
+            ret |= ((sum >> 1) & m) << uint(start);
+            start = i + 1;
+        }
+    }
+    return ret;
+}
+
+/* MIX */
+uint mix_fn(uint fn, uint src, uint dst)
+{
+    switch (fn) {
+        case 0x0u: return ~dst;
+        case 0x1u: return 0u;
+        case 0x2u: return 0xffffffffu;
+        case 0x3u: return dst;
+        case 0x4u: return ~src;
+        case 0x5u: return src ^ dst;
+        case 0x6u: return ~(src ^ dst);
+        case 0x7u: return src;
+        case 0x8u: return ~(src & dst);
+        case 0x9u: return ~src | dst;
+        case 0xau: return src | ~dst;
+        case 0xbu: return src | dst;
+        case 0xcu: return src & dst;
+        case 0xdu: return src & ~dst;
+        case 0xeu: return ~src & dst;
+        case 0xfu: return ~(src | dst);
+        case 0x17u: return mix_avg(src, dst);
+        default: return dst;
+    }
+}
+
+/* mach64_blit_calc_cmp_clr */
+bool cmp_clr(uint src, uint dst)
+{
+    uint sel = (ow(M2_CMP_SRC) != 0u) ? src : dst;
+    switch (ow(M2_CMP_FN)) {
+        case 1u: return true;
+        case 4u: return (sel & ow(M2_CMP_MASK)) != ow(M2_CMP_CLR);
+        case 5u: return (sel & ow(M2_CMP_MASK)) == ow(M2_CMP_CLR);
+        default: return false;
+    }
+}
+
+uint pattern_bit(int y, int x) { return (ops[o + M2_PATTERN + uint((y & 7) >> 2)] >> uint(((y & 3) << 3) + (x & 7))) & 1u; }
+uint byte_of(uint base, uint i) { return (ops[o + base + (i >> 2)] >> ((i & 3u) * 8u)) & 0xffu; }
+
+/* One destination pixel: its mono bit (mix) and source, the compare, the mix, the write mask, the write */
+void draw_px(uint mix, int dst_x, int dst_y, int pat_x, uint src_pos, uint host, uint rot, bool rot_on)
+{
+    uint src = 0u;
+    switch ((mix != 0u) ? ow(M2_SOURCE_FG) : ow(M2_SOURCE_BG)) {
+        case SRC_HOST: src = host; break;
+        case SRC_BLITSRC:
+            if ((flags & F_BRUSH) != 0u)
+                src = byte_of(M2_CLR8X8, uint(((dst_y & 7) << 3) | (pat_x & 7)));
+            else
+                src = read_px(src_pos, ow(M2_SRC_SIZE));
+            break;
+        case SRC_FG: src = rot_on ? ((ow(M2_FG) >> (8u * rot)) & 0xffu) : ow(M2_FG); break;
+        case SRC_BG: src = rot_on ? ((ow(M2_BG) >> (8u * rot)) & 0xffu) : ow(M2_BG); break;
+        case SRC_PAT:
+            if ((ow(M2_PAT_CNTL) & 2u) != 0u)
+                src = byte_of(M2_CLR4X2, uint(((dst_y & 1) << 2) | (pat_x & 3)));
+            else if ((ow(M2_PAT_CNTL) & 4u) != 0u)
+                src = byte_of(M2_CLR8X1, uint(pat_x & 7));
+            break;
+        default: break;
+    }
+    uint width = ow(M2_DST_SIZE);
+    uint a     = ow(M2_DST_OFFSET) + uint(dst_y) * ow(M2_DST_PITCH) + uint(dst_x);
+    uint dst   = read_px(a, width);
+    if (!cmp_clr(src, dst)) {
+        uint wm  = rot_on ? ((ow(M2_WRITE_MASK) >> (8u * rot)) & 0xffu) : ow(M2_WRITE_MASK);
+        uint old = dst;
+        dst      = mix_fn((mix != 0u) ? ow(M2_MIX_FG) : ow(M2_MIX_BG), src, dst);
+        dst      = (dst & wm) | (old & ~wm);
+    }
+    write_px(a, width, dst);
+}
+
+/* A non-linear source's coordinate at step n of a trajectory starting at s1 for c1 steps, then wrapping at s for
+   c steps (the CPU's count, which wraps once it reaches 0) */
+int wrap_coord(int n, int s1, int c1, int s, int c, int step)
+{
+    c1 = max(c1, 1);
+    if (n < c1)
+        return s1 + n * step;
+    c = max(c, 1);
+    return s + ((n - c1) % c) * step;
+}
+
+/* A rectangle pixel's source position (in source pixels), by its row and place */
+uint rect_src_pos(int row, int p, out int src_x, out int src_y)
+{
+    int xinc = oi(M2_XINC), yinc = oi(M2_YINC);
+    bool rot = (flags & F_PATT_ROT) != 0u;
+    if ((flags & F_PATT_EN) != 0u)
+        src_y = wrap_coord(row, oi(M2_SY1), oi(M2_H1), rot ? oi(M2_SY2) : oi(M2_SY1), rot ? oi(M2_H2) : oi(M2_H1), yinc);
+    else
+        src_y = oi(M2_SY1) + row * yinc;
+    if ((flags & F_LINEAR) != 0u) {
+        /* the row's start: 0, then (byte-aligned) the first row's end, then a whole aligned row on */
+        int l = (row == 0) ? 0 : (oi(M2_LIN_L1) + (row - 1) * oi(M2_LIN_STEP));
+        src_x = l + p;
+        return ow(M2_SRC_OFFSET) + uint(src_x);
+    }
+    src_x = wrap_coord(p, oi(M2_SX1), oi(M2_W1), rot ? oi(M2_SX2) : oi(M2_SX1), rot ? oi(M2_W2) : oi(M2_W1), xinc);
+    return ow(M2_SRC_OFFSET) + uint(src_y) * ow(M2_SRC_PITCH) + uint(src_x);
+}
+
+/* The polygon boundary bit at a rectangle pixel (its source position in the boundary's 1 bpp source) */
+uint poly_bound(int row, int p)
+{
+    int sx, sy;
+    rect_src_pos(row, p, sx, sy);
+    /* a linear source's Y stays where it started (mach64_rect_advance moves only its X) */
+    if ((flags & F_LINEAR) != 0u)
+        sy = oi(M2_SY1);
+    return read_px(ow(M2_POLY_OFFSET) + uint(sy) * ow(M2_SRC_PITCH) + uint(sx), WIDTH_1BIT);
+}
+
+void rect_pixels(int row, int i0, int i1, uint first)
+{
+    int  xinc   = oi(M2_XINC);
+    int  dst_y  = oi(M2_DST_Y) + row * oi(M2_YINC);
+    bool rot_on = (flags & F_ROT) != 0u;
+    /* A polygon fill's state: the boundary toggles it, from the row's start (mach64_rect_draw keeps it from pixel to
+       pixel) */
+    bool poly = false;
+    int  p0   = int(first) + i0;
+    if ((flags & F_POLYGON) != 0u)
+        for (int q = 0; q < p0; q++)
+            if (poly_bound(row, q) != 0u)
+                poly = !poly;
+    for (int i = i0; i < i1; i++) {
+        int  p     = int(first) + i;
+        int  dst_x = oi(M2_DST_X) + p * xinc;
+        int  sx, sy;
+        uint src_pos = rect_src_pos(row, p, sx, sy);
+        uint mix     = 0u;
+        switch (ow(M2_SOURCE_MIX)) {
+            case MONO_SRC_HOST: mix = stream[ow(M2_HOST) + uint(row) * ow(M2_WIDTH) + uint(p)] & 1u; break;
+            case MONO_SRC_PAT:
+                mix = rot_on ? pattern_bit(dst_y, ((dst_x - ((dst_x < 0) ? 2 : 0)) / 3) & 7) : pattern_bit(dst_y, dst_x);
+                break;
+            case MONO_SRC_1: mix = 1u; break;
+            case MONO_SRC_BLITSRC: mix = read_px(src_pos, WIDTH_1BIT); break;
+            default: break;
+        }
+        bool draw = true;
+        if ((flags & F_POLYGON) != 0u) {
+            bool was   = poly;
+            uint bound = poly_bound(row, p);
+            if (bound != 0u)
+                poly = !poly;
+            draw = was || poly;
+            if ((bound != 0u) && was && !poly && ((flags & F_RTEDGE) != 0u))
+                draw = false;
+        }
+        if (draw && (dst_x >= oi(M2_SC_LEFT)) && (dst_x <= oi(M2_SC_RIGHT)) && (dst_y >= oi(M2_SC_TOP)) && (dst_y <= oi(M2_SC_BOTTOM))) {
+            uint host = ((ow(M2_SOURCE_FG) == SRC_HOST) || (ow(M2_SOURCE_BG) == SRC_HOST))
+                        ? stream[ow(M2_HOST) + uint(row) * ow(M2_WIDTH) + uint(p)] : 0u;
+            uint rot  = uint((oi(M2_ROT0) + p * ((xinc > 0) ? 1 : 2)) % 3);
+            draw_px(mix, dst_x, dst_y, dst_x, src_pos, host, rot, rot_on);
+        }
+    }
+}
+
+/* A line's pixel: its stream words (dst_x, dx, dst_y, src_x, host) */
+void line_pixel(uint at)
+{
+    int  dst_x = int(stream[at]);
+    int  dx    = int(stream[at + 1u]);
+    int  dst_y = int(stream[at + 2u]);
+    int  src_x = int(stream[at + 3u]);
+    uint host  = stream[at + 4u];
+    int  src_y = oi(M2_LINE_SRC_Y);
+    uint mix   = 0u;
+    switch (ow(M2_SOURCE_MIX)) {
+        case MONO_SRC_HOST: mix = host & 1u; break;
+        case MONO_SRC_PAT: mix = pattern_bit(dst_y, dst_x); break;
+        case MONO_SRC_1: mix = 1u; break;
+        case MONO_SRC_BLITSRC: mix = read_px(ow(M2_SRC_OFFSET) + uint(src_y) * ow(M2_SRC_PITCH) + uint(src_x), WIDTH_1BIT); break;
+        default: break;
+    }
+    draw_px(mix, dx, dst_y, dx, ow(M2_SRC_OFFSET) + uint(src_y) * ow(M2_SRC_PITCH) + uint(src_x), host, 0u, false);
+}
+
+void card_pixels(uint seg, uint op, uint row, uint first, int i0, int i1)
+{
+    o     = op * M2_WORDS;
+    flags = ow(M2_FLAGS);
+    if ((flags & F_LINE) != 0u)
+        line_pixel(row);
+    else
+        rect_pixels(int(row), i0, i1, first);
+}
