@@ -31,6 +31,8 @@
 #include <86box/video.h>
 #include <86box/vid_hercules.h>
 #include <86box/plat_unused.h>
+#include <stdbool.h>
+#include <86box/kairo_gpu.h> /* KairoX86#257 */
 
 static video_timings_t timing_hercules = { .type = VIDEO_ISA, .write_b = 8, .write_w = 16, .write_l = 32, .read_b = 8, .read_w = 16, .read_l = 32 };
 
@@ -257,6 +259,10 @@ hercules_render_overscan_left(hercules_t *dev)
     if (width == 0)
         return;
 
+    /* KairoX86#257: a row the GPU still has to draw is drawn before the CPU draws on it again */
+    if (kairo_gpu_on)
+        kairo_gpu_scan_touch(buffer32, (uint32_t) (buffer32->line[dev->displine + 14] - buffer32->dat), (uint32_t) buffer32->w);
+
     for (uint8_t i = 0; i < 8; i++)
         buffer32->line[dev->displine + 14][i] = 0x00000000;
 }
@@ -279,6 +285,70 @@ hercules_render_overscan_right(hercules_t *dev)
 
     for (uint8_t i = 0; i < 8; i++)
         buffer32->line[dev->displine + 14][8 + width + i] = 0x00000000;
+}
+
+/* KairoX86#257: the line (hercules_poll's, read as it reads it) to the GPU's scanout queue
+   (86box/kairo_gpu.h), coloured as video_process_8 colours it; returns whether the GPU draws it,
+   dev->memaddr moved as the drawing moves it. */
+static bool
+hercules_render_gpu(hercules_t *dev, uint16_t cursoraddr)
+{
+    const uint32_t columns = dev->crtc[1];
+    if (!kairo_gpu_on || (columns == 0) || ((dev->ctrl & 0x02) && herc_blend))
+        return false; /* the CPU draws it: hercules_render_overscan_left drew the row's queued drawing first */
+    bitmap_t      *bitmap = buffer32;
+    uint32_t      *pixels = &bitmap->line[dev->displine + 14][8];
+    const uint32_t out    = (uint32_t) (pixels - bitmap->dat);
+    if (dev->ctrl & 0x02) {
+        /* Graphics: 16 pixels of 1 bit a column, colour 7 or 0 */
+        uint32_t base = (dev->scanline & 3) * 0x2000;
+        if (dev->ctrl & 0x80)
+            base += 0x8000;
+        const uint32_t colours[2] = { pal_lookup[0], pal_lookup[7] };
+        uint8_t       *bytes      = (uint8_t *) kairo_gpu_scan(bitmap, bitmap->kairo_gpu, out, KAIRO_SCAN_BITS, columns * 16,
+                                                               (columns * 2 + 3) / 4, colours, 2, 1, 0, 0);
+        for (uint32_t x = 0; x < columns; x++) {
+            const uint32_t at = ((dev->memaddr << 1) & 0x1fff) + base;
+            bytes[x * 2]      = (dev->ctrl & 8) ? dev->vram[at] : 0;
+            bytes[x * 2 + 1]  = (dev->ctrl & 8) ? dev->vram[at + 1] : 0;
+            dev->memaddr++;
+        }
+        kairo_gpu_scan_commit();
+        return true;
+    }
+    uint32_t *cells = kairo_gpu_scan(bitmap, bitmap->kairo_gpu, out, KAIRO_SCAN_TEXT, columns * 9, columns, pal_lookup, 256, 9, 0, 0);
+    for (uint32_t x = 0; x < columns; x++) {
+        uint8_t chr  = 0;
+        uint8_t attr = 0;
+        if (dev->ctrl & 8) {
+            chr  = dev->charbuffer[x << 1];
+            attr = dev->charbuffer[(x << 1) + 1];
+        }
+        const bool drawcursor = ((dev->memaddr == cursoraddr) && dev->cursorvisible && dev->cursoron);
+        const int  blink      = ((dev->blink & 16) && (dev->ctrl & 0x20) && (attr & 0x80) && !drawcursor);
+        uint32_t   fg         = dev->cols[attr][blink][1];
+        uint32_t   bg         = dev->cols[attr][blink][0];
+        uint32_t   dat;
+        bool       ninth;
+        if ((dev->scanline == 12) && ((attr & 7) == 1)) {
+            dat   = 0xff;
+            ninth = true;
+        } else {
+            dat   = fontdatm[chr][dev->scanline];
+            ninth = ((chr & ~0x1f) == 0xc0) && (dat & 1);
+        }
+        if (dev->ctrl2 & 0x01)
+            dev->memaddr = (dev->memaddr + 1) & 0x3fff;
+        else
+            dev->memaddr = (dev->memaddr + 1) & 0x7ff;
+        if (drawcursor) {
+            fg ^= dev->cols[attr][0][1];
+            bg ^= dev->cols[attr][0][1];
+        }
+        cells[x] = dat | ((fg & 0xff) << 8) | ((bg & 0xff) << 16) | (ninth ? (1u << 24) : 0);
+    }
+    kairo_gpu_scan_commit();
+    return true;
 }
 
 static void
@@ -322,7 +392,9 @@ hercules_poll(void *priv)
 
             hercules_render_overscan_left(dev);
 
-            if (dev->ctrl & 0x02) {
+            if (hercules_render_gpu(dev, cursoraddr)) {
+                /* KairoX86#257: the GPU draws the line */
+            } else if (dev->ctrl & 0x02) {
                 cursoraddr = (dev->scanline & 3) * 0x2000;
                 if (dev->ctrl & 0x80)
                     cursoraddr += 0x8000;
@@ -483,6 +555,9 @@ hercules_poll(void *priv)
                         /* Draw (overscan_size) lines of overscan on top and bottom. */
                         for (yy = 0; yy < 14; yy++) {
                             p = &(buffer32->line[(dev->firstline + yy) & 0x7ff][0]);
+                            /* KairoX86#257: a queued row drawn before the CPU blanks it */
+                            if (kairo_gpu_on)
+                                kairo_gpu_scan_touch(buffer32, (uint32_t) (p - buffer32->dat), (uint32_t) (x + 16));
 
                             for (xx = 0; xx < (x + 16); xx++)
                                 p[xx] = 0x00000000;
@@ -490,6 +565,9 @@ hercules_poll(void *priv)
 
                         for (yy = 0; yy < 14; yy++) {
                             p = &(buffer32->line[(dev->firstline + 14 + y + yy) & 0x7ff][0]);
+                            /* KairoX86#257: a queued row drawn before the CPU blanks it */
+                            if (kairo_gpu_on)
+                                kairo_gpu_scan_touch(buffer32, (uint32_t) (p - buffer32->dat), (uint32_t) (x + 16));
 
                             for (xx = 0; xx < (x + 16); xx++)
                                 p[xx] = 0x00000000;

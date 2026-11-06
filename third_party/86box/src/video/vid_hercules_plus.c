@@ -29,6 +29,8 @@
 #include <86box/rom.h>
 #include <86box/video.h>
 #include <86box/plat_unused.h>
+#include <stdbool.h>
+#include <86box/kairo_gpu.h> /* KairoX86#259 */
 
 /* extended CRTC registers */
 #define HERCULESPLUS_CRTC_XMODE 20 /* xMode register */
@@ -489,6 +491,115 @@ graphics_line(herculesplus_t *dev)
     }
 }
 
+/* KairoX86#259: a text cell's 9-dot pattern and colour indexes, as draw_char_rom, _ram4 and _ram48
+   resolve them (the font the extended mode register picks, blink, the MDA attributes, underline, the
+   ninth column) */
+static void
+herculesplus_cell(herculesplus_t *dev, uint8_t chr, uint8_t attr, unsigned *ifg_out, unsigned *ibg_out, unsigned *val_out)
+{
+    const int      mode = dev->crtc[HERCULESPLUS_CRTC_XMODE] & 5;
+    const uint8_t *fnt;
+    if (mode == 5) {
+        int font = (attr & 0x0F);
+        if (font >= 12)
+            font &= 7;
+        attr = (attr >> 4) ^ 0x0f;
+        fnt  = dev->vram + 0x4000 + 16 * chr + 4096 * font + dev->scanline;
+    } else if (mode == 1)
+        fnt = dev->vram + 0x4000 + 16 * chr + dev->scanline;
+    else
+        fnt = &(fontdatm[chr][dev->scanline]);
+    int blk = 0;
+    if (dev->ctrl & HERCULESPLUS_CTRL_BLINK) {
+        if (attr & 0x80)
+            blk = (dev->blink & 16);
+        attr &= 0x7f;
+    }
+    unsigned ibg = 0;
+    unsigned ifg = 7;
+    if ((attr & 0x77) == 0x70) {
+        ifg = 0;
+        ibg = 7;
+    }
+    if (attr & 8)
+        ifg |= 8;
+    if (attr & 0x80)
+        ibg |= 8;
+    if ((attr & 0x77) == 0)
+        ifg = ibg;
+    const unsigned ull = ((attr & 0x07) == 1) ? 13 : 0xffff;
+    const int      elg = (dev->crtc[HERCULESPLUS_CRTC_XMODE] & HERCULESPLUS_XMODE_90COL) ? 0 : ((chr >= 0xc0) && (chr <= 0xdf));
+    unsigned       val;
+    if (blk)
+        val = 0x000;
+    else if (dev->scanline == ull)
+        val = 0x1ff;
+    else {
+        val = fnt[0] << 1;
+        if (elg)
+            val |= (val >> 1) & 1;
+    }
+    *ifg_out = ifg;
+    *ibg_out = ibg;
+    *val_out = val;
+}
+
+/* KairoX86#259: the line (herculesplus_poll's, read as text_line or graphics_line reads it) to the GPU's
+   scanout queue (86box/kairo_gpu.h), coloured as video_process_8 colours it; returns whether the GPU
+   draws it, dev->memaddr moved as the drawing moves it. */
+static bool
+herculesplus_render_gpu(herculesplus_t *dev, uint16_t cursoraddr)
+{
+    const uint32_t columns  = dev->crtc[1];
+    const bool     graphics = (dev->ctrl & HERCULESPLUS_CTRL_GRAPH) && (dev->ctrl2 & HERCULESPLUS_CTRL2_GRAPH);
+    if (!kairo_gpu_on)
+        return false;
+    bitmap_t      *bitmap = buffer32;
+    const uint32_t out    = (uint32_t) (bitmap->line[dev->displine] - bitmap->dat);
+    if ((columns == 0) || (graphics && herc_blend)) {
+        /* The CPU draws the line: a queued drawing of the row (the frame restarted) first */
+        kairo_gpu_scan_touch(bitmap, out, (uint32_t) bitmap->w);
+        return false;
+    }
+    if (graphics) {
+        uint32_t base = (dev->scanline & 3) * 0x2000;
+        if ((dev->ctrl & HERCULESPLUS_CTRL_PAGE1) && (dev->ctrl2 & HERCULESPLUS_CTRL2_PAGE1))
+            base += 0x8000;
+        const uint32_t colours[2] = { pal_lookup[0], pal_lookup[7] };
+        uint8_t       *bytes      = (uint8_t *) kairo_gpu_scan(bitmap, bitmap->kairo_gpu, out, KAIRO_SCAN_BITS, columns * 16,
+                                                               (columns * 2 + 3) / 4, colours, 2, 1, 0, 0);
+        for (uint32_t x = 0; x < columns; x++) {
+            const uint32_t at = ((dev->memaddr << 1) & 0x1fff) + base;
+            bytes[x * 2]      = (dev->ctrl & 8) ? dev->vram[at] : 0;
+            bytes[x * 2 + 1]  = (dev->ctrl & 8) ? dev->vram[at + 1] : 0;
+            dev->memaddr++;
+        }
+        kairo_gpu_scan_commit();
+        return true;
+    }
+    const uint32_t cw    = (uint32_t) HERCULESPLUS_CW;
+    uint32_t      *cells = kairo_gpu_scan(bitmap, bitmap->kairo_gpu, out, KAIRO_SCAN_TEXT, columns * cw, columns, pal_lookup, 256, cw, 0, 0);
+    for (uint32_t x = 0; x < columns; x++) {
+        uint8_t chr  = 0;
+        uint8_t attr = 0;
+        if (dev->ctrl & 8) {
+            chr  = dev->vram[(dev->memaddr << 1) & 0x3fff];
+            attr = dev->vram[((dev->memaddr << 1) + 1) & 0x3fff];
+        }
+        const bool drawcursor = ((dev->memaddr == cursoraddr) && dev->cursorvisible && dev->cursoron);
+        unsigned   fg;
+        unsigned   bg;
+        unsigned   val;
+        herculesplus_cell(dev, chr, attr, &fg, &bg, &val);
+        if (drawcursor)
+            fg = bg = (unsigned) dev->cols[attr][0][1];
+        cells[x] = ((val >> 1) & 0xff) | ((fg & 0xff) << 8) | ((bg & 0xff) << 16) | ((val & 1) ? (1u << 24) : 0);
+        ++dev->memaddr;
+    }
+    kairo_gpu_scan_commit();
+    return true;
+}
+
 static void
 herculesplus_poll(void *priv)
 {
@@ -513,7 +624,9 @@ herculesplus_poll(void *priv)
                 video_wait_for_buffer();
             }
             dev->lastline = dev->displine;
-            if ((dev->ctrl & HERCULESPLUS_CTRL_GRAPH) && (dev->ctrl2 & HERCULESPLUS_CTRL2_GRAPH))
+            if (herculesplus_render_gpu(dev, cursoraddr)) {
+                /* KairoX86#259: the GPU draws the line */
+            } else if ((dev->ctrl & HERCULESPLUS_CTRL_GRAPH) && (dev->ctrl2 & HERCULESPLUS_CTRL2_GRAPH))
                 graphics_line(dev);
             else
                 text_line(dev, cursoraddr);

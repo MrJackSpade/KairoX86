@@ -1,77 +1,179 @@
 /*
- * The SVGA scanout on the GPU (KairoX86#233, 86box/kairo_gpu.h): the kernels that draw the lines
- * vid_svga_render.c takes as the guest scans them.
+ * The scanout on the GPU (KairoX86#233, 86box/kairo_gpu.h): the queue of lines the cards' renderers
+ * take as the guest scans them, and the kernel (shaders/scanout.comp) that draws them at the drain.
+ *
+ * The queue fills from its start after every drain: records, the dwords they captured and their
+ * palettes, each a GPU buffer the CPU writes as the guest scans and the kernel reads at the drain.
  *
  * Copyright 2026 MrJackSpade. GPL-2.0-or-later.
  */
+#include <pthread.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
 
+#include <86box/86box.h>
 #include <86box/kairo_gpu.h>
 
 #include "gpu_internal.h"
 
-/* The kernel reads kairo_gpu_line_t as shaders/svga_8bpp.comp lays it out (std430) */
-_Static_assert(offsetof(kairo_gpu_line_t, map8) == 16, "kairo_gpu_line_t.map8 moved");
-_Static_assert(offsetof(kairo_gpu_line_t, line) == 1040, "kairo_gpu_line_t.line moved");
-_Static_assert(offsetof(kairo_gpu_line_t, p) == 3088, "kairo_gpu_line_t.p moved");
-_Static_assert(sizeof(kairo_gpu_line_t) == 3096, "kairo_gpu_line_t's size changed");
+_Static_assert(sizeof(kairo_gpu_scan_t) == 32, "kairo_gpu_scan_t's size changed: shaders/scanout.comp reads it");
 
-static const uint32_t svga_8bpp_spirv[] = {
-#include "svga_8bpp.comp.inc"
+static const uint32_t scanout_spirv[] = {
+#include "scanout.comp.inc"
 };
 
-_Static_assert(sizeof(kairo_gpu_direct_t) == 32, "kairo_gpu_direct_t's size changed");
-
-static const uint32_t svga_direct_spirv[] = {
-#include "svga_direct.comp.inc"
-};
-
-static kairo_gpu_kernel_t *svga_8bpp;
-static kairo_gpu_kernel_t *svga_direct;
-/* 86Box's 15 and 16-bit colour tables, on the GPU (they never change) */
-static kairo_gpu_buffer_t *table15;
-static kairo_gpu_buffer_t *table16;
+#define LINES       8192
+#define WORDS       (4u << 20) /* 16 MB of captured dwords */
+#define PALETTES    1024
 #define TABLE_BYTES (65536 * sizeof(uint32_t))
 
+static kairo_gpu_kernel_t *scanout;
+static kairo_gpu_buffer_t *lines;
+static kairo_gpu_buffer_t *words;
+static kairo_gpu_buffer_t *palettes;
+static kairo_gpu_buffer_t *table15;
+static kairo_gpu_buffer_t *table16;
+
+static uint32_t            line_count;
+static uint32_t            words_used;
+static uint32_t            palettes_used;
+static const void         *queued_bitmap; /* the queued lines' bitmap, and its buffer */
+static kairo_gpu_buffer_t *queued_bitmap_gpu;
+static uint32_t            queued_out;    /* the last queued line's first pixel */
+/* Held from kairo_gpu_scan to kairo_gpu_scan_commit, and by a drain */
+static pthread_mutex_t queue_lock = PTHREAD_MUTEX_INITIALIZER;
+
 void
-kairo_gpu_scanout_8bpp(kairo_gpu_buffer_t *lines, kairo_gpu_buffer_t *bitmap, uint32_t first, uint32_t mask,
-                       uint32_t count)
+kairo_gpu_scan_tables(const uint32_t *t15, const uint32_t *t16)
 {
-    if (svga_8bpp == NULL)
-        svga_8bpp = kairo_gpu_kernel("svga_8bpp", svga_8bpp_spirv, sizeof(svga_8bpp_spirv), 2, 8);
-    kairo_gpu_buffer_t *const buffers[2] = { lines, bitmap };
-    const uint32_t            range[2]   = { first, mask };
-    kairo_gpu_run(svga_8bpp, buffers, range, count, 1, 1);
+    if (table15 != NULL)
+        return;
+    table15 = kairo_gpu_buffer(TABLE_BYTES);
+    table16 = kairo_gpu_buffer(TABLE_BYTES);
+    memcpy(table15->data, t15, TABLE_BYTES);
+    memcpy(table16->data, t16, TABLE_BYTES);
+}
+
+/* The drain, with the queue locked */
+static void
+drain_locked(void)
+{
+    if (line_count == 0)
+        return;
+    if (table15 == NULL)
+        fatal("GPU scanout: drawn before 86Box's colour tables were given\n");
+    if (scanout == NULL)
+        scanout = kairo_gpu_kernel("scanout", scanout_spirv, sizeof(scanout_spirv), 6, 4);
+    kairo_gpu_buffer_t *const buffers[6] = { lines, words, palettes, table15, table16, queued_bitmap_gpu };
+    const uint32_t            unused     = 0;
+    kairo_gpu_run(scanout, buffers, &unused, line_count, 1, 1);
+    line_count    = 0;
+    words_used    = 0;
+    palettes_used = 0;
 }
 
 void
-kairo_gpu_scanout_direct(kairo_gpu_buffer_t *lines, kairo_gpu_buffer_t *bytes, kairo_gpu_buffer_t *palettes,
-                         const uint32_t *table15_cpu, const uint32_t *table16_cpu, kairo_gpu_buffer_t *bitmap,
-                         uint32_t first, uint32_t mask, uint32_t byte_mask, uint32_t count)
+kairo_gpu_scan_drain(void)
 {
-    if (svga_direct == NULL) {
-        svga_direct = kairo_gpu_kernel("svga_direct", svga_direct_spirv, sizeof(svga_direct_spirv), 6, 12);
-        table15     = kairo_gpu_buffer(TABLE_BYTES);
-        table16     = kairo_gpu_buffer(TABLE_BYTES);
-        memcpy(table15->data, table15_cpu, TABLE_BYTES);
-        memcpy(table16->data, table16_cpu, TABLE_BYTES);
+    pthread_mutex_lock(&queue_lock);
+    drain_locked();
+    pthread_mutex_unlock(&queue_lock);
+}
+
+void
+kairo_gpu_scan_forget(const void *bitmap)
+{
+    pthread_mutex_lock(&queue_lock);
+    if ((line_count != 0) && (queued_bitmap == bitmap))
+        drain_locked();
+    if (queued_bitmap == bitmap)
+        queued_bitmap = NULL;
+    pthread_mutex_unlock(&queue_lock);
+}
+
+void
+kairo_gpu_scan_touch(const void *bitmap, uint32_t start, uint32_t count)
+{
+    pthread_mutex_lock(&queue_lock);
+    if ((line_count != 0) && (queued_bitmap == bitmap)) {
+        const kairo_gpu_scan_t *queued = lines->data;
+        for (uint32_t i = 0; i < line_count; i++)
+            if ((queued[i].out < (start + count)) && (start < (queued[i].out + queued[i].count))) {
+                drain_locked();
+                break;
+            }
     }
-    kairo_gpu_buffer_t *const buffers[6] = { lines, bytes, palettes, table15, table16, bitmap };
-    const uint32_t            range[3]   = { first, mask, byte_mask };
-    kairo_gpu_run(svga_direct, buffers, range, count, 1, 1);
+    pthread_mutex_unlock(&queue_lock);
+}
+
+void
+kairo_gpu_scan_commit(void)
+{
+    pthread_mutex_unlock(&queue_lock);
+}
+
+uint32_t *
+kairo_gpu_scan(const void *bitmap, kairo_gpu_buffer_t *bitmap_gpu, uint32_t out, uint32_t kind, uint32_t count,
+               uint32_t word_count, const uint32_t *palette, uint32_t palette_count, uint32_t a, uint32_t b,
+               uint32_t flags)
+{
+    if (bitmap_gpu == NULL)
+        fatal("GPU scanout: a line for a bitmap the GPU does not share\n");
+    if ((word_count > WORDS) || (palette_count > 256))
+        fatal("GPU scanout: a line of %u dwords and %u colours\n", (unsigned) word_count, (unsigned) palette_count);
+    pthread_mutex_lock(&queue_lock);
+    if (lines == NULL) {
+        lines    = kairo_gpu_buffer(sizeof(kairo_gpu_scan_t) * LINES);
+        words    = kairo_gpu_buffer(WORDS * 4);
+        palettes = kairo_gpu_buffer(PALETTES * 256 * 4);
+    }
+    /* Out of order (a new frame, another bitmap), or no room: the queued lines first */
+    if ((line_count != 0)
+        && ((bitmap != queued_bitmap) || (out <= queued_out) || (line_count == LINES)
+            || ((words_used + word_count) > WORDS) || ((palette != NULL) && (palettes_used == PALETTES))))
+        drain_locked();
+    queued_bitmap     = bitmap;
+    queued_bitmap_gpu = bitmap_gpu;
+    queued_out        = out;
+
+    uint32_t index = 0;
+    if (palette != NULL) {
+        uint32_t *kept = palettes->data;
+        /* Kept once while it stays the same */
+        if ((palettes_used == 0) || memcmp(&kept[(palettes_used - 1) * 256], palette, palette_count * 4)) {
+            memcpy(&kept[palettes_used * 256], palette, palette_count * 4);
+            palettes_used++;
+        }
+        index = palettes_used;
+    }
+    kairo_gpu_scan_t *line = (kairo_gpu_scan_t *) lines->data + line_count++;
+    line->out              = out;
+    line->kind             = kind;
+    line->count            = count;
+    line->src              = words_used;
+    line->palette          = index;
+    line->a                = a;
+    line->b                = b;
+    line->flags            = flags;
+    uint32_t *at           = (uint32_t *) words->data + words_used;
+    words_used += word_count;
+    return at;
 }
 
 void
 kairo_gpu_scanout_close(void)
 {
-    kairo_gpu_kernel_free(svga_8bpp);
-    kairo_gpu_kernel_free(svga_direct);
+    kairo_gpu_kernel_free(scanout);
+    kairo_gpu_buffer_free(lines);
+    kairo_gpu_buffer_free(words);
+    kairo_gpu_buffer_free(palettes);
     kairo_gpu_buffer_free(table15);
     kairo_gpu_buffer_free(table16);
-    svga_8bpp   = NULL;
-    svga_direct = NULL;
-    table15     = NULL;
-    table16     = NULL;
+    scanout = NULL;
+    lines = words = palettes = table15 = table16 = NULL;
+    line_count = words_used = palettes_used = 0;
+    queued_bitmap     = NULL;
+    queued_bitmap_gpu = NULL;
+    queued_out        = 0;
 }

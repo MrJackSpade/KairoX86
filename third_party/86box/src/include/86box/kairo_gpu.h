@@ -59,46 +59,71 @@ void                kairo_gpu_kernel_free(kairo_gpu_kernel_t *kernel);
 void kairo_gpu_run(kairo_gpu_kernel_t *kernel, kairo_gpu_buffer_t *const *buffers, const void *push, uint32_t groups_x,
                    uint32_t groups_y, uint32_t groups_z);
 
-/* ---- The SVGA scanout (KairoX86#233) ---- */
+/* ---- The scanout (KairoX86#233 and the cards' own displays) ---- */
 
-/* One packed 8bpp line, taken as the guest scans it (vid_svga_render.c's render job, KairoX86#38):
-   the line's VRAM and the palette it is drawn with. The kernel (shaders/svga_8bpp.comp) reads this
-   layout as it is: change both together. */
-#define KAIRO_GPU_LINE_BYTES 2048
-typedef struct kairo_gpu_line {
-    uint32_t  out;    /* the line's first pixel, in pixels from the start of its bitmap */
-    uint32_t  dac;    /* the DAC mask */
-    int32_t   dwords; /* the line's VRAM dwords: 4 pixels each, 8 when wide */
-    int32_t   wide;   /* each pixel drawn twice across */
-    uint32_t  map8[256];
-    uint8_t   line[KAIRO_GPU_LINE_BYTES];
-    uint32_t *p;      /* the line's first pixel, for the CPU's drawing */
-} kairo_gpu_line_t;
+/* What a card's line renderer would draw, taken as the guest scans the line: its kind, what it read
+   (VRAM, resolved per kind into dwords in the queue's byte ring) and the colours it draws with (a
+   palette, kept once while it stays the same). The drain draws every queued line with one kernel
+   (shaders/scanout.comp), which reads this layout as it is: change both together. */
+typedef struct kairo_gpu_scan {
+    uint32_t out;     /* the line's first pixel, in pixels from the start of its bitmap */
+    uint32_t kind;    /* KAIRO_SCAN_* */
+    uint32_t count;   /* the pixels it draws */
+    uint32_t src;     /* its first dword in the byte ring */
+    uint32_t palette; /* 0: none; else its palette's index in the palette ring + 1 */
+    uint32_t a;       /* the kind's own parameters */
+    uint32_t b;
+    uint32_t flags;   /* KAIRO_SCAN_WIDE */
+} kairo_gpu_scan_t;
 
-/* Draws lines first to first + count - 1 (each index masked by mask, a ring of a power of 2 lines) of
-   the lines buffer into the bitmap buffer, and waits until they are drawn. */
-void kairo_gpu_scanout_8bpp(kairo_gpu_buffer_t *lines, kairo_gpu_buffer_t *bitmap, uint32_t first, uint32_t mask,
-                            uint32_t count);
+enum {
+    /* Packed 8 bits a pixel, 4 a dword; a: the DAC mask; palette: 256 colours */
+    KAIRO_SCAN_8 = 1,
+    /* 15 or 16 bits a pixel, 2 a dword, through 86Box's tables (video_15to32, video_16to32) */
+    KAIRO_SCAN_15,
+    KAIRO_SCAN_16,
+    /* 32 bits a pixel (the low 24 used), with the RAMDAC's LUT through the palette when it has one */
+    KAIRO_SCAN_32,
+    /* Text cells, one a dword: the font's byte (bits 0-7), the foreground (8-15) and background
+       (16-23) colour indexes, bit 24 the ninth column's dot (a line drawing character, the font's
+       bit 0) and bit 25 a 9-dot cell; a: unused; palette: the colour of each index */
+    KAIRO_SCAN_TEXT,
+    /* Pixels of a bits a pixel (1, 2, 4 or 8), most significant first, over the bytes in the order the
+       card scans them (byte k at bits 8(k % 4) of dword k / 4); palette: the colour of each value */
+    KAIRO_SCAN_BITS,
+    /* Planar pixels, a dword each 8: byte p plane p's bits, most significant first; a pixel's value is
+       its bit of each plane (plane p bit p); palette: the colour of each value (16) */
+    KAIRO_SCAN_PLANES,
+    /* Text cells of four planes, two dwords each: the planes' 8-dot bytes (byte p plane p), then the
+       foreground mask F (bits 0-3), the background mask B (4-7) and each plane's ninth dot (8-11); a
+       dot's value takes plane p's bit from F where that plane's dot is set, else from B; a: the cell's
+       width; palette: the colour of each value (16) */
+    KAIRO_SCAN_TEXT4,
+};
 
-/* One direct-colour line (15, 16 or 32 bits a pixel), taken as the guest scans it: its VRAM bytes in
-   the queue's byte ring, and with the RAMDAC's LUT on the palette, in the palette ring. The kernel
-   (shaders/svga_direct.comp) reads this layout as it is: change both together. */
-typedef struct kairo_gpu_direct {
-    uint32_t out;    /* the line's first pixel, in pixels from the start of its bitmap */
-    uint32_t format; /* 15, 16 or 32 */
-    uint32_t pixels;
-    uint32_t src;    /* its first VRAM byte in the byte ring, a multiple of 4 */
-    uint32_t lut;    /* 0: no LUT; else its palette's index in the palette ring + 1 */
-    uint32_t pad[3];
-} kairo_gpu_direct_t;
+/* Each pixel drawn twice across */
+#define KAIRO_SCAN_WIDE 1u
 
-/* Draws direct lines first to first + count - 1 (masked by mask) into the bitmap buffer, their bytes in
-   bytes (a ring of byte_mask + 1 dwords), their palettes in palettes (256 entries each), 15 and 16 bits
-   through 86Box's tables (video_15to32, video_16to32: 65536 entries each, copied to the GPU at the
-   first call), and waits until they are drawn. */
-void kairo_gpu_scanout_direct(kairo_gpu_buffer_t *lines, kairo_gpu_buffer_t *bytes, kairo_gpu_buffer_t *palettes,
-                              const uint32_t *table15, const uint32_t *table16, kairo_gpu_buffer_t *bitmap,
-                              uint32_t first, uint32_t mask, uint32_t byte_mask, uint32_t count);
+/* Queues a line of bitmap (its CPU pointer, to tell bitmaps apart; bitmap_gpu its buffer) starting at
+   pixel out, drawing count pixels; returns where its words dwords go. palette (palette_count colours,
+   at most 256) is kept with it, or none when NULL. A line out of the queue's order (a new frame,
+   another bitmap) drains the queue first, as does a full one. The queue stays locked until
+   kairo_gpu_scan_commit, after the caller wrote the dwords: a drain on another thread (a card handing
+   its frame over from its own) waits for it. */
+uint32_t *kairo_gpu_scan(const void *bitmap, kairo_gpu_buffer_t *bitmap_gpu, uint32_t out, uint32_t kind,
+                         uint32_t count, uint32_t words, const uint32_t *palette, uint32_t palette_count, uint32_t a,
+                         uint32_t b, uint32_t flags);
+/* The line kairo_gpu_scan gave is written: the queue unlocks. */
+void kairo_gpu_scan_commit(void);
+/* Draws every queued line and waits until they are drawn. */
+void kairo_gpu_scan_drain(void);
+/* The CPU is about to draw pixels start to start + count - 1 of bitmap: a queued line that draws any of
+   them is drawn first, so the CPU's drawing, the later one, stays. */
+void kairo_gpu_scan_touch(const void *bitmap, uint32_t start, uint32_t count);
+/* bitmap is about to be freed: the lines queued for it are drawn first. */
+void kairo_gpu_scan_forget(const void *bitmap);
+/* 86Box's 15 and 16-bit colour tables (65536 entries each), copied to the GPU at the first call. */
+void kairo_gpu_scan_tables(const uint32_t *table15, const uint32_t *table16);
 
 #ifdef __cplusplus
 }

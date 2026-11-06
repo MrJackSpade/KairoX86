@@ -1,0 +1,110 @@
+#version 450
+// The scanout's lines (KairoX86#233, 86box/kairo_gpu.h: kairo_gpu_scan_t and KAIRO_SCAN_*): each work
+// group draws one queued line, each invocation its pixels, as the card's CPU renderer would:
+//   8      vid_svga_render.c's packed 8bpp (svga_render_indexed_gfx's fast path): palette[byte & DAC mask]
+//   15, 16 svga_render_15bpp/16bpp_*: through 86Box's own tables (video_15to32, video_16to32, which
+//          round through doubles: the formula is not repeated here)
+//   32     svga_render_32bpp_*: the low 24 bits, or with the RAMDAC's LUT each channel through the palette
+//   TEXT   svga_render_text_80/40 and the MDA, CGA and Hercules text: each cell's font byte and ninth
+//          dot, its colours resolved by the CPU
+//   BITS   1, 2, 4 or 8 bits a pixel, most significant first (CGA and Hercules graphics)
+//   PLANES four planes' bytes, a pixel's value its bit of each (the InColor's graphics)
+//   TEXT4  text cells of four planes with the masks each dot's colour comes from (the InColor's fonts)
+//
+// Copyright 2026 MrJackSpade. GPL-2.0-or-later.
+
+layout(local_size_x = 64) in;
+
+struct Scan {
+    uint out_;
+    uint kind;
+    uint count;
+    uint src;
+    uint palette;
+    uint a;
+    uint b;
+    uint flags;
+};
+
+const uint SCAN_8 = 1u;
+const uint SCAN_15 = 2u;
+const uint SCAN_16 = 3u;
+const uint SCAN_32 = 4u;
+const uint SCAN_TEXT = 5u;
+const uint SCAN_BITS = 6u;
+const uint SCAN_PLANES = 7u;
+const uint SCAN_TEXT4 = 8u;
+const uint SCAN_WIDE = 1u;
+
+layout(std430, binding = 0) readonly buffer Lines { Scan lines[]; };
+layout(std430, binding = 1) readonly buffer Words { uint words[]; };
+layout(std430, binding = 2) readonly buffer Palettes { uint palettes[]; }; // 256 a palette
+layout(std430, binding = 3) readonly buffer Table15 { uint table15[]; };
+layout(std430, binding = 4) readonly buffer Table16 { uint table16[]; };
+layout(std430, binding = 5) writeonly buffer Bitmap { uint pixels[]; };
+layout(push_constant) uniform Unused { uint unused; } push;
+
+uint colour(uint palette, uint index) {
+    return palettes[(palette - 1u) * 256u + index];
+}
+
+void main() {
+    const uint j = gl_WorkGroupID.x;
+    const uint kind = lines[j].kind;
+    const uint count = lines[j].count;
+    const uint src = lines[j].src;
+    const uint palette = lines[j].palette;
+    const uint a = lines[j].a;
+    const bool wide = (lines[j].flags & SCAN_WIDE) != 0u;
+    const uint start = lines[j].out_;
+    for (uint i = gl_LocalInvocationID.x; i < count; i += gl_WorkGroupSize.x) {
+        // The source pixel: each drawn twice across when wide
+        const uint s = wide ? (i >> 1) : i;
+        uint v;
+        if (kind == SCAN_8) {
+            const uint word = words[src + (s >> 2)];
+            v = colour(palette, (word >> (8u * (s & 3u))) & a);
+        } else if (kind == SCAN_15 || kind == SCAN_16) {
+            const uint word = words[src + (s >> 1)];
+            const uint c = (s & 1u) != 0u ? (word >> 16) : (word & 0xffffu);
+            v = kind == SCAN_15 ? table15[c] : table16[c];
+        } else if (kind == SCAN_32) {
+            v = words[src + s] & 0xffffffu;
+            if (palette != 0u) {
+                const uint r = (colour(palette, (v >> 16) & 0xffu) >> 16) & 0xffu;
+                const uint g = (colour(palette, (v >> 8) & 0xffu) >> 8) & 0xffu;
+                const uint b = colour(palette, v & 0xffu) & 0xffu;
+                v = b | (g << 8) | (r << 16) | 0xff000000u;
+            }
+        } else if (kind == SCAN_BITS) {
+            // a bits a pixel, most significant first, over the bytes in scan order
+            const uint bit = s * a;
+            const uint byte_ = (words[src + (bit >> 5)] >> (8u * ((bit >> 3) & 3u))) & 0xffu;
+            v = colour(palette, (byte_ >> (8u - a - (bit & 7u))) & ((1u << a) - 1u));
+        } else if (kind == SCAN_PLANES) {
+            const uint word = words[src + (s >> 3)];
+            const uint bit = 7u - (s & 7u);
+            uint value = 0u;
+            for (uint p = 0u; p < 4u; p++)
+                value |= ((word >> (8u * p + bit)) & 1u) << p;
+            v = colour(palette, value);
+        } else if (kind == SCAN_TEXT4) {
+            const uint planes = words[src + 2u * (s / a)];
+            const uint masks = words[src + 2u * (s / a) + 1u];
+            const uint dot = s % a;
+            uint value = 0u;
+            for (uint p = 0u; p < 4u; p++) {
+                const bool on = dot < 8u ? ((planes >> (8u * p + 7u - dot)) & 1u) != 0u : ((masks >> (8u + p)) & 1u) != 0u;
+                value |= ((on ? masks : (masks >> 4)) & (1u << p));
+            }
+            v = colour(palette, value);
+        } else {
+            // SCAN_TEXT: a is the cell's width, 8 or 9 dots
+            const uint cell = words[src + s / a];
+            const uint dot = s % a;
+            const bool on = dot < 8u ? ((cell >> (7u - dot)) & 1u) != 0u : ((cell >> 24) & 1u) != 0u;
+            v = colour(palette, on ? ((cell >> 8) & 0xffu) : ((cell >> 16) & 0xffu));
+        }
+        pixels[start + i] = v;
+    }
+}

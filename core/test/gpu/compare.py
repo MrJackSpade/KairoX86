@@ -38,6 +38,10 @@ BOARDS = {
 ADD_ONS = {'voodoo': 'voodoo', 'voodoo_2': 'voodoo_2'}
 # Each bus's board; any other bus (ISA, VLB, none) the 486's
 BUS_BOARD = {'pci': '686bx', 'agp': '686bx', 'mca': 'ibmps2_m55ls'}
+# Cards whose software path fails on their bus's board, each on one where it works until its bug is fixed
+CARD_BOARD = {
+    'quadcolor': '686bx',  # KairoX86#286: on the 486AP4 it hands over no picture and the machine never boots
+}
 # Where every test ends (runtime.c): its HLT with interrupts off, as the machine's stop reports it
 TEST_END = '0000:8003'
 # Each board's saved CMOS (booting A: first), from the repository's test set, where it has one
@@ -162,7 +166,7 @@ def main():
         """The card's test board: its bus's (BUS_BOARD), or else the first board that takes it."""
         if card in ADD_ONS:
             return '686bx'
-        own = BUS_BOARD.get(bus.get(card), '486ap4')
+        own = CARD_BOARD.get(card) or BUS_BOARD.get(bus.get(card), '486ap4')
         return own if card in takes[own] else next((b for b in BOARDS if card in takes[b]), None)
     cards = sorted(set().union(*takes.values()) - {'none', 'external', 'internal'}) + sorted(ADD_ONS)
     if args.cards:

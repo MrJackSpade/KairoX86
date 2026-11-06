@@ -33,6 +33,8 @@
 #include <86box/video.h>
 #include <86box/vid_mda.h>
 #include <86box/plat_unused.h>
+#include <stdbool.h>
+#include <86box/kairo_gpu.h> /* KairoX86#263 */
 
 // Enumerates MDA monitor types
 enum mda_monitor_type_e {
@@ -137,6 +139,64 @@ mda_recalctimings(mda_t *mda)
     mda->dispofftime = (uint64_t) (int64_t) (_dispofftime);
 }
 
+/* KairoX86#263: the line's characters (mda_poll's, read as it reads them) to the GPU's scanout queue
+   (86box/kairo_gpu.h), as the colour indexes it would draw, coloured as video_process_8 colours them;
+   returns whether the GPU draws them, mda->memaddr moved as the drawing moves it. */
+static bool
+mda_render_gpu(mda_t *mda, uint16_t cursoraddr)
+{
+    const uint32_t hdisp = mda->crtc[MDA_CRTC_HDISP];
+    if (!kairo_gpu_on || (hdisp == 0))
+        return false;
+    bitmap_t      *bitmap = buffer32;
+    uint32_t      *pixels = &bitmap->line[mda->displine][0];
+    const bool     rgbi   = (mda->monitor_type == MDA_MONITOR_TYPE_RGBI) && !(mda->mode & MDA_MODE_BW);
+    uint32_t      *cells  = kairo_gpu_scan(bitmap, bitmap->kairo_gpu, (uint32_t) (pixels - bitmap->dat), KAIRO_SCAN_TEXT,
+                                           hdisp * 9, hdisp, pal_lookup, 256, 9, 0, 0);
+    for (uint32_t x = 0; x < hdisp; x++) {
+        const uint8_t chr        = mda->vram[(mda->memaddr << 1) & 0xfff];
+        const uint8_t attr       = mda->vram[((mda->memaddr << 1) + 1) & 0xfff];
+        const bool    drawcursor = ((mda->memaddr == cursoraddr) && mda->cursorvisible && mda->cursoron);
+        const int32_t blink      = ((mda->blink & 16) && (mda->mode & MDA_MODE_BLINK) && (attr & 0x80) && !drawcursor);
+        int32_t       color_bg   = 0;
+        int32_t       color_fg   = 0;
+        if (rgbi) {
+            color_bg = (attr >> 4) & 0x0F;
+            color_fg = (attr & 0x0F);
+            if ((mda->mode & MDA_MODE_BLINK) && (color_bg & 0x8))
+                color_bg &= ~(0x8);
+            const bool special_treatment = (color_bg != 0 && color_bg != 7);
+            if (color_fg == MDA_COLOR_GREY && special_treatment)
+                color_fg = MDA_COLOR_BRIGHT_WHITE;
+            if (color_fg == 0 && special_treatment)
+                color_fg = MDA_COLOR_GREY;
+            if (color_fg == MDA_COLOR_GREY && (color_bg == MDA_COLOR_GREY || color_bg == MDA_COLOR_BLACK))
+                color_fg = MDA_COLOR_BLACK;
+        }
+        uint32_t fg = rgbi ? (uint32_t) (CGAPAL_CGA_START + color_fg) : (uint32_t) mda_attr_to_color_table[attr][blink][1];
+        uint32_t bg = rgbi ? (uint32_t) (CGAPAL_CGA_START + color_bg) : (uint32_t) mda_attr_to_color_table[attr][blink][0];
+        uint32_t dat;
+        bool     ninth;
+        if ((mda->scanline == 12) && ((attr & 7) == 1)) {
+            /* Underline: all nine dots the foreground */
+            dat   = 0xff;
+            ninth = true;
+        } else {
+            dat   = fontdatm[chr + mda->fontbase][mda->scanline];
+            ninth = ((chr & ~0x1f) == 0xc0) && (dat & 1);
+        }
+        if (drawcursor) {
+            const uint32_t flip = rgbi ? (uint32_t) (CGAPAL_CGA_START + color_fg) : (uint32_t) mda_attr_to_color_table[attr][0][1];
+            fg ^= flip;
+            bg ^= flip;
+        }
+        cells[x] = dat | ((fg & 0xff) << 8) | ((bg & 0xff) << 16) | (ninth ? (1u << 24) : 0);
+        mda->memaddr++;
+    }
+    kairo_gpu_scan_commit();
+    return true;
+}
+
 void
 mda_poll(void *priv)
 {
@@ -166,7 +226,8 @@ mda_poll(void *priv)
             }
             mda->lastline = mda->displine;
 
-            for (uint32_t x = 0; x < mda->crtc[MDA_CRTC_HDISP]; x++) {
+            /* KairoX86#263: no character left for the CPU when the GPU draws them */
+            for (uint32_t x = mda_render_gpu(mda, cursoraddr) ? mda->crtc[MDA_CRTC_HDISP] : 0; x < mda->crtc[MDA_CRTC_HDISP]; x++) {
                 chr        = mda->vram[(mda->memaddr << 1) & 0xfff];
                 attr       = mda->vram[((mda->memaddr << 1) + 1) & 0xfff];
                 drawcursor = ((mda->memaddr == cursoraddr) && mda->cursorvisible && mda->cursoron);

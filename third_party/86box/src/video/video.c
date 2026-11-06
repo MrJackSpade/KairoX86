@@ -451,6 +451,10 @@ video_blit_memtoscreen_monitor(int x, int y, int w, int h, int monitor_index)
 
     video_wait_for_blit_monitor(monitor_index);
 
+    /* KairoX86#233: the lines the GPU draws, drawn before the frame is shown */
+    if (kairo_gpu_on)
+        kairo_gpu_scan_drain();
+
     automation_frame(x, y, w, h, monitor_index);
 
     monitors[monitor_index].mon_blit_data_ptr->busy          = 1;
@@ -462,6 +466,8 @@ video_blit_memtoscreen_monitor(int x, int y, int w, int h, int monitor_index)
     monitors[monitor_index].mon_renderedframes++;
 
     thread_set_event(monitors[monitor_index].mon_blit_data_ptr->wake_blit_thread);
+    /* KairoX86#284: nothing draws on the frame until its picture is copied */
+    video_wait_for_buffer_monitor(monitor_index);
     MTR_END("video", "video_blit_memtoscreen");
 }
 
@@ -796,9 +802,11 @@ hline(bitmap_t *b, int x1, int y, int x2, uint32_t col)
 void
 destroy_bitmap(bitmap_t *b)
 {
-    if ((b != NULL) && (b->kairo_gpu != NULL))
+    if ((b != NULL) && (b->kairo_gpu != NULL)) {
+        /* KairoX86#232: the lines queued for it drawn first */
+        kairo_gpu_scan_forget(b);
         kairo_gpu_buffer_free(b->kairo_gpu);
-    else if ((b != NULL) && (b->dat != NULL))
+    } else if ((b != NULL) && (b->dat != NULL))
         free(b->dat);
 
     if (b != NULL)
@@ -953,6 +961,10 @@ video_init(void)
     video_16to32 = calloc(4, 65536);
     for (uint32_t c = 0; c < 65536; c++)
         video_16to32[c] = calc_16to32(c);
+
+    /* KairoX86#233: the GPU's copy of the 15 and 16-bit colour tables */
+    if (kairo_gpu_on)
+        kairo_gpu_scan_tables(video_15to32, video_16to32);
 
     memset(monitors, 0, sizeof(monitors));
     video_monitor_init(0);

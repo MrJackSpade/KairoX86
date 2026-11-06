@@ -29,6 +29,8 @@
 #include <86box/rom.h>
 #include <86box/video.h>
 #include <86box/plat_unused.h>
+#include <stdbool.h>
+#include <86box/kairo_gpu.h> /* KairoX86#258 */
 
 /* extended CRTC registers */
 #define INCOLOR_CRTC_XMODE   20 /* xMode register */
@@ -861,6 +863,213 @@ graphics_line(incolor_t *dev)
     }
 }
 
+/* KairoX86#258: a text cell as draw_char_rom, _ram4 or _ram48 resolves it: each plane's 9-dot pattern
+   (planes[]) and the masks a dot's colour takes its plane's bit from, f where the plane's dot is set,
+   b where it is not */
+static void
+incolor_cell(incolor_t *dev, uint8_t chr, uint8_t attr, unsigned planes[4], unsigned *f, unsigned *b)
+{
+    const int mode    = dev->crtc[INCOLOR_CRTC_XMODE] & 5;
+    const int blink   = dev->ctrl & INCOLOR_CTRL_BLINK;
+    const int altattr = dev->crtc[INCOLOR_CRTC_EXCEPT] & INCOLOR_EXCEPT_ALTATTR;
+    const int elg     = (dev->crtc[INCOLOR_CRTC_XMODE] & INCOLOR_XMODE_90COL) ? 0 : ((chr >= 0xc0) && (chr <= 0xdf));
+    if ((mode == 0) || (mode == 4) || (mode == 1)) {
+        /* draw_char_rom and draw_char_ram4 */
+        int blk = 0;
+        if (blink) {
+            if (attr & 0x80)
+                blk = (dev->blink & 16);
+            attr &= 0x7f;
+        }
+        unsigned ifg;
+        unsigned ibg;
+        unsigned ull;
+        if (altattr) {
+            ibg = 0;
+            ifg = 7;
+            if ((attr & 0x77) == 0x70) {
+                ifg = 0;
+                ibg = 7;
+            }
+            if (attr & 8)
+                ifg |= 8;
+            if (attr & 0x80)
+                ibg |= 8;
+            if ((attr & 0x77) == 0)
+                ifg = ibg;
+            ull = ((attr & 0x07) == 1) ? 13 : 0xffff;
+        } else {
+            ull = 0xffff;
+            ifg = attr & 0x0F;
+            ibg = (attr >> 4) & 0x0F;
+        }
+        for (int p = 0; p < 4; p++) {
+            unsigned val;
+            if (blk)
+                val = 0x000;
+            else if (dev->scanline == ull)
+                val = 0x1ff;
+            else {
+                const unsigned char *fnt = (mode == 1) ? (dev->vram + 0x4000 + 16 * chr + dev->scanline + 0x10000 * p)
+                                                       : &(fontdatm[chr][dev->scanline]);
+                val = fnt[0] << 1;
+                if (elg)
+                    val |= (val >> 1) & 1;
+            }
+            planes[p] = val;
+        }
+        *f = ifg;
+        *b = ibg;
+        if ((mode == 1) && altattr && ((attr & 0x77) == 0))
+            *f = *b = ibg; /* draw_char_ram4's blank attribute */
+        return;
+    }
+    /* draw_char_ram48 */
+    int font = (attr & 0x0F);
+    if (font >= 12)
+        font &= 7;
+    int blk = 0;
+    if (blink && altattr) {
+        if (attr & 0x40)
+            blk = (dev->blink & 16);
+        attr &= 0x7f;
+    }
+    unsigned ibg;
+    unsigned ifg = 0;
+    int      ul;
+    int      ol;
+    int      bld;
+    if (altattr) {
+        if (blink) {
+            ibg = (attr & 0x80) ? 8 : 0;
+            bld = 0;
+        } else {
+            bld = (attr & 0x80) ? 1 : 0;
+            ibg = (attr & 0x40) ? 0x0F : 0;
+        }
+        ol = (attr & 0x20) ? 1 : 0;
+        ul = (attr & 0x10) ? 1 : 0;
+    } else {
+        ibg = 0;
+        ifg = (attr >> 4) & 0x0F;
+        ol  = 0;
+        ul  = 0;
+        bld = 0;
+    }
+    unsigned ull = 0xFFFF;
+    unsigned ulc = 0;
+    unsigned oll = 0xFFFF;
+    unsigned olc = 0;
+    if (ul) {
+        ull = dev->crtc[INCOLOR_CRTC_UNDER] & 0x0F;
+        ulc = (dev->crtc[INCOLOR_CRTC_UNDER] >> 4) & 0x0F;
+        if (ulc == 0)
+            ulc = 7;
+    }
+    if (ol) {
+        oll = dev->crtc[INCOLOR_CRTC_OVER] & 0x0F;
+        olc = (dev->crtc[INCOLOR_CRTC_OVER] >> 4) & 0x0F;
+        if (olc == 0)
+            olc = 7;
+    }
+    const unsigned char *fnt = dev->vram + 0x4000 + 16 * chr + 4096 * font + dev->scanline;
+    for (int p = 0; p < 4; p++) {
+        unsigned val;
+        if (blk)
+            val = 0x000;
+        else if (dev->scanline == ull)
+            val = 0x1ff;
+        else {
+            val = fnt[0x10000 * p] << 1;
+            if (elg)
+                val |= (val >> 1) & 1;
+            if (bld)
+                val |= (val >> 1);
+        }
+        planes[p] = val;
+    }
+    if (dev->scanline == oll)
+        *f = *b = (olc ^ ibg) & 0x0f; /* strike-through */
+    else if (dev->scanline == ull)
+        *f = *b = (ulc ^ ibg) & 0x0f; /* underline */
+    else {
+        *f = (altattr ? ~ibg : ~ifg) & 0x0f;
+        *b = altattr ? (ibg & 0x0f) : 0;
+    }
+}
+
+/* KairoX86#258: the line (incolor_poll's, read as text_line or graphics_line reads it) to the GPU's
+   scanout queue (86box/kairo_gpu.h), through the card's palette; returns whether the GPU draws it,
+   dev->memaddr moved as the drawing moves it. */
+static bool
+incolor_render_gpu(incolor_t *dev, uint16_t cursoraddr)
+{
+    if (!kairo_gpu_on || (dev->crtc[1] == 0))
+        return false;
+    const uint32_t columns = dev->crtc[1];
+    bitmap_t      *bitmap  = buffer32;
+    const uint32_t out     = (uint32_t) (bitmap->line[dev->displine] - bitmap->dat);
+    uint32_t       colours[16];
+    for (int i = 0; i < 16; i++)
+        colours[i] = dev->rgb[(dev->crtc[INCOLOR_CRTC_EXCEPT] & INCOLOR_EXCEPT_PALETTE) ? dev->palette[i] : defpal[i]];
+    if ((dev->ctrl & INCOLOR_CTRL_GRAPH) && (dev->ctrl2 & INCOLOR_CTRL2_GRAPH)) {
+        uint32_t base = (dev->scanline & 3) * 0x2000;
+        if ((dev->ctrl & INCOLOR_CTRL_PAGE1) && (dev->ctrl2 & INCOLOR_CTRL2_PAGE1))
+            base += 0x8000;
+        uint32_t *words = kairo_gpu_scan(bitmap, bitmap->kairo_gpu, out, KAIRO_SCAN_PLANES, columns * 16, columns * 2, colours, 16, 0, 0, 0);
+        for (uint32_t x = 0; x < columns; x++) {
+            const uint8_t mask = dev->crtc[INCOLOR_CRTC_MASK];
+            uint32_t      hi   = 0;
+            uint32_t      lo   = 0;
+            for (int plane = 0; plane < 4; plane++)
+                if ((dev->ctrl & 8) && ((mask >> plane) & 1)) {
+                    const uint32_t at = ((dev->memaddr << 1) & 0x1fff) + base + 0x10000 * plane;
+                    hi |= (uint32_t) dev->vram[at] << (8 * plane);
+                    lo |= (uint32_t) dev->vram[at + 1] << (8 * plane);
+                }
+            words[x * 2]     = hi;
+            words[x * 2 + 1] = lo;
+            dev->memaddr++;
+        }
+        kairo_gpu_scan_commit();
+        return true;
+    }
+    const uint32_t cw    = (uint32_t) INCOLOR_CW;
+    uint32_t      *cells = kairo_gpu_scan(bitmap, bitmap->kairo_gpu, out, KAIRO_SCAN_TEXT4, columns * cw, columns * 2, colours, 16, cw, 0, 0);
+    for (uint32_t x = 0; x < columns; x++) {
+        uint8_t chr  = 0;
+        uint8_t attr = 0;
+        if (dev->ctrl & 8) {
+            chr  = dev->vram[(dev->memaddr << 1) & 0x3fff];
+            attr = dev->vram[((dev->memaddr << 1) + 1) & 0x3fff];
+        }
+        const bool drawcursor = ((dev->memaddr == cursoraddr) && dev->cursorvisible && dev->cursoron);
+        unsigned   planes[4];
+        unsigned   f;
+        unsigned   b;
+        incolor_cell(dev, chr, attr, planes, &f, &b);
+        if (drawcursor) {
+            uint8_t ink = dev->crtc[INCOLOR_CRTC_EXCEPT] & INCOLOR_EXCEPT_CURSOR;
+            if (ink == 0)
+                ink = (attr & 0x08) | 7;
+            if (dev->crtc[INCOLOR_CRTC_EXCEPT] & INCOLOR_EXCEPT_ALTATTR)
+                ink = (attr & 0x08) | (ink & 7);
+            f = b = ink & 0x0f;
+        }
+        uint32_t bytes  = 0;
+        uint32_t ninths = 0;
+        for (int p = 0; p < 4; p++) {
+            bytes |= ((planes[p] >> 1) & 0xff) << (8 * p);
+            ninths |= (planes[p] & 1) << p;
+        }
+        cells[x * 2]     = bytes;
+        cells[x * 2 + 1] = (f & 0x0f) | ((b & 0x0f) << 4) | (ninths << 8);
+        ++dev->memaddr;
+    }
+    kairo_gpu_scan_commit();
+    return true;
+}
+
 static void
 incolor_poll(void *priv)
 {
@@ -890,7 +1099,9 @@ incolor_poll(void *priv)
                 video_wait_for_buffer();
             }
             dev->lastline = dev->displine;
-            if ((dev->ctrl & INCOLOR_CTRL_GRAPH) && (dev->ctrl2 & INCOLOR_CTRL2_GRAPH))
+            if (incolor_render_gpu(dev, cursoraddr)) {
+                /* KairoX86#258: the GPU draws the line */
+            } else if ((dev->ctrl & INCOLOR_CTRL_GRAPH) && (dev->ctrl2 & INCOLOR_CTRL2_GRAPH))
                 graphics_line(dev);
             else
                 text_line(dev, cursoraddr);

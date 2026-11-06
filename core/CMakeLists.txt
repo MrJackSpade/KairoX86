@@ -133,7 +133,7 @@ file(GLOB KAIROX86_GLSLC_HINTS "${ANDROID_NDK}/shader-tools/*" "$ENV{ANDROID_HOM
 find_program(KAIROX86_GLSLC glslc HINTS ${KAIROX86_GLSLC_HINTS} NO_DEFAULT_PATH REQUIRED)
 set(KAIROX86_SHADER_OUT "${CMAKE_CURRENT_BINARY_DIR}/kairo_shaders")
 set(KAIROX86_SHADER_INCS)
-foreach(shader svga_8bpp.comp svga_direct.comp)
+foreach(shader scanout.comp)
     set(source "${CMAKE_CURRENT_LIST_DIR}/kairo/shaders/${shader}")
     set(inc "${KAIROX86_SHADER_OUT}/${shader}.inc")
     add_custom_command(OUTPUT "${inc}"
