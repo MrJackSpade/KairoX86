@@ -116,6 +116,7 @@ typedef struct bitmap_t {
     int       h;
     uint32_t *dat;
     uint32_t *line[2112];
+    void     *kairo_gpu; /* KairoX86#232: the GPU buffer dat lives in, with Hardware acceleration on */
 } bitmap_t;
 
 typedef struct rgb_t {

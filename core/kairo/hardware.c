@@ -228,6 +228,30 @@ put_joysticks(void)
     put("]");
 }
 
+/* The bus a card goes in (86Box's device flags): "agp", "pci", "vlb", "eisa", "mca", "isa16" (an AT's
+   16-bit ISA), "isa", or "none" for one on no bus (the board's own, an add-on beside the video card) */
+static const char *
+card_bus(const device_t *device)
+{
+    if (device == NULL)
+        return "none";
+    if (device->flags & DEVICE_AGP)
+        return "agp";
+    if (device->flags & DEVICE_PCI)
+        return "pci";
+    if (device->flags & DEVICE_VLB)
+        return "vlb";
+    if (device->flags & DEVICE_EISA)
+        return "eisa";
+    if (device->flags & DEVICE_MCA)
+        return "mca";
+    if (device->flags & DEVICE_ISA16)
+        return "isa16";
+    if (device->flags & DEVICE_ISA)
+        return "isa";
+    return "none";
+}
+
 /* The cards of [kind] machine [m] takes: those 86Box's device_is_valid allows on its buses, and its
    onboard one ("internal") where the board has it. */
 static void
@@ -250,6 +274,8 @@ put_cards(const struct kind *kind, int m)
         put_string(id);
         put(",\"name\":");
         put_string(device ? device->name : id);
+        put(",\"bus\":");
+        put_string(card_bus(device));
         put(",\"available\":%s}", kind->available(card) ? "true" : "false");
     }
     put("]");

@@ -51,6 +51,7 @@
 
 #include "kairo_x86.h"
 #include "hardware.h"
+#include <86box/kairo_gpu.h>
 
 /* ---- Globals the 86Box frontends define ---- */
 
@@ -1368,6 +1369,8 @@ api_start(const char *vm_folder, const char *rom_folder, const struct KairoX86Ho
     configured_time_sync = time_sync;
     if (repeatable)
         time_sync = 0;
+    /* The GPU, if the machine's Hardware acceleration is on (KairoX86#232), before any card needs it */
+    kairo_gpu_open();
     pc_init_modules();
     /* pc_init_modules seeded 86Box's random numbers from the host (random_init). */
     if (repeatable)
@@ -1385,6 +1388,11 @@ api_start(const char *vm_folder, const char *rom_folder, const struct KairoX86Ho
     running       = false;
     snprintf(started_text, sizeof(started_text), "machine=%s;memory=%u;video=%s;sound=%s", machine_get_internal_name(),
              (unsigned) mem_size, video_get_internal_name(gfxcard[0]), sound_card_get_internal_name(sound_card_current[0]));
+    /* The GPU the graphics hardware runs on (KairoX86#232), when Hardware acceleration is on */
+    if (kairo_gpu_on) {
+        const size_t used = strlen(started_text);
+        snprintf(started_text + used, sizeof(started_text) - used, ";gpu=%s", kairo_gpu_name());
+    }
     return true;
 }
 
@@ -1431,8 +1439,13 @@ api_run_frame(void)
     loading_frame = (floppy_busy != 0) || (floppy_changes != changes) || atomic_load(&self_test);
     if (halted_with_interrupts_off()) {
         halted_ms += frame_ms;
-        if (halted_ms >= HALT_STOP_MS)
-            machine_over("The PC halted: its processor stopped with interrupts off");
+        if (halted_ms >= HALT_STOP_MS) {
+            /* Where it halted (the graphics batch knows its tests' end by it, core/test/gpu) */
+            char reason[96];
+            snprintf(reason, sizeof(reason), "The PC halted: its processor stopped with interrupts off (at %04X:%04X)",
+                     (unsigned) cpu_halt_cs, (unsigned) cpu_halt_pc);
+            machine_over(reason);
+        }
     } else
         halted_ms = 0;
     running = false;
@@ -1471,6 +1484,7 @@ api_stop(void)
     atomic_store(&dead, true);
     if (setjmp(stopped)) {
         running = false;
+        kairo_gpu_close();
         release_mappings();
         release_blocks();
         return;
@@ -1481,6 +1495,8 @@ api_stop(void)
     media_restore();
     pc_close(NULL);
     running = false;
+    /* After pc_close: every card freed its GPU objects */
+    kairo_gpu_close();
     release_mappings();
     release_blocks();
 }

@@ -55,7 +55,7 @@ object Win9xMachine {
      */
     val PCEM_430VX = Board("430vx", listOf("VEN_8086&DEV_7030" to 0x00, "VEN_8086&DEV_122E" to 0x07), listOf(0x11, 0x12, 0x13, 0x14), agp = false,
         settings = listOf(Setting("Machine", "cpu_family", "pentium_p55c"), Setting("Machine", "cpu_speed", "166666666"),
-            Setting("Machine", "cpu_multi", "2.5"), Setting("Machine", "mem_size", "65536"), Setting("KairoX86", "pcem_piix", "1"),
+            Setting("Machine", "cpu_multi", "2.5"), Setting("Machine", "mem_size", "65536"), Setting(X86Settings.KAIROX86, "pcem_piix", "1"),
             Setting("Storage controllers", "fdc", null), Setting("Floppy and CD-ROM drives", "fdd_01_type", "35_2hd")),
         cmosAsset = "exowin9x/nvr/430vx.nvr")
 
@@ -151,7 +151,7 @@ object Win9xMachine {
         val voodoo = if (atDevice0) glide else inSlot?.device
         settings += Setting("Video", "voodoo", if (voodoo != null) "1" else null)
         if (voodoo != null) settings += Setting("3Dfx Voodoo Graphics", "type", voodoo)
-        settings += Setting("KairoX86", "voodoo_pci_dev0", if (atDevice0) "1" else null)
+        settings += Setting(X86Settings.KAIROX86, "voodoo_pci_dev0", if (atDevice0) "1" else null)
 
         settings += sound(registry)
 

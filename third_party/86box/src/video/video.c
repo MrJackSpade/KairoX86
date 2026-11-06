@@ -32,6 +32,7 @@
 #endif
 #define HAVE_STDARG_H
 #include <86box/86box.h>
+#include <86box/kairo_gpu.h> /* KairoX86#232 */
 #include "cpu.h"
 #include <86box/device.h>
 #include <86box/io.h>
@@ -795,7 +796,9 @@ hline(bitmap_t *b, int x1, int y, int x2, uint32_t col)
 void
 destroy_bitmap(bitmap_t *b)
 {
-    if ((b != NULL) && (b->dat != NULL))
+    if ((b != NULL) && (b->kairo_gpu != NULL))
+        kairo_gpu_buffer_free(b->kairo_gpu);
+    else if ((b != NULL) && (b->dat != NULL))
         free(b->dat);
 
     if (b != NULL)
@@ -807,7 +810,13 @@ create_bitmap(int x, int y)
 {
     bitmap_t *b = calloc(1, sizeof(bitmap_t));
 
-    b->dat = calloc((size_t) x * y, 4);
+    if (kairo_gpu_on) {
+        /* KairoX86#232: the GPU draws into it too */
+        kairo_gpu_buffer_t *gpu = kairo_gpu_buffer((size_t) x * y * 4);
+        b->kairo_gpu            = gpu;
+        b->dat                  = gpu->data;
+    } else
+        b->dat = calloc((size_t) x * y, 4);
     for (int c = 0; c < y; c++)
         b->line[c] = &(b->dat[c * x]);
     b->w = x;

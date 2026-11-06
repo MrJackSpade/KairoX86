@@ -1,0 +1,45 @@
+#version 450
+// The SVGA scanout's packed 8bpp lines (KairoX86#233): each work group draws one line, as
+// vid_svga_render.c's render_8bpp_dwords draws it on the CPU. The line layout is kairo_gpu_line_t
+// (86box/kairo_gpu.h).
+//
+// Copyright 2026 MrJackSpade. GPL-2.0-or-later.
+
+layout(local_size_x = 64) in;
+
+struct Line {
+    uint out_;
+    uint dac;
+    int dwords;
+    int wide;
+    uint map8[256];
+    uint line[512]; // KAIRO_GPU_LINE_BYTES as little-endian dwords
+    uvec2 cpu_p;
+};
+
+layout(std430, binding = 0) readonly buffer Lines { Line lines[]; };
+layout(std430, binding = 1) writeonly buffer Bitmap { uint pixels[]; };
+layout(push_constant) uniform Range { uint first; uint mask; } range;
+
+void main() {
+    const uint j = (range.first + gl_WorkGroupID.x) & range.mask;
+    const uint start = lines[j].out_;
+    const uint dac = lines[j].dac;
+    const uint dwords = uint(lines[j].dwords);
+    const bool wide = lines[j].wide != 0;
+    for (uint c = gl_LocalInvocationID.x; c < dwords; c += gl_WorkGroupSize.x) {
+        const uint dat = lines[j].line[c];
+        if (wide) {
+            const uint p = start + c * 8u;
+            for (uint b = 0u; b < 4u; b++) {
+                const uint v = lines[j].map8[(dat >> (8u * b)) & dac];
+                pixels[p + 2u * b] = v;
+                pixels[p + 2u * b + 1u] = v;
+            }
+        } else {
+            const uint p = start + c * 4u;
+            for (uint b = 0u; b < 4u; b++)
+                pixels[p + b] = lines[j].map8[(dat >> (8u * b)) & dac];
+        }
+    }
+}

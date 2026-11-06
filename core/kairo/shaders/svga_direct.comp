@@ -1,0 +1,57 @@
+#version 450
+// The SVGA scanout's direct-colour lines (KairoX86#233): 15, 16 and 32 bits a pixel. Each work group
+// draws one line, as vid_svga_render.c's svga_render_15bpp_highres, _16bpp_highres and
+// _32bpp_highres draw it on the CPU: 15 and 16 bits through 86Box's own colour tables
+// (video_15to32, video_16to32, which round through doubles: the formula is not repeated here), 32
+// bits as they are or, with the RAMDAC's LUT on, each channel through the palette
+// (svga_lookup_lut_ram). The line layout is kairo_gpu_direct_t (86box/kairo_gpu.h).
+//
+// Copyright 2026 MrJackSpade. GPL-2.0-or-later.
+
+layout(local_size_x = 64) in;
+
+struct Direct {
+    uint out_;
+    uint format; // 15, 16 or 32
+    uint pixels;
+    uint src;    // the line's first VRAM byte in the byte ring, a multiple of 4
+    uint lut;    // 0: none; else the palette's index in the palette ring + 1
+    uint pad0;
+    uint pad1;
+    uint pad2;
+};
+
+layout(std430, binding = 0) readonly buffer Lines { Direct lines[]; };
+layout(std430, binding = 1) readonly buffer Bytes { uint bytes[]; };
+layout(std430, binding = 2) readonly buffer Palettes { uint palettes[]; }; // 256 a palette
+layout(std430, binding = 3) readonly buffer Table15 { uint table15[]; };
+layout(std430, binding = 4) readonly buffer Table16 { uint table16[]; };
+layout(std430, binding = 5) writeonly buffer Bitmap { uint pixels[]; };
+layout(push_constant) uniform Range { uint first; uint mask; uint byte_mask; } range;
+
+void main() {
+    const uint j = (range.first + gl_WorkGroupID.x) & range.mask;
+    const uint start = lines[j].out_;
+    const uint format = lines[j].format;
+    const uint count = lines[j].pixels;
+    const uint src = lines[j].src;
+    const uint lut = lines[j].lut;
+    for (uint i = gl_LocalInvocationID.x; i < count; i += gl_WorkGroupSize.x) {
+        uint v;
+        if (format == 32u) {
+            v = bytes[((src >> 2) + i) & range.byte_mask] & 0xffffffu;
+            if (lut != 0u) {
+                const uint base = (lut - 1u) * 256u;
+                const uint r = (palettes[base + ((v >> 16) & 0xffu)] >> 16) & 0xffu;
+                const uint g = (palettes[base + ((v >> 8) & 0xffu)] >> 8) & 0xffu;
+                const uint b = palettes[base + (v & 0xffu)] & 0xffu;
+                v = b | (g << 8) | (r << 16) | 0xff000000u;
+            }
+        } else {
+            const uint word = bytes[((src >> 2) + (i >> 1)) & range.byte_mask];
+            const uint colour = (i & 1u) != 0u ? (word >> 16) : (word & 0xffffu);
+            v = format == 15u ? table15[colour] : table16[colour];
+        }
+        pixels[start + i] = v;
+    }
+}

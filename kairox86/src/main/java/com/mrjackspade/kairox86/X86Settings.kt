@@ -22,6 +22,8 @@ object X86Settings {
     class Setting(val option: MachineOption, val read: (IniText) -> String?, val changes: (String?) -> List<Change>)
 
     private const val MACHINE = "Machine"
+    /** The section of 86box.cfg whose keys only KairoX86's 86Box reads (config_kairo_int, tools/patches.py). */
+    const val KAIROX86 = "KairoX86"
     private const val MACHINE_ID = "machine"
     private const val FIRST_MACHINE = "ibmpc"
 
@@ -133,6 +135,16 @@ object X86Settings {
      */
     val skipMemoryCheck = single(MachineOption.skipMemoryCheck(), "Kairo", "skip_memory_check")
 
+    /**
+     * Hardware acceleration (KairoX86#282): [KairoX86] hardware_acceleration, 1 or 0, which the core reads
+     * at the machine's start. Off until the owner sets its default (#282).
+     */
+    val hardwareAcceleration = Setting(MachineOption.hardwareAcceleration("off"),
+        read = { ini -> ini[KAIROX86, "hardware_acceleration"]?.let { if (it.trim().toInt() != 0) "on" else "off" } },
+        changes = { value ->
+            listOf(Change(KAIROX86, "hardware_acceleration", value?.let { if (it == "on") "1" else "0" }))
+        })
+
     /** The card settings whose card has options of its own (KairoX86#201), with their kinds. */
     val cards = listOf(video to X86Hardware.VIDEO, sound to X86Hardware.SOUND, network to X86Hardware.NETWORK,
         hdc to X86Hardware.HDC, scsi to X86Hardware.SCSI, fdc to X86Hardware.FDC, mouse to X86Hardware.MOUSE)
@@ -155,7 +167,8 @@ object X86Settings {
     private fun deviceText(english: String): UiText = X86DeviceStrings.resources[english]?.let { UiText.res(it) } ?: UiText.fixed(english)
 
     /** In the order they show; each after the ones it depends on. */
-    val all = listOf(machine, processor, memory, video, sound, network, hdc, scsi, fdc, mouse, joystick, clock, skipMemoryCheck)
+    val all = listOf(machine, processor, memory, video, sound, network, hdc, scsi, fdc, mouse, joystick, clock, skipMemoryCheck,
+        hardwareAcceleration)
 
     /** The setting [option] is. */
     fun of(option: MachineOption): Setting {

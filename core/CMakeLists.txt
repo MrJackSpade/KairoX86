@@ -53,7 +53,8 @@ set(SndFile_DIR "${CMAKE_CURRENT_LIST_DIR}/cmake/packages" CACHE PATH "" FORCE)
 set(KAIRO_LIBRARY ON)
 set(KAIRO_LIBCHDR ON)
 # The frontend, and its view of the hardware 86Box offers for the machine settings (Kairo#143).
-set(KAIRO_FRONTEND "${CMAKE_CURRENT_LIST_DIR}/kairo/frontend.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/hardware.c")
+set(KAIRO_FRONTEND "${CMAKE_CURRENT_LIST_DIR}/kairo/frontend.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/hardware.c"
+    "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_scanout.c")
 set(QT OFF CACHE BOOL "" FORCE)
 set(OPENAL OFF CACHE BOOL "" FORCE)
 set(RTMIDI OFF CACHE BOOL "" FORCE)
@@ -123,7 +124,27 @@ if(K9X_DIAG)
     # game_profile reads the counters from the library (KairoMachine.cmake hides every symbol of its parts)
     set_target_properties(86Box PROPERTIES C_VISIBILITY_PRESET default CXX_VISIBILITY_PRESET default)
 endif()
-target_include_directories(plat PRIVATE "${CMAKE_CURRENT_LIST_DIR}/kairo")
+# The GPU backend (core/kairo/gpu.c, KairoX86#232): the pinned Vulkan headers; the system's Vulkan
+# library is loaded at run time.
+target_include_directories(plat PRIVATE "${CMAKE_CURRENT_LIST_DIR}/kairo" "${KAIROX86_THIRD_PARTY}/vulkan-headers/include")
+# Its kernels (core/kairo/shaders), compiled to SPIR-V by the NDK's glslc as the numbers the backend's
+# sources include (<name>.comp.inc): the NDK the build uses, or on the PC the SDK's (ANDROID_HOME).
+file(GLOB KAIROX86_GLSLC_HINTS "${ANDROID_NDK}/shader-tools/*" "$ENV{ANDROID_HOME}/ndk/*/shader-tools/*")
+find_program(KAIROX86_GLSLC glslc HINTS ${KAIROX86_GLSLC_HINTS} NO_DEFAULT_PATH REQUIRED)
+set(KAIROX86_SHADER_OUT "${CMAKE_CURRENT_BINARY_DIR}/kairo_shaders")
+set(KAIROX86_SHADER_INCS)
+foreach(shader svga_8bpp.comp svga_direct.comp)
+    set(source "${CMAKE_CURRENT_LIST_DIR}/kairo/shaders/${shader}")
+    set(inc "${KAIROX86_SHADER_OUT}/${shader}.inc")
+    add_custom_command(OUTPUT "${inc}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${KAIROX86_SHADER_OUT}"
+        COMMAND "${KAIROX86_GLSLC}" --target-env=vulkan1.1 -O -Werror -mfmt=num -o "${inc}" "${source}"
+        DEPENDS "${source}" VERBATIM)
+    list(APPEND KAIROX86_SHADER_INCS "${inc}")
+endforeach()
+add_custom_target(kairox86_shaders DEPENDS ${KAIROX86_SHADER_INCS})
+add_dependencies(plat kairox86_shaders)
+target_include_directories(plat PRIVATE "${KAIROX86_SHADER_OUT}")
 target_link_libraries(86Box chdr-static kairo_zlib)
 # A machine owns what it allocates (KairoX86#186): the library's malloc family goes through the
 # frontend's record (core/kairo/frontend.c), which frees what is left when the machine closes.

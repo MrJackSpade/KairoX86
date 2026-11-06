@@ -30,6 +30,7 @@
 #include <86box/thread.h>
 #include <86box/plat_unused.h>
 #include <86box/vid_svga_render_remap.h>
+#include <86box/kairo_gpu.h> /* KairoX86#233 */
 
 uint32_t
 svga_lookup_lut_ram(svga_t* svga, uint32_t val)
@@ -759,21 +760,32 @@ svga_render_2bpp_headland_highres(svga_t *svga)
    overlay) is drawn in place (svga->render_async). */
 /* KairoX86#38: a job holds what its line reads, taken as the guest scans the line: the line's
    VRAM and the palette. Wider lines than RENDER_LINE_BYTES are drawn in place. */
-#define RENDER_LINE_BYTES 2048
+/* KairoX86#233: the job is the GPU's line (kairo_gpu_line_t), which its kernel reads as it is */
+#define RENDER_LINE_BYTES KAIRO_GPU_LINE_BYTES
 
-typedef struct render_job_t {
-    uint32_t *p;
-    uint32_t  dac;
-    int       dwords;
-    int       wide; /* KairoX86#214: each pixel drawn twice across */
-    uint32_t  map8[256];
-    uint8_t   line[RENDER_LINE_BYTES];
-} render_job_t;
+typedef kairo_gpu_line_t render_job_t;
 
 #define RENDER_JOBS 2048 /* a power of 2, more lines than a frame has */
 #define RENDER_BATCH 32 /* KairoX86#214: lines queued before a sleeping drawing thread is woken */
 
-static render_job_t render_jobs[RENDER_JOBS];
+static render_job_t  render_jobs_cpu[RENDER_JOBS];
+/* KairoX86#233: the queue, which with Hardware acceleration on is a GPU buffer */
+static render_job_t *render_jobs = render_jobs_cpu;
+static kairo_gpu_buffer_t *render_gpu_jobs;
+static bitmap_t           *render_gpu_bitmap; /* the queued lines' bitmap */
+static uint32_t            render_gpu_out;    /* the last queued line's first pixel */
+/* KairoX86#233: the direct-colour lines (15, 16, 32 bpp) queued for the GPU, beside the 8bpp jobs,
+   with the VRAM they read and their palettes (the RAMDAC's LUT): filled from the start after each drain */
+#define GPU_DIRECT_LINES 4096
+#define GPU_DIRECT_WORDS (4u << 20) /* 16 MB of VRAM bytes, a power of 2 dwords */
+#define GPU_PALETTES     256
+static kairo_gpu_buffer_t *gpu_direct;
+static kairo_gpu_buffer_t *gpu_bytes;
+static kairo_gpu_buffer_t *gpu_palettes;
+static uint32_t            gpu_direct_count;
+static uint32_t            gpu_bytes_used;    /* dwords */
+static uint32_t            gpu_palettes_used;
+extern uint32_t svga_conv_16to32(struct svga_t *svga, uint16_t color, uint8_t bpp);
 static atomic_uint  render_head; /* next job queued, emulation thread */
 static atomic_uint  render_tail; /* next job drawn, drawing thread */
 static thread_t    *render_thread;
@@ -829,6 +841,25 @@ render_thread_func(UNUSED(void *priv))
 void
 svga_render_drain(void)
 {
+    if (kairo_gpu_on) {
+        /* KairoX86#233: every queued line drawn by the GPU at once (on the emulation thread,
+           as every queue and drain is) */
+        const unsigned tail = atomic_load_explicit(&render_tail, memory_order_relaxed);
+        const unsigned head = atomic_load_explicit(&render_head, memory_order_relaxed);
+        if (head != tail) {
+            kairo_gpu_scanout_8bpp(render_gpu_jobs, render_gpu_bitmap->kairo_gpu, tail, RENDER_JOBS - 1, head - tail);
+            atomic_store_explicit(&render_tail, head, memory_order_relaxed);
+        }
+        if (gpu_direct_count) {
+            kairo_gpu_scanout_direct(gpu_direct, gpu_bytes, gpu_palettes, video_15to32, video_16to32,
+                                     render_gpu_bitmap->kairo_gpu, 0, GPU_DIRECT_LINES - 1, GPU_DIRECT_WORDS - 1,
+                                     gpu_direct_count);
+            gpu_direct_count  = 0;
+            gpu_bytes_used    = 0;
+            gpu_palettes_used = 0;
+        }
+        return;
+    }
     if (render_thread == NULL)
         return;
     while (atomic_load_explicit(&render_tail, memory_order_acquire) != atomic_load_explicit(&render_head, memory_order_relaxed)) {
@@ -844,6 +875,20 @@ svga_render_drain(void)
 void
 svga_render_close(void)
 {
+    if ((render_gpu_jobs != NULL) || (gpu_direct != NULL)) {
+        /* KairoX86#233: the GPU's queues, drawn and freed before the GPU closes */
+        svga_render_drain();
+        kairo_gpu_buffer_free(render_gpu_jobs);
+        kairo_gpu_buffer_free(gpu_direct);
+        kairo_gpu_buffer_free(gpu_bytes);
+        kairo_gpu_buffer_free(gpu_palettes);
+        render_gpu_jobs   = NULL;
+        gpu_direct        = NULL;
+        gpu_bytes         = NULL;
+        gpu_palettes      = NULL;
+        render_gpu_bitmap = NULL;
+        render_jobs       = render_jobs_cpu;
+    }
     if (render_thread == NULL)
         return;
     svga_render_drain();
@@ -864,6 +909,16 @@ render_slot(void)
 {
     const unsigned head = atomic_load_explicit(&render_head, memory_order_relaxed);
 
+    if (kairo_gpu_on) {
+        /* KairoX86#233: no drawing thread; the queue in a GPU buffer */
+        if (render_gpu_jobs == NULL) {
+            render_gpu_jobs = kairo_gpu_buffer(sizeof(render_job_t) * RENDER_JOBS);
+            render_jobs     = render_gpu_jobs->data;
+        }
+        if ((head - atomic_load_explicit(&render_tail, memory_order_relaxed)) == RENDER_JOBS)
+            svga_render_drain();
+        return &render_jobs[head & (RENDER_JOBS - 1)];
+    }
     if (render_thread == NULL) {
         render_wake   = thread_create_event();
         render_idle   = thread_create_event();
@@ -884,8 +939,87 @@ render_commit(void)
        svga_render_drain() wakes it for the rest */
     const unsigned waiting = head + 1 - atomic_load_explicit(&render_tail, memory_order_acquire);
     atomic_store_explicit(&render_head, head + 1, memory_order_release);
+    if (kairo_gpu_on)
+        return; /* KairoX86#233: the drain draws them */
     if (waiting == RENDER_BATCH)
         thread_set_event(render_wake);
+}
+
+/* KairoX86#233: a line about to be queued for the GPU at pixel out of its bitmap: one out of the
+   queues' order (a new frame, another bitmap) waits for the queued ones, so no two queued lines
+   draw the same pixels */
+static void
+render_gpu_order(svga_t *svga, uint32_t out)
+{
+    if ((render_gpu_bitmap != svga->monitor->target_buffer) || (out <= render_gpu_out))
+        svga_render_drain();
+    render_gpu_bitmap = svga->monitor->target_buffer;
+    render_gpu_out    = out;
+}
+
+/* KairoX86#233: whether the renderer the card installed is the core's indexed one itself. A card's own
+   renderer around it (the Rage 128's pixel doubler) may read or redraw the line as soon as the
+   core's returns, so its lines are drawn at once, on the CPU. */
+static bool
+render_gpu_indexed(const svga_t *svga)
+{
+    return (svga->render == svga_render_2bpp_lowres) || (svga->render == svga_render_2bpp_highres) ||
+           (svga->render == svga_render_4bpp_lowres) || (svga->render == svga_render_4bpp_highres) ||
+           (svga->render == svga_render_8bpp_lowres) || (svga->render == svga_render_8bpp_highres);
+}
+
+/* KairoX86#233: queues the line's pixels left of hdisp (a multiple of 8) for the GPU, in format 15,
+   16 or 32, when the GPU draws them (eligible: the installed renderer is the core's own, not a card's
+   around it, which may read or redraw the line at once, and it converts as 86Box does by default),
+   the machine's Hardware acceleration is on and nothing else draws on the line; returns how many
+   (0: the CPU draws them all). p is the line's first pixel, svga->memaddr its first VRAM byte. */
+static int
+render_gpu_direct(svga_t *svga, uint32_t *p, uint32_t format, bool eligible)
+{
+    const uint32_t mask   = svga->vram_display_mask;
+    const int      pixels = svga->hdisp & ~7;
+
+    if (!kairo_gpu_on || !eligible || !svga->render_async || svga->render_line_offset || (pixels <= 0) ||
+        (pixels > 2048) || ((mask + 1) & mask))
+        return 0;
+    const uint32_t words = (uint32_t) pixels * ((format == 32) ? 4 : 2) / 4;
+    const bool     lut   = (format == 32) && svga->lut_map;
+    render_gpu_order(svga, (uint32_t) (p - svga->monitor->target_buffer->dat));
+    if (gpu_direct == NULL) {
+        gpu_direct   = kairo_gpu_buffer(sizeof(kairo_gpu_direct_t) * GPU_DIRECT_LINES);
+        gpu_bytes    = kairo_gpu_buffer(GPU_DIRECT_WORDS * 4);
+        gpu_palettes = kairo_gpu_buffer(GPU_PALETTES * 256 * 4);
+    }
+    if ((gpu_direct_count == GPU_DIRECT_LINES) || ((gpu_bytes_used + words) > GPU_DIRECT_WORDS) ||
+        (lut && (gpu_palettes_used == GPU_PALETTES)))
+        svga_render_drain();
+
+    uint32_t *bytes   = (uint32_t *) gpu_bytes->data + gpu_bytes_used;
+    uint32_t  memaddr = svga->memaddr;
+    for (uint32_t w = 0; w < words; w++) {
+        memcpy(&bytes[w], &svga->vram[memaddr & mask], 4);
+        memaddr += 4;
+    }
+    uint32_t palette = 0;
+    if (lut) {
+        uint32_t *palettes = gpu_palettes->data;
+        /* A palette is kept once while it stays the same */
+        if ((gpu_palettes_used == 0) ||
+            memcmp(&palettes[(gpu_palettes_used - 1) * 256], svga->pallook, 256 * sizeof(uint32_t))) {
+            memcpy(&palettes[gpu_palettes_used * 256], svga->pallook, 256 * sizeof(uint32_t));
+            gpu_palettes_used++;
+        }
+        palette = gpu_palettes_used;
+    }
+    kairo_gpu_direct_t *line = (kairo_gpu_direct_t *) gpu_direct->data + gpu_direct_count;
+    line->out                = render_gpu_out;
+    line->format             = format;
+    line->pixels             = (uint32_t) pixels;
+    line->src                = gpu_bytes_used * 4;
+    line->lut                = palette;
+    gpu_direct_count++;
+    gpu_bytes_used += words;
+    return pixels;
 }
 
 
@@ -1026,11 +1160,15 @@ svga_render_indexed_gfx(svga_t *svga, bool highres, bool combine8bits)
         /* The dwords wholly left of hdisp to the drawing thread */
         x = 0;
         if (svga->render_async && !svga->render_line_offset && !((mask + 1) & mask) && (svga->hdisp >= 8) &&
-            (svga->hdisp <= RENDER_LINE_BYTES)) {
+            (svga->hdisp <= RENDER_LINE_BYTES) && (!kairo_gpu_on || render_gpu_indexed(svga))) {
+            const uint32_t out = (uint32_t) (p - svga->monitor->target_buffer->dat);
+            if (kairo_gpu_on)
+                render_gpu_order(svga, out); /* KairoX86#233 */
             render_job_t *job    = render_slot();
             const int     dwords = svga->hdisp / (highres ? 4 : 8);
 
             job->p      = p;
+            job->out    = out;
             job->dac    = dac;
             job->dwords = dwords;
             job->wide   = !highres;
@@ -1870,7 +2008,9 @@ svga_render_15bpp_highres(svga_t *svga)
                 svga->firstline_draw = svga->displine;
             svga->lastline_draw = svga->displine;
 
-            for (x = 0; x <= (svga->hdisp + svga->scrollcache); x += 8) {
+            /* KairoX86#233: the pixels left of hdisp to the GPU */
+            x = render_gpu_direct(svga, p, 15, (svga->render == svga_render_15bpp_highres) && (svga->conv_16to32 == svga_conv_16to32));
+            for (; x <= (svga->hdisp + svga->scrollcache); x += 8) {
                 dat      = *(uint32_t *) (&svga->vram[(svga->memaddr + (x << 1)) & svga->vram_display_mask]);
                 p[x]     = svga->conv_16to32(svga, dat & 0xffff, 15);
                 p[x + 1] = svga->conv_16to32(svga, dat >> 16, 15);
@@ -1901,7 +2041,11 @@ svga_render_15bpp_highres(svga_t *svga)
             svga->lastline_draw = svga->displine;
 
             if (!svga->remap_required) {
-                for (x = 0; x <= (svga->hdisp + svga->scrollcache); x += 8) {
+                /* KairoX86#233: the pixels left of hdisp to the GPU */
+                x = render_gpu_direct(svga, p, 15, (svga->render == svga_render_15bpp_highres) &&
+                                                          (svga->conv_16to32 == svga_conv_16to32));
+                p += x;
+                for (; x <= (svga->hdisp + svga->scrollcache); x += 8) {
                     dat  = *(uint32_t *) (&svga->vram[(svga->memaddr + (x << 1)) & svga->vram_display_mask]);
                     *p++ = svga->conv_16to32(svga, dat & 0xffff, 15);
                     *p++ = svga->conv_16to32(svga, dat >> 16, 15);
@@ -2112,7 +2256,9 @@ svga_render_16bpp_highres(svga_t *svga)
                 svga->firstline_draw = svga->displine;
             svga->lastline_draw = svga->displine;
 
-            for (x = 0; x <= (svga->hdisp + svga->scrollcache); x += 8) {
+            /* KairoX86#233: the pixels left of hdisp to the GPU */
+            x = render_gpu_direct(svga, p, 16, (svga->render == svga_render_16bpp_highres) && (svga->conv_16to32 == svga_conv_16to32));
+            for (; x <= (svga->hdisp + svga->scrollcache); x += 8) {
                 uint32_t dat = *(uint32_t *) (&svga->vram[(svga->memaddr + (x << 1)) & svga->vram_display_mask]);
                 p[x]         = svga->conv_16to32(svga, dat & 0xffff, 16);
                 p[x + 1]     = svga->conv_16to32(svga, dat >> 16, 16);
@@ -2143,7 +2289,11 @@ svga_render_16bpp_highres(svga_t *svga)
             svga->lastline_draw = svga->displine;
 
             if (!svga->remap_required) {
-                for (x = 0; x <= (svga->hdisp + svga->scrollcache); x += 8) {
+                /* KairoX86#233: the pixels left of hdisp to the GPU */
+                x = render_gpu_direct(svga, p, 16, (svga->render == svga_render_16bpp_highres) &&
+                                                          (svga->conv_16to32 == svga_conv_16to32));
+                p += x;
+                for (; x <= (svga->hdisp + svga->scrollcache); x += 8) {
                     dat  = *(uint32_t *) (&svga->vram[(svga->memaddr + (x << 1)) & svga->vram_display_mask]);
                     *p++ = svga->conv_16to32(svga, dat & 0xffff, 16);
                     *p++ = svga->conv_16to32(svga, dat >> 16, 16);
@@ -2424,7 +2574,9 @@ svga_render_32bpp_highres(svga_t *svga)
                 svga->firstline_draw = svga->displine;
             svga->lastline_draw = svga->displine;
 
-            for (x = 0; x <= (svga->hdisp + svga->scrollcache); x++) {
+            /* KairoX86#233: the pixels left of hdisp to the GPU */
+            x = render_gpu_direct(svga, p, 32, svga->render == svga_render_32bpp_highres);
+            for (; x <= (svga->hdisp + svga->scrollcache); x++) {
                 dat  = *(uint32_t *) (&svga->vram[(svga->memaddr + (x << 2)) & svga->vram_display_mask]);
                 p[x] = lookup_lut(dat & 0xffffff);
             }
@@ -2442,7 +2594,10 @@ svga_render_32bpp_highres(svga_t *svga)
             svga->lastline_draw = svga->displine;
 
             if (!svga->remap_required) {
-                for (x = 0; x <= (svga->hdisp + svga->scrollcache); x++) {
+                /* KairoX86#233: the pixels left of hdisp to the GPU */
+                x = render_gpu_direct(svga, p, 32, svga->render == svga_render_32bpp_highres);
+                p += x;
+                for (; x <= (svga->hdisp + svga->scrollcache); x++) {
                     dat  = *(uint32_t *) (&svga->vram[(svga->memaddr + (x << 2)) & svga->vram_display_mask]);
                     *p++ = lookup_lut(dat & 0xffffff);
                 }

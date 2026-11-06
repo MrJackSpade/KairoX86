@@ -35,6 +35,9 @@
 //                   given more than once. Prints "placed <frame>" once the program has read it.
 //   --commands <lines>  startup commands, "|" between lines, typed at the guest's DOS prompt by the
 //                   shared startup typer (KairoX86#46). Prints "typed <frame>" once they all are.
+//   --until-halt <cs:ip>  a machine that stops halted with interrupts off at cs:ip (as the stop
+//                   reports it, "0000:8003") has run to its end: the run ends there as if its frames
+//                   were done, its hashes and state kept. Prints "halted <frame>".
 //
 // Prints one line starting "start ": how long the machine took to start; and one starting "host ":
 // the frames per second the host reached, the guest's rate and the frame time distribution. At the
@@ -218,6 +221,7 @@ int main(int argc, char **argv) {
     std::vector<MediaEvent> media;
     std::vector<std::array<long, 3>> places;
     std::string commands;
+    std::string until_halt;
     for (int i = 6; i < argc; ++i) {
         const std::string option = argv[i];
         if (i + 1 >= argc) return fail(option + " needs a value");
@@ -228,6 +232,7 @@ int main(int argc, char **argv) {
         else if (option == "--audio") audio_path = value;
         else if (option == "--seed") seed = uint32_t(std::strtoul(value.c_str(), nullptr, 0));
         else if (option == "--runs") runs = std::atol(value.c_str());
+        else if (option == "--until-halt") until_halt = value;
         else if (option == "--media") {
             const size_t first = value.find(':'), second = first == std::string::npos ? first : value.find(':', first + 1);
             if (second == std::string::npos) return fail("--media is <frame>:<slot>:<path>, not " + value);
@@ -270,6 +275,7 @@ int main(int argc, char **argv) {
         auto machine = kairox86::X86Machine::create(config, error);
         if (!machine) return fail("could not start: " + error);
         std::printf("start %.3f s\n", std::chrono::duration<double>(Clock::now() - started).count());
+        std::printf("started %s\n", machine->started().c_str());
 
         std::vector<int16_t> audio(48000 * 2);
         std::FILE *audio_out = nullptr;
@@ -324,7 +330,16 @@ int main(int argc, char **argv) {
             else machine->joystick_axis(event.code, event.down ? (event.kind == 'p' ? 32767 : -32767) : 0);
             }
             const auto before = Clock::now();
-            if (!machine->run_frame(error)) return fail("stopped at frame " + std::to_string(frame) + ": " + error);
+            if (!machine->run_frame(error)) {
+                // A program that ends by halting where --until-halt says has run to its end (the
+                // graphics batch's tests, core/test/gpu): the run ends there as if its frames were done.
+                const std::string end = "(at " + until_halt + ")";
+                const bool ended = !until_halt.empty() && error.rfind("The PC halted", 0) == 0 && error.size() >= end.size() &&
+                                   error.compare(error.size() - end.size(), end.size(), end) == 0;
+                if (!ended) return fail("stopped at frame " + std::to_string(frame) + ": " + error);
+                std::printf("halted %ld\n", frame);
+                break;
+            }
             const double ms = std::chrono::duration<double, std::milli>(Clock::now() - before).count();
             if (machine->loading()) {
                 ++loading;
