@@ -1422,6 +1422,31 @@ svga_recalctimings(svga_t *svga)
         svga->y_add = 240;
 }
 
+/* KairoX86#237: the card's GPU work drawn first where the display reads video memory (svga->kairo_touch): the
+   line's from its start address, all of it for the overlay (it reads from elsewhere too), a whole cursor's from the
+   cursor's address (64 by 64 at 32 bits holds any card's) */
+static void
+svga_kairo_touch_line(svga_t *svga)
+{
+    if (svga->kairo_touch != NULL)
+        svga->kairo_touch(svga, (svga->force_old_addr ? svga->memaddr : svga->remap_func(svga, svga->memaddr)) & svga->vram_display_mask,
+                          (uint32_t) (svga->hdisp + svga->scrollcache + 64) * 4);
+}
+
+static void
+svga_kairo_touch_all(svga_t *svga)
+{
+    if (svga->kairo_touch != NULL)
+        svga->kairo_touch(svga, 0, svga->vram_max);
+}
+
+static void
+svga_kairo_touch_cursor(svga_t *svga, uint32_t addr)
+{
+    if (svga->kairo_touch != NULL)
+        svga->kairo_touch(svga, addr & svga->vram_mask, 64 * 64 * 4);
+}
+
 static void
 svga_do_render(svga_t *svga)
 {
@@ -1446,6 +1471,7 @@ svga_do_render(svga_t *svga)
         svga->render_line_offset = svga->start_retrace_latch - svga->crtc[0x4];
         if (svga->render_sync)
             svga->render_sync(svga);
+        svga_kairo_touch_line(svga); /* KairoX86#237 */
         /* A line the cursors or the overlay draw on next is drawn in place */
 #ifdef KAIROX86_SYNC_RENDER /* KairoX86#38: every line drawn in place, to compare against */
         svga->render_async = 0;
@@ -1459,24 +1485,30 @@ svga_do_render(svga_t *svga)
     }
 
     if (svga->overlay_on) {
-        if (!svga->override && svga->overlay_draw)
+        if (!svga->override && svga->overlay_draw) {
+            svga_kairo_touch_all(svga); /* KairoX86#237 */
             svga->overlay_draw(svga, svga->displine + svga->y_add);
+        }
         svga->overlay_on--;
         if (svga->overlay_on && svga->interlace)
             svga->overlay_on--;
     }
 
     if (svga->dac_hwcursor_on) {
-        if (!svga->override && svga->dac_hwcursor_draw)
+        if (!svga->override && svga->dac_hwcursor_draw) {
+            svga_kairo_touch_cursor(svga, svga->dac_hwcursor_latch.addr); /* KairoX86#237 */
             svga->dac_hwcursor_draw(svga, (svga->displine + svga->y_add + ((svga->dac_hwcursor_latch.y >= 0) ? 0 : svga->dac_hwcursor_latch.y)) & 2047);
+        }
         svga->dac_hwcursor_on--;
         if (svga->dac_hwcursor_on && svga->interlace)
             svga->dac_hwcursor_on--;
     }
 
     if (svga->hwcursor_on) {
-        if (!svga->override && svga->hwcursor_draw)
+        if (!svga->override && svga->hwcursor_draw) {
+            svga_kairo_touch_cursor(svga, svga->hwcursor_latch.addr); /* KairoX86#237 */
             svga->hwcursor_draw(svga, (svga->displine + svga->y_add + ((svga->hwcursor_latch.y >= 0) ? 0 : svga->hwcursor_latch.y)) & 2047);
+        }
 
         svga->hwcursor_on--;
         if (svga->hwcursor_on && svga->interlace)

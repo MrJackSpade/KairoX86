@@ -1524,6 +1524,9 @@ mach64_host_pixels(mach64_t *mach64, uint32_t val, int bits, uint32_t *out, uint
 static void
 mach64_accel_common(mach64_t *mach64)
 {
+    /* KairoX86#237: the 3D engine's rows on the GPU drawn before the 2D engine reads or writes video memory */
+    mach64_3d_kairo_drain(mach64);
+
     mach64->accel.dst_pix_width  = mach64->dp_pix_width & 7;
     mach64->accel.src_pix_width  = (mach64->dp_pix_width >> 8) & 7;
     mach64->accel.host_pix_width = (mach64->dp_pix_width >> 16) & 7;
@@ -2032,6 +2035,7 @@ mach64_blit(uint32_t cpu_dat, int count, mach64_t *mach64)
         mach64_log("mach64_blit : return as not busy\n");
         return;
     }
+    mach64_3d_kairo_drain(mach64); /* KairoX86#237: rows recorded since the operation started */
 
     if (count == -1) {
         while (mach64->accel.busy && !mach64_pixel(mach64, 0))
@@ -2079,6 +2083,7 @@ mach64_load_context(mach64_t *mach64)
         [20] = 0x2cc, [21] = 0x2d0, [22] = 0x2d4, [23] = 0x2d8, [24] = 0x300, [25] = 0x304,
         [26] = 0x308, [27] = 0x330
     };
+    mach64_3d_kairo_drain(mach64); /* KairoX86#237: the context is read from video memory */
 
     if (cntl & (1u << 31))
         return;

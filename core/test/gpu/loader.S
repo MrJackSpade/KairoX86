@@ -1,6 +1,6 @@
 /*
  * The boot sector of KairoX86's graphics tests (KairoX86#283): loads the test program that follows it on
- * the floppy (sectors 2 on, SECTORS of them, to 0x8000), turns on "unreal mode" (DS, ES, FS and GS with a
+ * the floppy (sectors 2 on, SECTORS of them, to 0x8000), turns the A20 line on, then "unreal mode" (DS, ES, FS and GS with a
  * 4 GB limit, so the program reaches a card's linear framebuffer above 1 MB while it still calls the BIOS),
  * and jumps to the program with DS = ES = 0.
  *
@@ -47,8 +47,26 @@ _start:
     incw    %si
     jmp     1b
 
+    /* The A20 line on (the keyboard controller's output port), so addresses with bit 20 set reach memory
+       there and not 1 MB lower; checked: 0:0500h and FFFFh:0510h are the same byte while it is off */
+2:  call    kbc_wait
+    movb    $0xd1, %al
+    outb    %al, $0x64
+    call    kbc_wait
+    movb    $0xdf, %al
+    outb    %al, $0x60
+    call    kbc_wait
+    movb    $0x00, 0x0500
+    movw    $0xffff, %ax
+    movw    %ax, %es
+    movb    $0xa5, %es:0x0510
+    xorw    %ax, %ax
+    movw    %ax, %es
+    cmpb    $0x00, 0x0500
+    jne     a20_fail
+
     /* Unreal mode: load each data segment once in protected mode with a flat 4 GB descriptor */
-2:  cli
+    cli
     lgdt    gdt_desc
     movl    %cr0, %eax
     orb     $1, %al
@@ -69,6 +87,18 @@ _start:
     movw    %ax, %gs
     sti
     ljmp    $0, $0x8000
+
+/* Until the keyboard controller takes a byte (its input buffer empty) */
+kbc_wait:
+    inb     $0x64, %al
+    testb   $2, %al
+    jnz     kbc_wait
+    ret
+
+a20_fail:
+    movw    $0x0e41, %ax            /* 'A' on the screen, then stop */
+    int     $0x10
+    jmp     5f
 
 fail:
     movw    $0x0e46, %ax            /* 'F' on the screen, then stop */

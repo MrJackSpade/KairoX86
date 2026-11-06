@@ -2988,6 +2988,7 @@ mach64_read_linear(uint32_t addr, void *priv)
     addr &= svga->decode_mask;
     if (addr >= svga->vram_max)
         return 0xff;
+    mach64_3d_kairo_touch((mach64_t *) svga->priv, addr, 1); /* KairoX86#237 */
 
     return svga->vram[addr & svga->vram_mask];
 }
@@ -3002,6 +3003,7 @@ mach64_readw_linear(uint32_t addr, void *priv)
     addr &= svga->decode_mask;
     if (addr >= svga->vram_max)
         return 0xffff;
+    mach64_3d_kairo_touch((mach64_t *) svga->priv, addr, 2); /* KairoX86#237 */
 
     return *(uint16_t *) &svga->vram[addr & svga->vram_mask];
 }
@@ -3016,6 +3018,7 @@ mach64_readl_linear(uint32_t addr, void *priv)
     addr &= svga->decode_mask;
     if (addr >= svga->vram_max)
         return 0xffffffff;
+    mach64_3d_kairo_touch((mach64_t *) svga->priv, addr, 4); /* KairoX86#237 */
 
     return *(uint32_t *) &svga->vram[addr & svga->vram_mask];
 }
@@ -3030,6 +3033,7 @@ mach64_write_linear(uint32_t addr, uint8_t val, void *priv)
     if (addr >= svga->vram_max)
         return;
     addr &= svga->vram_mask;
+    mach64_3d_kairo_touch((mach64_t *) svga->priv, addr, 1); /* KairoX86#237 */
     svga->changedvram[addr >> 12] = svga->monitor->mon_changeframecount;
     svga->vram[addr]              = val;
 }
@@ -3045,6 +3049,7 @@ mach64_writew_linear(uint32_t addr, uint16_t val, void *priv)
     if (addr >= svga->vram_max)
         return;
     addr &= svga->vram_mask;
+    mach64_3d_kairo_touch((mach64_t *) svga->priv, addr, 2); /* KairoX86#237 */
     svga->changedvram[addr >> 12]   = svga->monitor->mon_changeframecount;
     *(uint16_t *) &svga->vram[addr] = val;
 }
@@ -3063,6 +3068,7 @@ mach64_writel_linear(uint32_t addr, uint32_t val, void *priv)
             bswap32s(&val);
         if (((mach64->scaler_yuv_aper >> 4) & 0xc) == 0x4) { // Y plane
             offset_from_base <<= 1;
+            mach64_3d_kairo_touch(mach64, offset_from_base, 6); /* KairoX86#237 */
             svga->vram[offset_from_base & svga->vram_mask] = (val & 0xFF);
             svga->vram[(offset_from_base + 1) & svga->vram_mask] = ((val >> 8) & 0xFF);
             svga->vram[(offset_from_base + 4) & svga->vram_mask] = ((val >> 16) & 0xFF);
@@ -3070,6 +3076,7 @@ mach64_writel_linear(uint32_t addr, uint32_t val, void *priv)
         }
         else if (((mach64->scaler_yuv_aper >> 4) & 0xc) == 0x8 || ((mach64->scaler_yuv_aper >> 4) & 0xc) == 0xc) {
             offset_from_base <<= 2;
+            mach64_3d_kairo_touch(mach64, offset_from_base, 16); /* KairoX86#237 */
             if (((mach64->scaler_yuv_aper >> 4) & 0xc) == 0x8) { // U plane
                 svga->vram[(offset_from_base + 3) & svga->vram_mask] = (val & 0xFF);
                 svga->vram[(offset_from_base + 7) & svga->vram_mask] = ((val >> 8) & 0xFF);
@@ -3089,6 +3096,7 @@ mach64_writel_linear(uint32_t addr, uint32_t val, void *priv)
     if (addr >= svga->vram_max)
         return;
     addr &= svga->vram_mask;
+    mach64_3d_kairo_touch(mach64, addr, 4); /* KairoX86#237 */
     svga->changedvram[addr >> 12]   = svga->monitor->mon_changeframecount;
     *(uint32_t *) &svga->vram[addr] = val;
 }

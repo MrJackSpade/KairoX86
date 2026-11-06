@@ -508,6 +508,10 @@ typedef struct mach64_3d_work_t {
 
 mach64_3d_t     *mach64_3d_init(mach64_t *mach64);
 void             mach64_3d_close(mach64_3d_t *ctx);
+/* KairoX86#237: the 3D engine's rows on the GPU drawn first where something else reads or writes video memory
+   (no-ops in software) */
+void mach64_3d_kairo_touch(mach64_t *mach64, uint32_t addr, uint32_t len);
+void mach64_3d_kairo_drain(mach64_t *mach64);
 int              mach64_3d_read(mach64_t *mach64, uint32_t addr, uint32_t *val);
 int              mach64_3d_write(mach64_t *mach64, uint32_t addr, uint32_t val, uint32_t type);
 mach64_timing_t *mach64_timing_init(void);

@@ -1030,6 +1030,10 @@ struct pcxr_job {
     tile_t             *tiles;
     uint32_t            n_planes, n_objects, n_tiles;
     uint32_t            cap_planes, cap_objects, cap_tiles;
+    /* KairoX86#269: its lists for the GPU (pcxr_gpu_lists) */
+    uint32_t           *g_planes, *g_objects, *g_spans, *g_sched;
+    uint32_t            g_cap_planes, g_cap_objects, g_cap_spans, g_cap_sched;
+    uint32_t            g_frame[KF_WORDS];
 };
 
 /* The 32 SABRE cells of one span, as arrays. Flags are 0 or 1 and every
@@ -1240,6 +1244,10 @@ pcxr_job_destroy(pcxr_job_t *job)
     free(job->planes);
     free(job->objects);
     free(job->tiles);
+    free(job->g_planes); /* KairoX86#269 */
+    free(job->g_objects);
+    free(job->g_spans);
+    free(job->g_sched);
     free(job);
 }
 
@@ -1700,6 +1708,121 @@ next_plane:
     }
     free(sc.buf);
     return res.pixels_shaded;
+}
+
+/* KairoX86#269: the prepared frame as the GPU kernel's lists (86box/kairo_gpu_powervr.h): the decoded planes and
+   objects, and every span of every tile with the schedule its decoder state gives it, the states run from span to
+   span as pcxr_render_tiles runs them. The lists live in the job until the next call. */
+int
+pcxr_gpu_lists(pcxr_job_t *job, kairo_pvr_lists_t *out)
+{
+    const pcxr_frame_t *f = job->f;
+    ctx_t               c;
+    sched_cache_t       sc;
+    uint32_t            n_spans = 0, n_sched = 0;
+
+    memset(&c, 0, sizeof(c));
+    memset(&sc, 0, sizeof(sc));
+    c.f = f;
+
+    if (grow((void **) &job->g_planes, &job->g_cap_planes, job->n_planes * KP_WORDS, 4)
+        || grow((void **) &job->g_objects, &job->g_cap_objects, job->n_objects * KO_WORDS, 4))
+        return -1;
+    for (uint32_t i = 0; i < job->n_planes; i++) {
+        const plane_t *pl = &job->planes[i];
+        uint32_t      *w  = &job->g_planes[i * KP_WORDS];
+        w[KP_A]           = (uint32_t) (uint64_t) pl->a;
+        w[KP_A + 1]       = (uint32_t) ((uint64_t) pl->a >> 32);
+        w[KP_B]           = (uint32_t) (uint64_t) pl->b;
+        w[KP_B + 1]       = (uint32_t) ((uint64_t) pl->b >> 32);
+        w[KP_C]           = (uint32_t) pl->c;
+        w[KP_INDEX]       = pl->index;
+        w[KP_INSTR]       = (uint32_t) pl->instr;
+        w[KP_INSTR + 1]   = 0;
+    }
+    for (uint32_t i = 0; i < job->n_objects; i++) {
+        uint32_t *w           = &job->g_objects[i * KO_WORDS];
+        w[KO_FIRST]           = job->objects[i].first;
+        w[KO_COUNT]           = job->objects[i].count;
+        w[KO_LAST_IN_REGION]  = (uint32_t) job->objects[i].last_in_region;
+        w[KO_LAST_IN_REGION + 1] = 0;
+    }
+
+    for (uint32_t ti = 0; ti < job->n_tiles; ti++) {
+        const tile_t *t  = &job->tiles[ti];
+        uint32_t      p0 = t->n_objects ? job->objects[t->first_object].first : 0;
+        uint32_t      np = t->n_objects ? job->objects[t->first_object + t->n_objects - 1].first
+                                         + job->objects[t->first_object + t->n_objects - 1].count - p0
+                                       : 0;
+        int           st = pcxr_state(t->prev_intern_out, t->sec_obj, t->first_obj);
+        uint32_t      sched_of_slot[32];
+
+        memset(sc.slot, -1, sizeof(sc.slot));
+        sc.used = 0;
+        for (int yline = t->ypos; yline < t->ypos + t->ysize; yline++) {
+            for (int xspan = t->xpos; xspan < t->xpos + t->xsize; xspan += NUM_CELLS) {
+                int       slot = sc.slot[st];
+                uint32_t *span;
+
+                if (slot < 0) {
+                    if ((slot = build_schedule(&c, job, t, p0, np, &sc, st)) < 0) {
+                        free(sc.buf);
+                        return -1;
+                    }
+                    /* the schedule's words, after the others */
+                    if (grow((void **) &job->g_sched, &job->g_cap_sched, n_sched + np, 4)) {
+                        free(sc.buf);
+                        return -1;
+                    }
+                    for (uint32_t k = 0; k < np; k++) {
+                        const sched_t *e = &sc.buf[(uint32_t) slot * np + k];
+                        job->g_sched[n_sched + k] = (uint32_t) e->run | ((uint32_t) e->wi.i_load << 1) | ((uint32_t) e->wi.u_load << 5)
+                                                    | ((uint32_t) e->wi.test_shad << 7) | ((uint32_t) e->wi.plane_visib << 9)
+                                                    | ((uint32_t) e->wi.delayed_clear_u_id << 10) | ((uint32_t) e->wi.plane_perp << 11)
+                                                    | ((uint32_t) e->wi.mux_sel << 12);
+                    }
+                    sched_of_slot[slot] = n_sched;
+                    n_sched += np;
+                }
+                if (grow((void **) &job->g_spans, &job->g_cap_spans, (n_spans + 1) * KN_WORDS, 4)) {
+                    free(sc.buf);
+                    return -1;
+                }
+                span                  = &job->g_spans[n_spans * KN_WORDS];
+                span[KN_FIRST_OBJECT] = t->first_object;
+                span[KN_N_OBJECTS]    = t->n_objects;
+                span[KN_X]            = (uint32_t) xspan;
+                span[KN_Y]            = (uint32_t) yline;
+                span[KN_SCHED]        = sched_of_slot[slot];
+                span[KN_P0]           = p0;
+                span[KN_P0 + 1]       = 0;
+                span[KN_P0 + 2]       = 0;
+                n_spans++;
+                st = sc.next[st];
+            }
+        }
+    }
+    free(sc.buf);
+
+    job->g_frame[KF_FOG_SHIFT]  = f->fog_shift;
+    job->g_frame[KF_FOG_COLOUR] = f->fog_colour;
+    job->g_frame[KF_CAMERA]     = f->camera;
+    job->g_frame[KF_XCLIP]      = f->xclip;
+    job->g_frame[KF_BILINEAR]   = f->bilinear;
+    job->g_frame[KF_TEX_WORDS]  = f->tex_words;
+    for (int i = 0; i < 128; i++)
+        job->g_frame[KF_FOG_TABLE + i] = f->fog_table[i];
+
+    out->planes    = job->g_planes;
+    out->objects   = job->g_objects;
+    out->spans     = job->g_spans;
+    out->sched     = job->g_sched;
+    out->frame     = job->g_frame;
+    out->n_planes  = job->n_planes;
+    out->n_objects = job->n_objects;
+    out->n_spans   = n_spans;
+    out->n_sched   = n_sched;
+    return 0;
 }
 
 void

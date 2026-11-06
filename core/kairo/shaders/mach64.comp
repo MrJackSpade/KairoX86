@@ -1,0 +1,1108 @@
+#version 450
+#extension GL_EXT_control_flow_attributes : require
+/*
+ * The ATI 3D Rage II+'s 3D engine on the GPU (KairoX86#237): 86Box's mach64_3d_draw_row (vid_ati_mach64_3d.c) and
+ * what it calls, for a batch of rows the CPU walked, into the card's video memory; and the front-end scaler's
+ * pixels (mach64_scaler_pixel, mach64_scaler_write_pixel), its destination lines recorded as rows of their own.
+ *
+ * In parallel (pc.in_order 0), each invocation owns four pixels of one line of the batch's destination, and their
+ * depth: the destination's lines start 8-byte aligned and are a multiple of 8 pixels, so the four pixels are whole
+ * words in both. It runs through the rows on its line (the lists buffer) in the order they were recorded. In order
+ * (pc.in_order 1), invocation 0 draws every row pixel by pixel as the CPU does, carrying the X error diffusion.
+ *
+ * A pixel's interpolators are the CPU's sums in closed form; colour and depth read only their fields' low bits, so
+ * they are 32-bit sums that wrap as the CPU's 64-bit ones do in those bits. S, T and their steps are 64-bit, as
+ * uvec2 (x the low word).
+ *
+ * The record layouts are 86box/kairo_gpu_mach64.h's, as words.
+ *
+ * Copyright 2026 MrJackSpade. GPL-2.0-or-later.
+ */
+layout(local_size_x = 16, local_size_y = 4) in;
+
+layout(std430, binding = 0) readonly buffer Draws { uint draws[]; };
+layout(std430, binding = 1) readonly buffer Rows { uint rows[]; };
+layout(std430, binding = 2) readonly buffer Lists { uint lists[]; };
+layout(std430, binding = 3) readonly buffer Palettes { uint palettes[]; };
+layout(std430, binding = 4) buffer Vram { uint vram[]; };
+layout(std430, binding = 5) buffer State { int state[]; }; /* valid, y, err[3] */
+
+layout(push_constant) uniform Push {
+    uint count;     /* rows */
+    uint vram_mask;
+    uint column0;   /* the batch's first four-pixel column */
+    int  line0;     /* its first line */
+    uint lines;
+    uint columns;
+    uint in_order;
+    uint pad;
+} pc;
+
+const uint KM_FLAGS = 0u, KM_CNTL = 1u, KM_Z_CNTL = 2u, KM_DST_BASE = 3u, KM_DST_PITCH = 4u, KM_DST_FORMAT = 5u,
+           KM_DST_BPP = 6u, KM_Z_BASE = 7u, KM_Z_PITCH = 8u, KM_FOG = 9u, KM_CLR_CMP_CNTL = 10u, KM_CLR_CMP_CLR = 11u,
+           KM_CLR_CMP_MASK = 12u, KM_WRITE_MASK = 13u, KM_DP_SRC = 14u, KM_DP_BKGD_CLR = 15u, KM_DP_FRGD_CLR = 16u,
+           KM_DP_PIX_WIDTH = 17u, KM_PALETTE = 18u, KM_RX = 19u, KM_SX2 = 24u, KM_TEX_FORMAT = 28u, KM_TEX_BPP = 29u,
+           KM_TEX_DYNAMIC = 30u, KM_KEY_FCN = 31u, KM_KEY = 32u, KM_KEY_MASK = 33u, KM_MAX_LOD = 34u, KM_LEVELS = 35u,
+           KM_MAPS = 36u, KM_WORDS = 104u;
+const uint KM_MAP_BASE = 0u, KM_MAP_PITCH_LOG2 = 1u, KM_MAP_WIDTH_MASK = 2u, KM_MAP_HEIGHT_MASK = 3u,
+           KM_MAP_COORD_SHIFT = 4u, KM_MAP_WORDS = 6u;
+const uint F_TEXTURED = 0x01u, F_Z_ENABLED = 0x02u, F_Z_WRITE = 0x04u, F_DST_COMPARE = 0x08u, F_DP_CONSTANT = 0x10u,
+           F_LINE = 0x20u, F_LEAD_LEFT = 0x40u, F_SCALER = 0x80u, F_Y_UP = 0x400u, F_REPLICATE = 0x800u; /* bits 8, 9: alpha_fog */
+const uint KS_SRC_BASE = 36u, KS_SRC_WIDTH = 37u, KS_SRC_HEIGHT = 38u, KS_SRC_PITCH = 39u, KS_SRC_FORMAT = 40u,
+           KS_X_INC = 41u, KS_XUV_INC = 42u, KS_Y_INC = 43u, KS_H_START = 44u, KS_UV_START = 45u, KS_V_START = 46u,
+           KS_DST_X = 47u, KS_DST_Y = 48u, KS_DP_MIX = 49u;
+const uint KR_Y = 0u, KR_FIRST = 1u, KR_END = 2u, KR_LEAD = 3u, KR_DRAW = 4u, KR_R = 5u, KR_S = 10u, KR_WORDS = 22u;
+const uint PALETTE_WORDS = 512u;
+
+/* SCALE_3D_CNTL */
+const uint SCALE_PIX_EXPAND = 1u << 0, SCALE_DITHER = 1u << 1, DITHER_EN = 1u << 2, DITHER_INIT = 1u << 3,
+           ROUND_EN = 1u << 4, NEAREST_TEX_VIS = 1u << 9, APPLE_YUV_MODE = 1u << 10, ALPHA_FOG_SHIFT = 11u,
+           COLOR_OVERRIDE = 1u << 13, RED_DITHER_MAX = 1u << 14, ALPHA_BLEND_SRC = 16u, ALPHA_BLEND_DST = 19u,
+           TEX_LIGHT_FCN = 22u, MIP_MAP_DISABLE = 1u << 24, BILINEAR_TEX_EN = 1u << 25, TEX_BLEND_FCN = 26u,
+           TEX_AMASK_AEN = 1u << 28, TEX_AMASK_MODE = 1u << 29, TEX_MAP_AEN = 1u << 30;
+const uint ALPHA_FOG_BLEND = 1u, ALPHA_FOG_FOG = 2u;
+const uint Z_TEST_SHIFT = 4u;
+const uint CI4_RGB_INDEX_SHIFT = 20u, CI4_RGB_LOW_NIBBLE = 1u << 26, CI4_RGB_HIGH_NIBBLE = 1u << 27;
+const uint SRC_BG = 0u, SRC_FG = 1u;
+
+/* ---- 64-bit integers ---- */
+
+uvec2 i64(int v) { return uvec2(uint(v), (v < 0) ? 0xffffffffu : 0u); }
+
+uvec2 add64(uvec2 a, uvec2 b)
+{
+    uint carry;
+    uint lo = uaddCarry(a.x, b.x, carry);
+    return uvec2(lo, a.y + b.y + carry);
+}
+
+uvec2 sub64(uvec2 a, uvec2 b)
+{
+    uint borrow;
+    uint lo = usubBorrow(a.x, b.x, borrow);
+    return uvec2(lo, a.y - b.y - borrow);
+}
+
+uvec2 neg64(uvec2 a) { return sub64(uvec2(0u), a); }
+
+/* a * b, the low 64 bits */
+uvec2 mul64(uvec2 a, int b)
+{
+    uint hi, lo;
+    umulExtended(a.x, uint(b), hi, lo);
+    hi += a.y * uint(b) + ((b < 0) ? a.x * 0xffffffffu : 0u);
+    return uvec2(lo, hi);
+}
+
+/* a >> s, arithmetic, s 0 to 63 */
+uvec2 sar64(uvec2 a, uint s)
+{
+    if (s == 0u)
+        return a;
+    if (s >= 32u)
+        return uvec2(uint(int(a.y) >> (s - 32u)), uint(int(a.y) >> 31));
+    return uvec2((a.x >> s) | (a.y << (32u - s)), uint(int(a.y) >> s));
+}
+
+/* a >> s, logical, s 0 to 63 */
+uvec2 shr64(uvec2 a, uint s)
+{
+    if (s == 0u)
+        return a;
+    if (s >= 32u)
+        return uvec2(a.y >> (s - 32u), 0u);
+    return uvec2((a.x >> s) | (a.y << (32u - s)), a.y >> s);
+}
+
+uvec2 shl1(uint s) { return (s >= 32u) ? uvec2(0u, 1u << (s - 32u)) : uvec2(1u << s, 0u); }
+
+bool ult64(uvec2 a, uvec2 b) { return (a.y < b.y) || ((a.y == b.y) && (a.x < b.x)); }
+
+uvec2 abs64(uvec2 a) { return (int(a.y) < 0) ? neg64(a) : a; }
+
+uvec2 load64(uint at) { return uvec2(rows[at], rows[at + 1u]); }
+
+/* ---- video memory, little endian, wrapping at its end ---- */
+
+uint read8(uint addr)
+{
+    uint a = addr & pc.vram_mask;
+    return (vram[a >> 2] >> ((a & 3u) * 8u)) & 0xffu;
+}
+
+/* mach64_3d_vram_read16, read32: a value at the very end wraps to the start */
+uint read16(uint addr)
+{
+    uint a = addr & pc.vram_mask;
+    if ((a & 3u) <= 2u)
+        return (vram[a >> 2] >> ((a & 3u) * 8u)) & 0xffffu;
+    return read8(a) | (read8(a + 1u) << 8);
+}
+
+uint read32(uint addr)
+{
+    uint a = addr & pc.vram_mask;
+    if ((a & 3u) == 0u)
+        return vram[a >> 2];
+    return read8(a) | (read8(a + 1u) << 8) | (read8(a + 2u) << 16) | (read8(a + 3u) << 24);
+}
+
+uint read_n(uint addr, uint bpp)
+{
+    if (bpp == 1u)
+        return read8(addr);
+    if (bpp == 2u)
+        return read16(addr);
+    if (bpp == 4u)
+        return read32(addr);
+    return 0u;
+}
+
+void write8(uint addr, uint val)
+{
+    uint a     = addr & pc.vram_mask;
+    uint shift = (a & 3u) * 8u;
+    vram[a >> 2] = (vram[a >> 2] & ~(0xffu << shift)) | ((val & 0xffu) << shift);
+}
+
+/* mach64_3d_vram_write */
+void write_n(uint addr, uint val, uint bpp)
+{
+    uint a = addr & pc.vram_mask;
+    if ((bpp == 4u) && ((a & 3u) == 0u)) {
+        vram[a >> 2] = val;
+        return;
+    }
+    if ((bpp == 2u) && ((a & 1u) == 0u)) {
+        uint shift = (a & 3u) * 8u;
+        vram[a >> 2] = (vram[a >> 2] & ~(0xffffu << shift)) | ((val & 0xffffu) << shift);
+        return;
+    }
+    for (uint i = 0u; i < bpp; i++)
+        write8(addr + i, val >> (i * 8u));
+}
+
+/* ---- the draw ---- */
+
+uint d;    /* the draw's record */
+uint pal;  /* its palettes */
+uint cntl;
+
+uint dw(uint i) { return draws[d + i]; }
+
+int clamp8(int v) { return clamp(v, 0, 255); }
+
+uint bytes_per_pixel(uint format)
+{
+    switch (format) {
+        case 2u: case 7u: case 8u: return 1u;
+        case 3u: case 4u: case 15u: return 2u;
+        case 6u: case 11u: case 14u: return 4u;
+        default: return 0u;
+    }
+}
+
+/* mach64_3d_expand_component */
+uint expand(uint value, uint bits, bool dynamic_range)
+{
+    if ((bits == 0u) || (bits >= 8u))
+        return value;
+    value &= (1u << bits) - 1u;
+    uint result = value << (8u - bits);
+    if (!dynamic_range)
+        return result;
+    uint remaining = 8u - bits;
+    while (remaining != 0u) {
+        uint copy = min(bits, remaining);
+        result |= (value >> (bits - copy)) << (remaining - copy);
+        remaining -= copy;
+    }
+    return result;
+}
+
+/* mach64_3d_argb1555, argb565, argb4444 and RGB 332's expansion: red, green and blue in turn through one expand site,
+   then the alpha the format gives */
+uint unpack_rgb(uint format, uint raw, bool dyn)
+{
+    uvec3 shift, bits;
+    switch (format) {
+        case 3u: shift = uvec3(10u, 5u, 0u); bits = uvec3(5u, 5u, 5u); break;
+        case 4u: shift = uvec3(11u, 5u, 0u); bits = uvec3(5u, 6u, 5u); break;
+        case 7u: shift = uvec3(5u, 2u, 0u); bits = uvec3(3u, 3u, 2u); break;
+        default: shift = uvec3(8u, 4u, 0u); bits = uvec3(4u, 4u, 4u); break;
+    }
+    uint argb = 0u;
+    [[dont_unroll]] for (int ch = 0; ch < 3; ch++)
+        argb |= expand((raw >> shift[ch]) & ((1u << bits[ch]) - 1u), bits[ch], dyn) << (16u - 8u * uint(ch));
+    switch (format) {
+        case 3u: return argb | (((raw & 0x8000u) != 0u) ? 0xff000000u : 0u);
+        case 15u: return argb | ((((raw >> 12) & 15u) * 17u) << 24);
+        default: return argb | 0xff000000u;
+    }
+}
+
+ivec4 argb_rgba(uint argb) { return ivec4(int((argb >> 16) & 0xffu), int((argb >> 8) & 0xffu), int(argb & 0xffu), int(argb >> 24)); }
+
+uint rgba_argb(ivec4 c) { return (uint(c.a) << 24) | (uint(c.r) << 16) | (uint(c.g) << 8) | uint(c.b); }
+
+int yuv_chroma(uint raw, bool signed_uv) { return signed_uv ? int(bitfieldExtract(int(raw), 0, 8)) : (int(raw & 0xffu) - 128); }
+
+/* mach64_yuv_centered_to_rgb */
+ivec3 yuv_centered(int y, int u, int v)
+{
+    return ivec3(clamp8(y + ((359 * v) >> 8)), clamp8(y - ((88 * u + 183 * v) >> 8)), clamp8(y + ((454 * u) >> 8)));
+}
+
+/* mach64_3d_yuv_to_rgba */
+ivec4 yuv_rgba(uint y, uint u, uint v, int a)
+{
+    bool  signed_uv = (cntl & APPLE_YUV_MODE) != 0u;
+    ivec3 rgb       = yuv_centered(int(y & 0xffu), yuv_chroma(u, signed_uv), yuv_chroma(v, signed_uv));
+    return ivec4(rgb, clamp8(a));
+}
+
+uint texel_index(uint dp_pix_width, uint texel)
+{
+    uint ci4  = dp_pix_width & (CI4_RGB_LOW_NIBBLE | CI4_RGB_HIGH_NIBBLE);
+    uint bank = (dp_pix_width >> CI4_RGB_INDEX_SHIFT) & 0x0fu;
+    if ((ci4 != CI4_RGB_LOW_NIBBLE) && (ci4 != CI4_RGB_HIGH_NIBBLE))
+        return texel & 0xffu;
+    return (bank << 4) | ((ci4 == CI4_RGB_HIGH_NIBBLE) ? ((texel & 0xffu) >> 4) : (texel & 0x0fu));
+}
+
+/* mach64_3d_unpack_argb: a destination pixel is always range corrected */
+uint unpack_argb(uint format, uint raw, bool source)
+{
+    bool dyn = !source || ((cntl & SCALE_PIX_EXPAND) != 0u);
+    switch (format) {
+        case 2u:
+            if (source)
+                return 0xff000000u | (palettes[pal + texel_index(dw(KM_DP_PIX_WIDTH), raw)] & 0x00ffffffu);
+            {
+                uint p = palettes[pal + 256u + (raw & 0xffu)];
+                return 0xff000000u | (((p >> 16) & 0xffu) << 16) | (((p >> 8) & 0xffu) << 8) | (p & 0xffu);
+            }
+        case 3u: case 4u: case 7u: case 15u: return unpack_rgb(format, raw, dyn);
+        case 6u: return raw;
+        case 8u: return 0xff000000u | ((raw & 0xffu) * 0x010101u);
+        case 14u: return rgba_argb(yuv_rgba((raw >> 16) & 0xffu, (raw >> 8) & 0xffu, raw & 0xffu, int((raw >> 24) & 0xffu)));
+        default: return 0xff000000u;
+    }
+}
+
+/* ---- packing, with the X error diffusion's state ---- */
+
+int  d_valid, d_y;
+int  d_err[3];
+bool d_cleared; /* in parallel, a pixel packed without dithering: the state's valid is cleared */
+
+const uint bayer4[16] = uint[16](0u, 8u, 2u, 10u, 12u, 4u, 14u, 6u, 3u, 11u, 1u, 9u, 15u, 7u, 13u, 5u);
+
+int quantize(int v, int bits, int channel, int x, int y)
+{
+    int drop = 8 - bits;
+    int maxv = (1 << bits) - 1;
+    if ((cntl & DITHER_EN) != 0u) {
+        if ((cntl & SCALE_DITHER) != 0u) {
+            int span = (1 << drop) - 1;
+            int add  = (int(bayer4[((y & 3) << 2) | (x & 3)]) * span + 7) / 15;
+            return min((clamp8(v) + add) >> drop, maxv);
+        }
+        int a = clamp8(v + d_err[channel]);
+        int q = min(a >> drop, maxv);
+        d_err[channel] = a - (q * 255 + maxv / 2) / maxv;
+        return q;
+    }
+    if ((cntl & ROUND_EN) != 0u)
+        return min((clamp8(v) + (1 << (drop - 1))) >> drop, maxv);
+    return v >> drop;
+}
+
+/* mach64_3d_pack */
+uint pack(uint format, ivec4 c, int x, int y)
+{
+    c = clamp(c, 0, 255);
+    if ((cntl & DITHER_EN) == 0u) {
+        d_valid   = 0;
+        d_cleared = true;
+    } else if ((cntl & SCALE_DITHER) == 0u) {
+        if (d_valid == 0) {
+            d_valid = 1;
+            d_y     = y;
+            d_err[0] = 0;
+            d_err[1] = 0;
+            d_err[2] = 0;
+        } else if (y != d_y) {
+            if ((cntl & DITHER_INIT) != 0u) {
+                d_err[0] = 0;
+                d_err[1] = 0;
+                d_err[2] = 0;
+            }
+            d_y = y;
+        }
+    }
+    if (format == 6u)
+        return rgba_argb(c);
+    if (format == 8u)
+        return uint((c.r * 77 + c.g * 150 + c.b * 29) >> 8);
+    /* The quantized formats: red, green and blue in turn, as the CPU takes them (the error diffusion runs through
+       them in that order), through one quantize site */
+    ivec3 bits;
+    switch (format) {
+        case 3u: bits = ivec3(5, 5, 5); break;
+        case 4u: bits = ivec3(5, 6, 5); break;
+        case 7u: bits = ivec3(3, 3, 2); break;
+        case 15u: bits = ivec3(4, 4, 4); break;
+        default: return 0u;
+    }
+    ivec3 q;
+    [[dont_unroll]] for (int ch = 0; ch < 3; ch++)
+        q[ch] = quantize(c[ch], bits[ch], ch, x, y);
+    switch (format) {
+        case 3u:
+            return ((c.a >= 128) ? 0x8000u : 0u) | uint((q.r << 10) | (q.g << 5) | q.b);
+        case 4u:
+            return uint((q.r << 11) | (q.g << 5) | q.b);
+        case 7u: {
+            int r = q.r & 7;
+            if (((cntl & DITHER_EN) != 0u) && ((cntl & RED_DITHER_MAX) != 0u) && (r > 6))
+                r = 6;
+            return uint((r << 5) | (q.g << 2) | q.b);
+        }
+        default:
+            return (uint(c.a >> 4) << 12) | uint((q.r << 8) | (q.g << 4) | q.b);
+    }
+}
+
+/* mach64_3d_write_dst_raw: WRITE_MASK picks the bits written */
+void write_dst_raw(uint addr, uint format, uint raw)
+{
+    uint bpp = bytes_per_pixel(format);
+    if (bpp == 0u)
+        return;
+    uint pixel_mask = (bpp == 4u) ? 0xffffffffu : ((1u << (bpp * 8u)) - 1u);
+    uint write_mask = dw(KM_WRITE_MASK) & pixel_mask;
+    if (write_mask != pixel_mask)
+        raw = (read_n(addr, bpp) & ~write_mask) | (raw & write_mask);
+    write_n(addr, raw, bpp);
+}
+
+/* mach64_3d_write_dst */
+void write_dst(uint addr, uint format, ivec4 c, int x, int y)
+{
+    if (format == 2u) {
+        uint raw = (uint(clamp8(c.r) >> 5) << 5) | (uint(clamp8(c.g) >> 5) << 2) | uint(clamp8(c.b) >> 6);
+        write_n(addr, raw, 1u);
+        return;
+    }
+    uint raw = pack(format, c, x, y);
+    if (((format == 3u) || (format == 4u)) && (((cntl >> ALPHA_FOG_SHIFT) & 3u) == ALPHA_FOG_BLEND)
+        && ((cntl & (DITHER_EN | SCALE_DITHER)) == (DITHER_EN | SCALE_DITHER))) {
+        uint  old  = read16(addr);
+        ivec4 dst  = argb_rgba(unpack_rgb(format, old, true));
+        uint  keep = 0u;
+        if (c.r == dst.r)
+            keep |= (format == 3u) ? 0x7c00u : 0xf800u;
+        if (c.g == dst.g)
+            keep |= (format == 3u) ? 0x03e0u : 0x07e0u;
+        if (c.b == dst.b)
+            keep |= 0x001fu;
+        raw = (raw & ~keep) | (old & keep);
+    }
+    write_dst_raw(addr, format, raw);
+}
+
+/* ---- shading, blending, depth ---- */
+
+ivec4 lerp(ivec4 a, ivec4 b, int t)
+{
+    t = clamp8(t);
+    return (a * (255 - t) + b * t + 127) / 255;
+}
+
+uint lerp_texel(uint a, uint b, uint fraction)
+{
+    uint rb = ((a & 0x00ff00ffu) * (256u - fraction) + (b & 0x00ff00ffu) * fraction + 0x00800080u) >> 8;
+    uint ag = (((a >> 8) & 0x00ff00ffu) * (256u - fraction) + ((b >> 8) & 0x00ff00ffu) * fraction + 0x00800080u) >> 8;
+    return (rb & 0x00ff00ffu) | ((ag & 0x00ff00ffu) << 8);
+}
+
+int blend_factor(uint code, ivec4 src, ivec4 dst, int channel, bool is_source)
+{
+    int other = is_source ? dst[channel] : src[channel];
+    switch (code) {
+        case 0u: return 0;
+        case 1u: return 255;
+        case 2u: return other;
+        case 3u: return 255 - other;
+        case 4u: return src.a;
+        case 5u: return 255 - src.a;
+        default: return 255;
+    }
+}
+
+ivec4 blend(ivec4 src, ivec4 dst)
+{
+    uint  src_code = (cntl >> ALPHA_BLEND_SRC) & 7u;
+    uint  dst_code = (cntl >> ALPHA_BLEND_DST) & 7u;
+    ivec4 o;
+    for (int ch = 0; ch < 4; ch++)
+        o[ch] = clamp8((src[ch] * blend_factor(src_code, src, dst, ch, true) + dst[ch] * blend_factor(dst_code, src, dst, ch, false) + 127) / 255);
+    return o;
+}
+
+bool z_test(uint src, uint dst, uint test)
+{
+    switch (test & 7u) {
+        case 0u: return false;
+        case 1u: return src < dst;
+        case 2u: return src <= dst;
+        case 3u: return src == dst;
+        case 4u: return src >= dst;
+        case 5u: return src > dst;
+        case 6u: return src != dst;
+        default: return true;
+    }
+}
+
+ivec4 texture_light(ivec4 texel, ivec4 shade)
+{
+    if ((cntl & COLOR_OVERRIDE) != 0u)
+        return ivec4(shade.rgb, texel.a);
+    switch ((cntl >> TEX_LIGHT_FCN) & 3u) {
+        case 1u:
+            return ivec4(texel.rgb * shade.rgb / 255, texel.a);
+        case 2u: {
+            ivec4 lit = lerp(shade, texel, texel.a);
+            return ivec4(lit.rgb, shade.a);
+        }
+        default:
+            return texel;
+    }
+}
+
+bool uses_lod_alpha() { return (((cntl >> ALPHA_FOG_SHIFT) & 3u) == ALPHA_FOG_BLEND) && (((cntl >> TEX_BLEND_FCN) & 3u) == 3u); }
+
+/* mach64_3d_texture_alpha: false drops the pixel */
+bool texture_alpha(inout ivec4 texel, int alpha)
+{
+    if (uses_lod_alpha())
+        return true;
+    if ((cntl & TEX_MAP_AEN) == 0u) {
+        texel.a = alpha;
+        return true;
+    }
+    if ((cntl & TEX_AMASK_AEN) != 0u) {
+        int mask = texel.a & 1;
+        if ((cntl & TEX_AMASK_MODE) == 0u) {
+            if (mask == 0)
+                return false;
+            texel.a = alpha;
+        } else
+            texel.a = (mask != 0) ? 255 : alpha;
+    }
+    return true;
+}
+
+/* ---- textures ---- */
+
+uint m_base, m_width, m_width_mask, m_height_mask, m_shift;
+
+void select_map(uint level)
+{
+    uint m        = d + KM_MAPS + level * KM_MAP_WORDS;
+    m_base        = draws[m + KM_MAP_BASE];
+    m_width       = 1u << draws[m + KM_MAP_PITCH_LOG2];
+    m_width_mask  = draws[m + KM_MAP_WIDTH_MASK];
+    m_height_mask = draws[m + KM_MAP_HEIGHT_MASK];
+    m_shift       = draws[m + KM_MAP_COORD_SHIFT];
+}
+
+bool key_inhibits(uint selected)
+{
+    switch (dw(KM_KEY_FCN)) {
+        case 1u: return true;
+        case 4u: return (selected & dw(KM_KEY_MASK)) != dw(KM_KEY);
+        case 5u: return (selected & dw(KM_KEY_MASK)) == dw(KM_KEY);
+        default: return false;
+    }
+}
+
+/* mach64_3d_texel_at */
+uint texel_at(uint u, uint v, out bool inhibits)
+{
+    uint format = dw(KM_TEX_FORMAT);
+    uint bpp    = dw(KM_TEX_BPP);
+    bool dyn    = dw(KM_TEX_DYNAMIC) != 0u;
+    uint addr   = m_base + (v * m_width + u) * bpp;
+    uint argb;
+    switch (format) {
+        case 11u: {
+            uint raw = read32(m_base + (v * m_width + (u & ~1u)) * 2u);
+            argb     = rgba_argb(yuv_rgba(raw >> (((u & 1u) != 0u) ? 16u : 0u), raw >> 8, raw >> 24, 255));
+            break;
+        }
+        default: {
+            uint raw = read_n(addr, bpp);
+            argb     = unpack_argb(format, raw, true);
+            if (format == 2u) {
+                inhibits = key_inhibits(texel_index(dw(KM_DP_PIX_WIDTH), raw));
+                return argb;
+            }
+            break;
+        }
+    }
+    inhibits = key_inhibits(argb & 0x00ffffffu);
+    return argb;
+}
+
+uint t_argb;
+bool t_nearest, t_any;
+
+/* mach64_3d_sample_map, on the selected map */
+void sample_map(bool bilinear, uvec2 s, uvec2 t)
+{
+    uint shift = m_shift;
+    if (bilinear) {
+        uvec2 half_texel = shl1(shift - 1u);
+        s = sub64(s, half_texel);
+        t = sub64(t, half_texel);
+    }
+    uint u  = sar64(s, shift).x & m_width_mask;
+    uint v  = sar64(t, shift).x & m_height_mask;
+    uint u1 = (u + 1u) & m_width_mask;
+    uint v1 = (v + 1u) & m_height_mask;
+    /* The texels: 00, 10, 01, 11 (one fetch site, so the compiler builds it once) */
+    uint c[4];
+    bool inh[4];
+    int  taps = bilinear ? 4 : 1;
+    [[dont_unroll]] for (int i = 0; i < taps; i++) {
+        bool hides;
+        c[i]   = texel_at(((i & 1) != 0) ? u1 : u, ((i & 2) != 0) ? v1 : v, hides);
+        inh[i] = hides;
+    }
+    if (!bilinear) {
+        t_argb    = c[0];
+        t_nearest = inh[0];
+        t_any     = inh[0];
+        return;
+    }
+    uint fu = sar64(s, shift - 8u).x & 255u;
+    uint fv = sar64(t, shift - 8u).x & 255u;
+    t_argb  = lerp_texel(lerp_texel(c[0], c[1], fu), lerp_texel(c[2], c[3], fu), fv);
+    t_any   = inh[0] || inh[1] || inh[2] || inh[3];
+    if (fv >= 128u)
+        t_nearest = (fu >= 128u) ? inh[3] : inh[2];
+    else
+        t_nearest = (fu >= 128u) ? inh[1] : inh[0];
+}
+
+uvec2 rho_of(uvec2 dsdx, uvec2 dtdx, uvec2 dsdy, uvec2 dtdy)
+{
+    uvec2 rho = abs64(dsdx);
+    uvec2 v   = abs64(dtdx);
+    if (ult64(rho, v))
+        rho = v;
+    v = abs64(dsdy);
+    if (ult64(rho, v))
+        rho = v;
+    v = abs64(dtdy);
+    if (ult64(rho, v))
+        rho = v;
+    return rho;
+}
+
+/* mach64_3d_mip_lod: coord_shift 16 to 26, so the scale never nears 64 bits */
+int  l_floor, l_nearest, l_fraction;
+
+void mip_lod(uvec2 rho, int coord_shift, int max_lod)
+{
+    l_floor    = 0;
+    l_nearest  = 0;
+    l_fraction = 0;
+    coord_shift = clamp(coord_shift, 0, 62);
+    max_lod     = max(max_lod, 0);
+    uint  k     = uint(coord_shift);
+    uvec2 scale = shl1(k);
+    if (!ult64(scale, rho))
+        return;
+    while ((l_floor < max_lod) && (k < 63u) && !ult64(rho, shl1(k + 1u))) {
+        k++;
+        scale = shl1(k);
+        l_floor++;
+    }
+    if ((l_floor < max_lod) && ult64(scale, rho)) {
+        uvec2 num  = add64(mul64(sub64(rho, scale), 255), shr64(scale, 1u));
+        l_fraction = int(min(shr64(num, k).x, 255u));
+        if (shr64(num, k).y != 0u)
+            l_fraction = 255;
+    }
+    l_nearest = l_floor;
+    if ((l_fraction >= 106) && (l_nearest < max_lod))
+        l_nearest++;
+}
+
+/* mach64_3d_sample_texture: false when the filter draws nothing; *key_inhibit when the key hides the pixel */
+bool sample_texture(uvec2 s, uvec2 t, uvec2 dsdx, uvec2 dtdx, uvec2 dsdy, uvec2 dtdy, out uint argb, out bool key_inhibit)
+{
+    uint blend_fcn = (cntl >> TEX_BLEND_FCN) & 3u;
+    bool nearest   = (cntl & NEAREST_TEX_VIS) != 0u;
+    select_map(0u);
+    uint  largest_shift = m_shift;
+    int   max_lod       = int(dw(KM_MAX_LOD));
+    uvec2 rho           = rho_of(dsdx, dtdx, dsdy, dtdy);
+    bool  minifying     = ult64(shl1(uint(clamp(int(largest_shift), 0, 62))), rho);
+    bool  bilinear_en   = (cntl & BILINEAR_TEX_EN) != 0u;
+    /* mach64_3d_texture_filter: 0 none, 1 nearest, 2 bilinear */
+    uint filt;
+    if (!minifying)
+        filt = (!bilinear_en && ((blend_fcn == 2u) || (blend_fcn == 3u))) ? 0u : (bilinear_en ? 2u : 1u);
+    else
+        filt = ((blend_fcn == 2u) || (blend_fcn == 3u)) ? 2u : 1u;
+
+    key_inhibit = false;
+    argb        = 0u;
+    if (filt == 0u)
+        return false;
+
+    /* The samples, as mach64_3d_sample_texture takes them: one map, or with mip mapping two levels blended (TEX_BLEND_FCN
+       1), the 2x2 filter in the nearest level (2) or in the other one (3), or the nearest texel in the nearest one; all
+       through one sampling site */
+    uint level[2];
+    bool bilin[2];
+    int  samples = 1;
+    bool mip     = minifying && ((cntl & MIP_MAP_DISABLE) == 0u);
+    bool two     = false;
+    uint alpha3  = 0u;
+    level[0] = 0u;
+    bilin[0] = (filt == 2u);
+    level[1] = 0u;
+    bilin[1] = false;
+    if (mip) {
+        mip_lod(rho, int(largest_shift), max_lod);
+        if ((blend_fcn == 1u) && (l_floor < max_lod)) {
+            level[0] = uint(l_floor);
+            bilin[0] = false;
+            level[1] = uint(l_floor + 1);
+            samples  = 2;
+            two      = true;
+        } else if (blend_fcn == 2u) {
+            level[0] = uint(l_nearest);
+            bilin[0] = true;
+        } else if (blend_fcn == 3u) {
+            int other = (l_nearest == l_floor) ? (l_floor + 1) : l_floor;
+            alpha3    = (l_nearest == l_floor) ? uint(l_fraction) : uint(255 - l_fraction);
+            level[0]  = uint(min(other, max_lod));
+            bilin[0]  = true;
+        } else {
+            level[0] = uint(l_nearest);
+            bilin[0] = false;
+        }
+    }
+    uint got_argb[2];
+    bool got_near[2], got_any[2];
+    [[dont_unroll]] for (int i = 0; i < samples; i++) {
+        select_map(level[i]);
+        sample_map(bilin[i], s, t);
+        got_argb[i] = t_argb;
+        got_near[i] = t_nearest;
+        got_any[i]  = t_any;
+    }
+    t_argb    = got_argb[0];
+    t_nearest = got_near[0];
+    t_any     = got_any[0];
+    if (two) {
+        t_argb    = rgba_argb(lerp(argb_rgba(got_argb[0]), argb_rgba(got_argb[1]), l_fraction));
+        t_any     = got_any[0] || got_any[1];
+        t_nearest = (l_nearest == l_floor) ? got_near[0] : got_near[1];
+    } else if (mip && (blend_fcn == 3u)) {
+        t_argb = (t_argb & 0x00ffffffu) | (alpha3 << 24);
+    }
+    key_inhibit = nearest ? t_nearest : t_any;
+    argb        = t_argb;
+    return true;
+}
+
+/* ---- a pixel (mach64_3d_draw_row's loop body) ---- */
+
+int s8_12_color(uint v)
+{
+    uint integer = (v >> 16) & 0x1ffu;
+    return ((integer & 0x100u) != 0u) ? 0 : int(integer);
+}
+
+uint s16_12_depth(uint v)
+{
+    uint integer = (v >> 12) & 0x1ffffu;
+    return ((integer & 0x10000u) != 0u) ? 0u : integer;
+}
+
+/* ---- the front-end scaler (mach64_scaler_*) ---- */
+
+int lerp4(int first, int second, uint coefficient)
+{
+    int c = int(coefficient & 15u);
+    return (first * (16 - c) + second * c + 8) >> 4;
+}
+
+int lerp4_signed(int first, int second, uint coefficient)
+{
+    int c     = int(coefficient & 15u);
+    int value = first * (16 - c) + second * c;
+    return (value >= 0) ? ((value + 8) / 16) : -((-value + 8) / 16);
+}
+
+uint scaler_mix(uint src, uint dst, uint function)
+{
+    switch (function & 0x1fu) {
+        case 0x00u: return ~dst;
+        case 0x01u: return 0u;
+        case 0x02u: return 0xffffffffu;
+        case 0x03u: return dst;
+        case 0x04u: return ~src;
+        case 0x05u: return src ^ dst;
+        case 0x06u: return ~(src ^ dst);
+        case 0x07u: return src;
+        case 0x08u: return ~(src & dst);
+        case 0x09u: return ~src | dst;
+        case 0x0au: return src | ~dst;
+        case 0x0bu: return src | dst;
+        case 0x0cu: return src & dst;
+        case 0x0du: return src & ~dst;
+        case 0x0eu: return ~src & dst;
+        case 0x0fu: return ~(src | dst);
+        case 0x17u: return (src + dst) >> 1;
+        default: return src;
+    }
+}
+
+/* mach64_3d_color_compare_inhibits */
+bool compare_inhibits(uint ccntl, uint key, uint mask, uint selected)
+{
+    uint reference = key & mask;
+    selected &= mask;
+    switch (ccntl & 7u) {
+        case 1u: return true;
+        case 4u: return selected != reference;
+        case 5u: return selected == reference;
+        default: return false;
+    }
+}
+
+uint s_base, s_pitch, s_format;
+
+uint source_bpp(uint format) { return (format == 11u) ? 2u : bytes_per_pixel(format); }
+
+ivec4 read_source(int x, int y)
+{
+    uint bpp = source_bpp(s_format);
+    if ((bpp != 1u) && (bpp != 2u) && (bpp != 4u))
+        return ivec4(0, 0, 0, 255);
+    return argb_rgba(unpack_argb(s_format, read_n(s_base + (uint(y) * s_pitch + uint(x)) * bpp, bpp), true));
+}
+
+uint yuyv_pair(int pair_x, int y) { return read32(s_base + (uint(y) * s_pitch + uint(pair_x) * 2u) * 2u); }
+
+int yuyv_luma(int x, int y) { return int((yuyv_pair(x >> 1, y) >> (((x & 1) != 0) ? 16u : 0u)) & 0xffu); }
+
+ivec4 centered_rgba(int y, int u, int v, int a) { return ivec4(yuv_centered(y, u, v), clamp8(a)); }
+
+ivec4 sample_yuyv(int x, int x_next, int uv_x, int uv_x_next, int y, int y_next, uint h_fraction, uint uv_fraction,
+                  uint v_fraction, bool replicate)
+{
+    bool signed_uv = (cntl & APPLE_YUV_MODE) != 0u;
+    /* Luma and chroma at 00, 01 (the next across), 10 (the next line down), 11, through one site each */
+    int lu[4], cu[4], cv[4];
+    int taps = replicate ? 1 : 4;
+    [[dont_unroll]] for (int i = 0; i < taps; i++) {
+        int  line = ((i & 2) != 0) ? y_next : y;
+        uint raw  = yuyv_pair(((i & 1) != 0) ? uv_x_next : uv_x, line);
+        lu[i]     = yuyv_luma(((i & 1) != 0) ? x_next : x, line);
+        cu[i]     = yuv_chroma(raw >> 8, signed_uv);
+        cv[i]     = yuv_chroma(raw >> 24, signed_uv);
+    }
+    if (replicate)
+        return centered_rgba(lu[0], cu[0], cv[0], 255);
+    int luma = lerp4(lerp4(lu[0], lu[2], v_fraction), lerp4(lu[1], lu[3], v_fraction), h_fraction);
+    int u    = lerp4_signed(lerp4_signed(cu[0], cu[2], v_fraction), lerp4_signed(cu[1], cu[3], v_fraction), uv_fraction);
+    int v    = lerp4_signed(lerp4_signed(cv[0], cv[2], v_fraction), lerp4_signed(cv[1], cv[3], v_fraction), uv_fraction);
+    return centered_rgba(luma, u, v, 255);
+}
+
+/* mach64_scaler_source_key_inhibits */
+bool source_key_inhibits(int x, int y)
+{
+    uint ccntl = dw(KM_CLR_CMP_CNTL);
+    if (((ccntl >> 24) & 3u) != 2u)
+        return false;
+    if (s_format == 2u)
+        return compare_inhibits(ccntl, dw(KM_CLR_CMP_CLR), dw(KM_CLR_CMP_MASK),
+                                texel_index(dw(KM_DP_PIX_WIDTH), read8(s_base + uint(y) * s_pitch + uint(x))));
+    ivec4 color;
+    if (s_format == 11u) {
+        bool signed_uv = (cntl & APPLE_YUV_MODE) != 0u;
+        uint raw       = yuyv_pair(x >> 1, y);
+        color = centered_rgba(int((raw >> (((x & 1) != 0) ? 16u : 0u)) & 0xffu), yuv_chroma(raw >> 8, signed_uv),
+                              yuv_chroma(raw >> 24, signed_uv), 255);
+    } else
+        color = read_source(x, y);
+    color = clamp(color, 0, 255);
+    return compare_inhibits(ccntl, dw(KM_CLR_CMP_CLR), dw(KM_CLR_CMP_MASK), (uint(color.r) << 16) | (uint(color.g) << 8) | uint(color.b));
+}
+
+bool source_inhibits(int x, int x_next, int y, int y_next, uint h_fraction, uint v_fraction, bool replicate)
+{
+    if (((dw(KM_CLR_CMP_CNTL) >> 24) & 3u) != 2u)
+        return false;
+    /* 00, 10, 01, 11, through one site */
+    bool p[4];
+    int  taps = replicate ? 1 : 4;
+    [[dont_unroll]] for (int i = 0; i < taps; i++)
+        p[i] = source_key_inhibits(((i & 1) != 0) ? x_next : x, ((i & 2) != 0) ? y_next : y);
+    if (replicate)
+        return p[0];
+    if ((cntl & NEAREST_TEX_VIS) != 0u) {
+        if (v_fraction >= 8u)
+            return (h_fraction >= 8u) ? p[3] : p[2];
+        return (h_fraction >= 8u) ? p[1] : p[0];
+    }
+    return p[0] || p[1] || p[2] || p[3];
+}
+
+ivec4 lerp_rgba(ivec4 first, ivec4 second, uint coefficient)
+{
+    first  = clamp(first, 0, 255);
+    second = clamp(second, 0, 255);
+    return ivec4(lerp4(first.r, second.r, coefficient), lerp4(first.g, second.g, coefficient), lerp4(first.b, second.b, coefficient),
+                 lerp4(first.a, second.a, coefficient));
+}
+
+/* An accumulator's whole pixel (rounding down) and its top four fraction bits */
+int  accum_pixel(int acc) { return acc >> 16; }
+uint accum_fraction4(int acc) { return (uint(acc) >> 12) & 15u; }
+
+/* mach64_scaler_pixel and mach64_scaler_write_pixel: the pixel at x, y */
+void scaler_pixel(int x, int y)
+{
+    uint flags      = dw(KM_FLAGS);
+    bool replicate  = (flags & F_REPLICATE) != 0u;
+    int  x_dir      = ((flags & F_LEAD_LEFT) != 0u) ? -1 : 1;
+    int  y_dir      = ((flags & F_Y_UP) != 0u) ? -1 : 1;
+    int  dx         = (x - int(dw(KS_DST_X))) * x_dir;
+    int  dy         = (y - int(dw(KS_DST_Y))) * y_dir;
+    int  src_width  = int(dw(KS_SRC_WIDTH));
+    int  src_height = int(dw(KS_SRC_HEIGHT));
+    s_base   = dw(KS_SRC_BASE);
+    s_pitch  = dw(KS_SRC_PITCH);
+    s_format = dw(KS_SRC_FORMAT);
+
+    int  v_acc      = int(dw(KS_V_START) + uint(dy) * dw(KS_Y_INC));
+    int  src_y      = clamp(accum_pixel(v_acc), 0, src_height - 1);
+    uint v_fraction = accum_fraction4(v_acc);
+    int  src_y_next = min(src_y + 1, src_height - 1);
+    int  h_acc      = int(dw(KS_H_START) + uint(dx) * dw(KS_X_INC));
+    int  src_x      = clamp(accum_pixel(h_acc), 0, src_width - 1);
+    uint h_fraction = accum_fraction4(h_acc);
+    int  src_x_next = min(src_x + 1, src_width - 1);
+
+    bool inhibits = source_inhibits(src_x, src_x_next, src_y, src_y_next, h_fraction, v_fraction, replicate);
+
+    ivec4 src;
+    if (s_format == 11u) {
+        int  uv_width    = (src_width + 1) >> 1;
+        int  uv_acc      = int(dw(KS_UV_START) + uint(dx) * dw(KS_XUV_INC));
+        int  uv_x        = clamp(accum_pixel(uv_acc), 0, uv_width - 1);
+        uint uv_fraction = accum_fraction4(uv_acc);
+        int  uv_x_next   = min(uv_x + 1, uv_width - 1);
+        src = sample_yuyv(src_x, src_x_next, uv_x, uv_x_next, src_y, src_y_next, h_fraction, uv_fraction, v_fraction, replicate);
+    } else {
+        /* 00, 10, 01, 11, through one site */
+        ivec4 q[4];
+        int   taps = replicate ? 1 : 4;
+        [[dont_unroll]] for (int i = 0; i < taps; i++)
+            q[i] = read_source(((i & 1) != 0) ? src_x_next : src_x, ((i & 2) != 0) ? src_y_next : src_y);
+        src = q[0];
+        if (!replicate)
+            src = lerp_rgba(lerp_rgba(q[0], q[2], v_fraction), lerp_rgba(q[1], q[3], v_fraction), h_fraction);
+    }
+
+    uint format = dw(KM_DST_FORMAT);
+    uint bpp    = dw(KM_DST_BPP);
+    uint addr   = dw(KM_DST_BASE) + (uint(y) * dw(KM_DST_PITCH) + uint(x)) * bpp;
+    if (addr + bpp > pc.vram_mask + 1u)
+        return;
+
+    uint pixel_mask = (bpp == 1u) ? 0xffu : ((bpp == 2u) ? 0xffffu : 0xffffffffu);
+    uint dst        = read_n(addr, bpp);
+    if (((cntl >> ALPHA_FOG_SHIFT) & 3u) == ALPHA_FOG_BLEND)
+        src = blend(src, argb_rgba(unpack_argb(format, dst, false)));
+    uint packed;
+    if (format == 2u)
+        packed = (uint(clamp8(src.r) >> 5) << 5) | (uint(clamp8(src.g) >> 5) << 2) | uint(clamp8(src.b) >> 6);
+    else
+        packed = pack(format, src, x, y);
+    packed &= pixel_mask;
+
+    uint ccntl = dw(KM_CLR_CMP_CNTL);
+    switch ((ccntl >> 24) & 3u) {
+        case 0u: inhibits = compare_inhibits(ccntl, dw(KM_CLR_CMP_CLR), dw(KM_CLR_CMP_MASK), dst); break;
+        case 1u: inhibits = compare_inhibits(ccntl, dw(KM_CLR_CMP_CLR), dw(KM_CLR_CMP_MASK), packed); break;
+        case 2u: break;
+        default: inhibits = false; break;
+    }
+    if (inhibits || ((bpp != 1u) && (bpp != 2u) && (bpp != 4u)))
+        return;
+    uint write_mask = dw(KM_WRITE_MASK);
+    uint result     = scaler_mix(packed, dst, (dw(KS_DP_MIX) >> 16) & 0x1fu) & pixel_mask;
+    result          = (result & write_mask) | (dst & ~write_mask);
+    write_n(addr, result & pixel_mask, bpp);
+}
+
+/* The pixel at x of row (its words at r) */
+void draw_pixel(uint r, int x)
+{
+    d   = rows[r + KR_DRAW] * KM_WORDS;
+    pal = dw(KM_PALETTE) * PALETTE_WORDS;
+    cntl = dw(KM_CNTL);
+    uint flags     = dw(KM_FLAGS);
+    if ((flags & F_SCALER) != 0u) {
+        scaler_pixel(x, int(rows[r + KR_Y]));
+        return;
+    }
+    int  lead_dir  = ((flags & F_LEAD_LEFT) != 0u) ? -1 : 1;
+    int  y         = int(rows[r + KR_Y]);
+    int  n         = (x - int(rows[r + KR_LEAD])) * lead_dir;
+    uint alpha_fog = (cntl >> ALPHA_FOG_SHIFT) & 3u;
+    uint format    = dw(KM_DST_FORMAT);
+    uint bpp       = dw(KM_DST_BPP);
+
+    ivec4 shade;
+    for (uint c = 0u; c < 4u; c++)
+        shade[c] = s8_12_color(rows[r + KR_R + c] + dw(KM_RX + c) * uint(n));
+    uint z = rows[r + KR_R + 4u] + dw(KM_RX + 4u) * uint(n);
+
+    /* mach64_3d_pixel_source */
+    ivec4 src  = shade;
+    bool  draw = true;
+    if ((flags & F_TEXTURED) != 0u) {
+        int   sx2  = int(dw(KM_SX2)), tx2 = int(dw(KM_SX2 + 1u)), sxy2 = int(dw(KM_SX2 + 2u)), txy2 = int(dw(KM_SX2 + 3u));
+        uvec2 sxi  = load64(r + KR_S + 2u), syi = load64(r + KR_S + 4u);
+        uvec2 txi  = load64(r + KR_S + 8u), tyi = load64(r + KR_S + 10u);
+        int   tri  = (n * (n - 1)) / 2;
+        uvec2 s    = add64(add64(load64(r + KR_S), mul64(sxi, n)), mul64(i64(sx2), tri));
+        uvec2 t    = add64(add64(load64(r + KR_S + 6u), mul64(txi, n)), mul64(i64(tx2), tri));
+        uvec2 dsdx = (lead_dir > 0) ? add64(sxi, mul64(i64(sx2), n)) : sub64(neg64(sxi), mul64(i64(sx2), n - 1));
+        uvec2 dtdx = (lead_dir > 0) ? add64(txi, mul64(i64(tx2), n)) : sub64(neg64(txi), mul64(i64(tx2), n - 1));
+        uvec2 dsdy = add64(syi, mul64(i64(sxy2), n));
+        uvec2 dtdy = add64(tyi, mul64(i64(txy2), n));
+        uint  argb;
+        bool  key_inhibit;
+        draw = sample_texture(s, t, dsdx, dtdx, dsdy, dtdy, argb, key_inhibit);
+        ivec4 texel = argb_rgba(argb);
+        if (!draw || key_inhibit || !texture_alpha(texel, shade.a))
+            return;
+        src = texture_light(texel, shade);
+    }
+    if (alpha_fog == ALPHA_FOG_FOG) {
+        uint fog = dw(KM_FOG);
+        src      = lerp(ivec4(int((fog >> 16) & 0xffu), int((fog >> 8) & 0xffu), int(fog & 0xffu), 255), src, shade.a);
+    }
+
+    uint addr   = dw(KM_DST_BASE) + (uint(y) * dw(KM_DST_PITCH) + uint(x)) * bpp;
+    uint z_addr = 0u;
+    uint depth  = 0u;
+    if ((flags & F_Z_ENABLED) != 0u) {
+        uint z_pitch = dw(KM_Z_PITCH);
+        if (((flags & F_LINE) != 0u) && ((x < 0) || (uint(x) >= z_pitch) || (y < 0)))
+            return;
+        z_addr = dw(KM_Z_BASE) + (uint(y) * z_pitch + uint(x)) * 2u;
+        depth  = s16_12_depth(z);
+        if (!z_test(depth, read16(z_addr), (dw(KM_Z_CNTL) >> Z_TEST_SHIFT) & 7u))
+            return;
+    }
+
+    uint raw        = 0u;
+    bool raw_source = false;
+    if (alpha_fog == ALPHA_FOG_BLEND) {
+        ivec4 dst = (bytes_per_pixel(format) == 0u) ? ivec4(0, 0, 0, 255) : argb_rgba(unpack_argb(format, read_n(addr, bpp), false));
+        src       = blend(src, dst);
+    }
+    if ((flags & F_DP_CONSTANT) != 0u) {
+        uint packed = pack(format, src, x, y);
+        uint dp_src = dw(KM_DP_SRC);
+        raw         = packed;
+        if (((dp_src >> 16) & 3u) == 0u) {
+            uint sel = (dp_src >> 8) & 7u;
+            if (sel == SRC_BG)
+                raw = dw(KM_DP_BKGD_CLR);
+            else if (sel == SRC_FG)
+                raw = dw(KM_DP_FRGD_CLR);
+        }
+        raw_source = true;
+    }
+    if ((flags & F_DST_COMPARE) != 0u) {
+        /* mach64_3d_destination_compare_inhibits: CLR_CMP_FCN 1 always, 4 not equal, 5 equal */
+        uint pixel_mask = (bpp == 1u) ? 0xffu : ((bpp == 2u) ? 0xffffu : 0xffffffffu);
+        uint ccntl      = dw(KM_CLR_CMP_CNTL);
+        uint mask       = dw(KM_CLR_CMP_MASK) & pixel_mask;
+        uint reference  = dw(KM_CLR_CMP_CLR) & pixel_mask & mask;
+        uint selected   = read_n(addr, bpp) & pixel_mask & mask;
+        uint fcn        = ccntl & 7u;
+        if ((fcn == 1u) || ((fcn == 4u) && (selected != reference)) || ((fcn == 5u) && (selected == reference)))
+            return;
+    }
+    if (raw_source)
+        write_dst_raw(addr, format, raw);
+    else
+        write_dst(addr, format, src, x, y);
+    if ((flags & F_Z_WRITE) != 0u)
+        write_n(z_addr, depth, 2u);
+}
+
+/* In order, invocation 0 runs through every row; in parallel, each invocation through the rows on its line, its four
+   pixels of each. One pixel site for both (the compiler builds the pixel once). */
+void main()
+{
+    bool in_order = pc.in_order != 0u;
+    uint line     = gl_GlobalInvocationID.y;
+    int  x0       = int((pc.column0 + gl_GlobalInvocationID.x) * 4u);
+    uint start    = 0u;
+    uint stop     = pc.count;
+    if (in_order) {
+        if ((gl_GlobalInvocationID.x != 0u) || (line != 0u))
+            return;
+    } else {
+        if ((gl_GlobalInvocationID.x >= pc.columns) || (line >= pc.lines))
+            return;
+        start = lists[line];
+        stop  = lists[line + 1u];
+    }
+    d_cleared = false;
+    d_valid   = state[0];
+    d_y       = state[1];
+    d_err[0]  = state[2];
+    d_err[1]  = state[3];
+    d_err[2]  = state[4];
+    for (uint k = start; k < stop; k++) {
+        uint r     = (in_order ? k : lists[pc.lines + 1u + k]) * KR_WORDS;
+        int  first = int(rows[r + KR_FIRST]);
+        int  end   = int(rows[r + KR_END]);
+        if (!in_order) {
+            first = max(first, x0);
+            end   = min(end, x0 + 4);
+        }
+        /* In order, a scaled rectangle's pixels go its X direction; a row's always left to right */
+        uint flags = draws[rows[r + KR_DRAW] * KM_WORDS + KM_FLAGS];
+        bool back  = in_order && ((flags & F_SCALER) != 0u) && ((flags & F_LEAD_LEFT) != 0u);
+        for (int j = 0; j < end - first; j++)
+            draw_pixel(r, back ? (end - 1 - j) : (first + j));
+    }
+    if (in_order) {
+        state[0] = d_valid;
+        state[1] = d_y;
+        state[2] = d_err[0];
+        state[3] = d_err[1];
+        state[4] = d_err[2];
+    } else if (d_cleared)
+        atomicExchange(state[0], 0);
+}

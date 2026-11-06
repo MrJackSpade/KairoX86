@@ -36,7 +36,13 @@ BOARDS = {
     '486ap4': "machine = 486ap4\ncpu_family = i486dx2\ncpu_speed = 66666666\ncpu_multi = 2\nmem_size = 32768\n",
     'ibmps2_m55ls': "machine = ibmps2_m55ls\ncpu_family = i386sx\ncpu_speed = 16000000\ncpu_multi = 1\nmem_size = 4096\n",
 }
-ADD_ONS = {'voodoo': 'voodoo', 'voodoo_2': 'voodoo_2'}
+# The add-on cards, beside an S3 Trio64: each one's [Video] line and its own section (the Voodoos drawn by the C
+# rasteriser on the software side, KairoX86#289; the PowerVR PCX2, KairoX86#269)
+ADD_ONS = {
+    'voodoo': ('voodoo = 1\n', '\n[3Dfx Voodoo Graphics]\ntype = voodoo\nrecompiler = 0\n'),
+    'voodoo_2': ('voodoo = 1\n', '\n[3Dfx Voodoo Graphics]\ntype = voodoo_2\nrecompiler = 0\n'),
+    'powervr': ('powervr = 1\n', ''),
+}
 # Each bus's board; any other bus (ISA, VLB, none) the 486's
 BUS_BOARD = {'pci': '686bx', 'agp': '686bx', 'mca': 'ibmps2_m55ls'}
 # Cards whose software path fails on their bus's board, each on one where it works until its bug is fixed
@@ -60,8 +66,8 @@ def query(tool, roms, q):
 
 
 def machine_config(board, card, test, accel, name):
-    video = f"gfxcard = {card}\n" if card not in ADD_ONS else "gfxcard = s3_trio64_pci\nvoodoo = 1\n"
-    voodoo = f"\n[3Dfx Voodoo Graphics]\ntype = {ADD_ONS[card]}\nrecompiler = 0\n" if card in ADD_ONS else ""
+    video = f"gfxcard = {card}\n" if card not in ADD_ONS else "gfxcard = s3_trio64_pci\n" + ADD_ONS[card][0]
+    voodoo = ADD_ONS[card][1] if card in ADD_ONS else ""
     if card not in ADD_ONS and card.startswith(VOODOO_FAMILY):
         # A device reads its settings from its name's section, "<name> #<n>" for instance n > 0 (the AGP
         # Banshee is instance 1)
@@ -108,12 +114,15 @@ def run(args, folder, config, test, board):
             frame, size, picture = line.split()[:3]
             hashes[int(frame)] = (size, picture)
     # How many lines the GPU drew (the core reports it at the machine's end, KairoX86#233)
-    drawn = [line.split()[1] for line in out.stderr.splitlines() if line.startswith('kairo-gpu: ')]
+    drawn = [line.split()[1] for line in out.stderr.splitlines() if line.startswith('kairo-gpu: ') and line.endswith(' lines drawn')]
     hashes['gpu_lines'] = int(drawn[-1]) if drawn else 0
-    # And the 3D engines' triangles (the Voodoo's, KairoX86#278; the ViRGE's, #272): every "kairo-gpu-<engine>: N
-    # triangles drawn" report, summed
-    hashes['gpu_triangles'] = sum(int(line.split()[1]) for line in out.stderr.splitlines()
-                                  if line.startswith('kairo-gpu-') and line.endswith(' triangles drawn'))
+    # And how long the driver took to build each kernel the run used (gpu.c reports it, KairoX86#237)
+    hashes['gpu_kernels'] = [' '.join(line.split()[2:3] + line.split()[5:6]) + ' ms' for line in out.stderr.splitlines()
+                             if line.startswith('kairo-gpu: kernel ')]
+    # And the 3D engines' work (the Voodoo's triangles, KairoX86#278; the ViRGE's, #272; the Rage II+'s draws, #237):
+    # every "kairo-gpu-<engine>: N <work> drawn" report, summed
+    hashes['gpu_3d'] = sum(int(line.split()[1]) for line in out.stderr.splitlines()
+                           if line.startswith('kairo-gpu-') and line.endswith(' drawn'))
     shutil.rmtree(work / 'machine')
     return hashes, work
 
@@ -161,7 +170,7 @@ def main():
     p.add_argument('out')
     p.add_argument('--cards')
     p.add_argument('--tests')
-    p.add_argument('--frames', type=int, default=900)
+    p.add_argument('--frames', type=int, default=6000)
     p.add_argument('--shots', type=int, default=10)
     p.add_argument('--a', default='off')
     p.add_argument('--b', default='on')
@@ -212,7 +221,8 @@ def main():
             else:
                 shutil.rmtree(folder)
             on = hb if args.b == 'on' else ha
-            drawn = f"GPU lines {on['gpu_lines']}" + (f", triangles {on['gpu_triangles']}" if on['gpu_triangles'] else '')
+            drawn = (f"GPU lines {on['gpu_lines']}" + (f", 3D {on['gpu_3d']}" if on['gpu_3d'] else '')
+                     + (f", built {', '.join(on['gpu_kernels'])}" if on['gpu_kernels'] else ''))
             print(f'{card} ({board}) {test}: ' + ('match' if problem is None else f'DIFFERS: {problem}')
                   + (f' ({drawn})' if 'on' in (args.a, args.b) else ''), flush=True)
         return found

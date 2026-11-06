@@ -1,0 +1,564 @@
+#version 450
+#extension GL_EXT_control_flow_attributes : require
+/*
+ * The PowerVR PCX2's tiles on the GPU (KairoX86#269): 86Box's pcxr_render_tiles (vid_powervr_pcx_render.c) and what it
+ * calls, for a prepared frame. A work group is one span of 32 cells, an invocation one cell: it runs the span's tile's
+ * planes through its cell with the span's schedule (the decoder's cell controls, worked out on the CPU) and shades
+ * the cell wherever the tile does, into the frame's RGB buffer. Cells share nothing: every cell of
+ * pcxr_render_tiles' span loops is worked out on its own, and a pixel is only ever shaded by its own cell.
+ *
+ * pcxr_render_tiles' two shortcuts (a plain tile's dead edge, an edge plane wholly inside) give the cells the
+ * general path gives them, which this takes throughout.
+ *
+ * The list layouts are 86box/kairo_gpu_powervr.h's, as words.
+ *
+ * Copyright 2026 MrJackSpade. GPL-2.0-or-later.
+ */
+layout(local_size_x = 32) in;
+
+layout(std430, binding = 0) readonly buffer Planes { uint planes[]; };
+layout(std430, binding = 1) readonly buffer Objects { uint objects[]; };
+layout(std430, binding = 2) readonly buffer Spans { uint spans[]; };
+layout(std430, binding = 3) readonly buffer Sched { uint sched[]; };
+layout(std430, binding = 4) readonly buffer Frame { uint frame[]; };
+layout(std430, binding = 5) readonly buffer Tex { uint tex[]; };
+layout(std430, binding = 6) buffer Rgb { uint rgb[]; };
+
+layout(push_constant) uniform Push {
+    uint n_spans;
+    uint tex_mask;
+} pc;
+
+const uint KP_A = 0u, KP_B = 2u, KP_C = 4u, KP_INDEX = 5u, KP_INSTR = 6u, KP_WORDS = 8u;
+const uint KO_FIRST = 0u, KO_COUNT = 1u, KO_LAST_IN_REGION = 2u, KO_WORDS = 4u;
+const uint KN_FIRST_OBJECT = 0u, KN_N_OBJECTS = 1u, KN_X = 2u, KN_Y = 3u, KN_SCHED = 4u, KN_P0 = 5u, KN_WORDS = 8u;
+const uint KF_FOG_SHIFT = 0u, KF_FOG_COLOUR = 1u, KF_CAMERA = 2u, KF_XCLIP = 3u, KF_BILINEAR = 4u, KF_FOG_TABLE = 8u;
+
+const int  MAX_W = 1024, MAX_H = 1024;
+const uint WRITTEN = 0x01000000u;
+const uint BEGIN_TRANS = 15u;
+const uint MASKING_PLANE_ADDR = 2u;
+const uint BIG_BANK = 0x100000u;
+
+const uint MASK_TEXTURE = 0x80000000u, MASK_SMOOTH_SHADE = 0x40000000u, MASK_DISABLE_FOG = 0x20000000u,
+           MASK_SHADOW_FLAG = 0x10000000u, MASK_FLAT_HIGHLIGHT = 0x04000000u, MASK_EXPONENT = 0x003C0000u,
+           MASK_GLOBAL_TRANS = 0x0001E000u, MASK_FLIP_UV = 0x00001800u, MASK_TRANS = 0x00000400u;
+const uint MASK_MIP_MAPPED = 0x80000000u, MASK_8_16_MAPS = 0x40000000u, MASK_MAP_SIZE = 0x30000000u,
+           MASK_4444_555 = 0x08000000u, MASK_PMIP_M = 0xFF000000u, MASK_PMIP_E = 0x00FC0000u;
+
+/* ---- 64-bit integers (uvec2, x the low word) ---- */
+
+uvec2 add64(uvec2 a, uvec2 b)
+{
+    uint carry;
+    uint lo = uaddCarry(a.x, b.x, carry);
+    return uvec2(lo, a.y + b.y + carry);
+}
+
+uvec2 mul64(uvec2 a, int b)
+{
+    uint hi, lo;
+    umulExtended(a.x, uint(b), hi, lo);
+    hi += a.y * uint(b) + ((b < 0) ? a.x * 0xffffffffu : 0u);
+    return uvec2(lo, hi);
+}
+
+uvec2 i64(int v) { return uvec2(uint(v), (v < 0) ? 0xffffffffu : 0u); }
+
+/* (int32_t) (uint32_t) (v >> 8): the low word of the arithmetic shift */
+int shr8_low(uvec2 v) { return int((v.x >> 8) | (v.y << 24)); }
+
+/* ---- the cell (cells_process for one cell) ---- */
+
+int  I_depth, U_depth, I_visib, I_forward, shad_temp, U_visib, U_shadow;
+uint I_id, U_id;
+
+void cell_process(uint w, int C, uint index)
+{
+    uint i_load = (w >> 1) & 15u, u_load = (w >> 5) & 3u, test_shad = (w >> 7) & 3u;
+    int  pv = int((w >> 9) & 1u);
+    bool delayed_clear = ((w >> 10) & 1u) != 0u, perp = ((w >> 11) & 1u) != 0u, mux_sel = ((w >> 12) & 1u) != 0u;
+
+    if (delayed_clear)
+        U_id = 0u;
+    int mux = mux_sel ? U_depth : C;
+    int gte = -int(I_depth >= mux);
+    int lte = -int(I_depth <= mux);
+    int ire = 0;
+    switch (i_load) {
+        case 8u: ire = -1; break;
+        case 4u: ire = perp ? (C >> 31) : gte; break;
+        case 2u: ire = ~gte; break;
+        case 1u: ire = -((I_visib ^ 1) & I_forward); break;
+        default: ire = 0; break;
+    }
+    int ure = 0;
+    switch (u_load) {
+        case 2u: ure = -1; break;
+        case 3u: ure = (gte & -I_visib) | (U_visib - 1); break;
+        default: ure = 0; break;
+    }
+    switch (test_shad) {
+        case 2u: shad_temp = (shad_temp & ure) | ((~lte & 1) & ~ure); break;
+        case 1u: U_shadow = U_shadow | (lte & shad_temp); break;
+        case 3u: U_shadow = ((lte & shad_temp) | (U_shadow ^ 1)) ^ 1; break;
+        default: break;
+    }
+    if (u_load != 0u) {
+        int m     = ure;
+        U_visib   = (I_visib & m) | (U_visib & ~m);
+        U_shadow &= ~m;
+        shad_temp &= ~m;
+        U_depth   = (I_depth & m) | (U_depth & ~m);
+        U_id      = (I_id & uint(m)) | (U_id & ~uint(m));
+    }
+    if (i_load != 0u) {
+        int fwd   = int((i_load == 8u) || (i_load == 4u));
+        int m     = ire;
+        I_visib   = (pv & m) | (I_visib & ~m);
+        I_forward = (fwd & m) | (I_forward & ~m);
+        I_depth   = (C & m) | (I_depth & ~m);
+        I_id      = (index & uint(m)) | (I_id & ~uint(m));
+    }
+}
+
+/* ---- the TSP (texas) ---- */
+
+uint tsp_word(uint a) { return tex[a & pc.tex_mask]; }
+
+int to_int16(uint x) { return bitfieldExtract(int(x), 0, 16); }
+
+ivec3 from555(uint p)
+{
+    return ivec3(int(((p >> 10) & 0x1fu) << 3) + 4, int(((p >> 5) & 0x1fu) << 3) + 4, int((p & 0x1fu) << 3) + 4);
+}
+
+/* to_pfloat: the mantissa (16 bits, signed) and the significant bits of |x| */
+ivec2 to_pfloat(int x)
+{
+    uint ax = (x < 0) ? (0u - uint(x)) : uint(x);
+    int  e  = (ax != 0u) ? (findMSB(ax) + 1) : 0;
+    int  m  = int(uint(x) << uint((31 - e) & 31));
+    if (e > 31)
+        m = x >> 1;
+    return ivec2(m >> 16, e);
+}
+
+int ashift(int x, int shift)
+{
+    if (shift < 0) {
+        if (shift < -31)
+            return (x < 0) ? -1 : 0;
+        return x >> (-shift);
+    }
+    if (shift > 31)
+        return 0;
+    return int(uint(x) << uint(shift));
+}
+
+uint spread8(uint v)
+{
+    v &= 0xffu;
+    v = (v | (v << 4)) & 0x0f0fu;
+    v = (v | (v << 2)) & 0x3333u;
+    v = (v | (v << 1)) & 0x5555u;
+    return v;
+}
+
+uint twid(uint x, uint y) { return (spread8(x) << 1) | spread8(y); }
+
+const uint mmc[9]     = uint[9](0x5555u, 0x1555u, 0x0555u, 0x0155u, 0x0055u, 0x0015u, 0x0005u, 0x0001u, 0x0000u);
+const int  map_mask[4] = int[4](0xff, 0x7f, 0x3f, 0x1f);
+
+/* level_t: base, mask, fbit, flip_u, flip_v, mip, cdepth, which, last */
+uint lv_base[2];
+int  lv_mask[2], lv_fbit[2], lv_which[2];
+bool lv_flip_u[2], lv_flip_v[2], lv_mip[2], lv_cdepth[2], lv_last[2];
+
+void level_init(int l, uint address, int map_size, int which_map, bool colour_depth, bool mip_mapped, int flip_uv)
+{
+    lv_mask[l]   = map_mask[map_size];
+    lv_fbit[l]   = (map_size != 0) ? map_mask[map_size] + 1 : 128;
+    lv_flip_u[l] = (flip_uv & 2) != 0;
+    lv_flip_v[l] = (flip_uv & 1) != 0;
+    lv_mip[l]    = mip_mapped;
+    lv_cdepth[l] = colour_depth;
+    lv_which[l]  = which_map;
+    lv_last[l]   = false;
+    if (!mip_mapped) {
+        lv_base[l] = address;
+        return;
+    }
+    if (((map_size + which_map) & 1) != 0)
+        address ^= BIG_BANK;
+    if (map_size + which_map > 8) {
+        lv_last[l] = true;
+        lv_base[l] = address;
+        return;
+    }
+    lv_base[l] = address + 1u + mmc[map_size + which_map];
+}
+
+uint level_addr(int l, int u, int v)
+{
+    if (lv_flip_u[l] && ((u & lv_fbit[l]) != 0))
+        u = ~u;
+    if (lv_flip_v[l] && ((v & lv_fbit[l]) != 0))
+        v = ~v;
+    u &= lv_mask[l];
+    v &= lv_mask[l];
+    if (!lv_mip[l])
+        return lv_base[l] + (lv_cdepth[l] ? twid(uint(u), uint(v)) : twid(uint(u >> 1), uint(v)));
+    if (lv_last[l])
+        return lv_base[l];
+    return lv_base[l] + twid(uint(u >> lv_which[l]), uint(v >> lv_which[l]));
+}
+
+uint fetch_pixel(uint address)
+{
+    uint w = tsp_word(address >> 1);
+    return ((address & 1u) != 0u) ? (w & 0xffffu) : (w >> 16);
+}
+
+/* colour_convert: r g b a, each 8 bits as the C keeps them */
+ivec4 colour_convert(uint raw, bool colour_depth, int which_pixel, bool translucent)
+{
+    ivec4 p;
+    if (translucent) {
+        p = ivec4(int((raw >> 8) & 0xfu), int((raw >> 4) & 0xfu), int(raw & 0xfu), int((raw >> 12) & 0xfu));
+        p.rgb <<= 1;
+        p.rgb |= p.rgb >> 4;
+    } else if (colour_depth) {
+        p = ivec4(int((raw >> 10) & 0x1fu), int((raw >> 5) & 0x1fu), int(raw & 0x1fu), 0);
+    } else {
+        if (which_pixel == 0)
+            raw >>= 8;
+        p = ivec4(int(raw & 0xe0u), int((raw << 3) & 0xe0u), int((raw << 6) & 0xc0u), 0);
+        if ((p.b & 0x80) != 0)
+            p.b |= 0x3f;
+        if ((p.g & 0x80) != 0)
+            p.g |= 0x1f;
+        if ((p.r & 0x80) != 0)
+            p.r |= 0x1f;
+        p.rgb >>= 3;
+    }
+    return p;
+}
+
+ivec4 bilerp(ivec4 t, ivec4 u1, ivec4 v1, ivec4 u1v1, int uf, int vf)
+{
+    ivec4 ab, cd;
+    ab.rgb = ((t.rgb << 3) + 4 + (((u1.rgb - t.rgb) * uf) >> 2)) & 0xff;
+    ab.a   = (t.a + (((u1.a - t.a) * uf) >> 5)) & 0xff;
+    cd.rgb = ((v1.rgb << 3) + 4 + (((u1v1.rgb - v1.rgb) * uf) >> 2)) & 0xff;
+    cd.a   = (v1.a + (((u1v1.a - v1.a) * uf) >> 5)) & 0xff;
+    return ((((cd - ab) * vf) >> 5) + ab) & 0xff;
+}
+
+/* texture_pixel */
+ivec4 texture_pixel(int x, int y, int a, int b, int cc, int d, int e, int f, int p, int q, int r, int texp, uint address,
+                    int map_size, ivec2 pmip, bool colour_depth, bool mip_mapped, bool col4444, int global_trans, int flip_uv)
+{
+    int  scale = int(frame[KF_CAMERA] & 0xffffu);
+    bool bilin = (frame[KF_BILINEAR] & 3u) != 3u;
+
+    int abc = int(uint(a) * uint(x) + uint(b) * uint(y) + uint(cc) * uint(scale));
+    int def = int(uint(d) * uint(x) + uint(e) * uint(y) + uint(f) * uint(scale));
+    int pqr = int(uint(p) * uint(x) + uint(q) * uint(y) + uint(r) * uint(scale));
+
+    ivec2 bot = to_pfloat(pqr);
+    bot.x >>= 1;
+    if (bot.x > 0)
+        bot.x = 0x8000000 / bot.x;
+    else
+        bot.x = 0x4000;
+    bool power_two = (bot.x == 0x4000);
+    if (power_two)
+        bot.x = 0x2000;
+
+    /* u and v: the 64-bit product's bits from 14 on, as int32_t */
+    int uv[2];
+    int fr[2];
+    [[dont_unroll]] for (int i = 0; i < 2; i++) {
+        ivec2 top = to_pfloat((i == 0) ? abc : def);
+        top.y += texp;
+        int hi, lo;
+        imulExtended(top.x, bot.x, hi, lo);
+        int prod  = int((uint(lo) >> 14) | (uint(hi) << 18));
+        int shift = power_two ? top.y - (bot.y + 13) : top.y - (bot.y + 14);
+        fr[i]     = ashift(prod, shift + 5) & 8191;
+        uv[i]     = ashift(prod, shift) & 255;
+    }
+    int u = uv[0], v = uv[1], uf = fr[0], vf = fr[1];
+
+    if ((flip_uv & 2) != 0) {
+        int bit = (map_size == 3) ? 128 : (int[4](0x1f, 0x3f, 0x7f, 0xff))[map_size] + 1;
+        if ((u & bit) != 0)
+            uf = ~uf & 8191;
+    }
+
+    /* The mip-map level from the squared 1/w (the C's 32-bit products wrap) */
+    bot.x >>= 6;
+    bot.x = int(uint(bot.x) * uint(bot.x));
+    if (power_two)
+        bot.y--;
+    if ((bot.x & 0x8000) != 0) {
+        bot.y = bot.y * 2;
+        bot.x >>= 8;
+    } else {
+        bot.y = bot.y * 2 + 1;
+        bot.x >>= 7;
+    }
+    bot.x = int(uint(bot.x) * uint(pmip.x));
+    if ((bot.x & 0x8000) != 0) {
+        bot.y = pmip.y - (bot.y - 2);
+        bot.x >>= 8;
+    } else {
+        bot.y = pmip.y - (bot.y - 1);
+        bot.x >>= 7;
+    }
+    bot.y = clamp(bot.y, 0, 15);
+
+    map_size = 3 - map_size;
+    if (((frame[KF_BILINEAR] & 3u) == 1u) && mip_mapped && (bot.y >= 2))
+        bilin = false;
+
+    /* The samples (one site): level, u, v, which pixel. Case 0: the finest level (filtered or not); 1: the 1x1
+       level; 2: a coarser level, filtered or blended with the next */
+    int  kind;
+    int  n   = 1;
+    ivec2 su[4];
+    int  sl[4], sw[4];
+    int  binc = 1, compress = 0;
+    if ((bot.y < 1) || !mip_mapped || !colour_depth) {
+        kind = 0;
+        level_init(0, address, map_size, 0, colour_depth, mip_mapped, flip_uv);
+        sl[0] = 0; su[0] = ivec2(u, v); sw[0] = u & 1;
+        if (bilin) {
+            n     = 4;
+            sl[1] = 0; su[1] = ivec2((u + 1) & 255, v); sw[1] = (u + 1) & 1;
+            sl[2] = 0; su[2] = ivec2(u, (v + 1) & 255); sw[2] = u & 1;
+            sl[3] = 0; su[3] = ivec2((u + 1) & 255, (v + 1) & 255); sw[3] = (u + 1) & 1;
+        }
+    } else if (map_size + bot.y > 8) {
+        kind = 1;
+        level_init(0, address, 0, 8, colour_depth, mip_mapped, flip_uv);
+        sl[0] = 0; su[0] = ivec2(u, v); sw[0] = 0;
+    } else {
+        kind     = 2;
+        compress = bot.y - 1;
+        binc     = 1 << compress;
+        level_init(0, address, map_size, compress, colour_depth, mip_mapped, flip_uv);
+        if (!bilin) {
+            level_init(1, address, map_size, bot.y, colour_depth, mip_mapped, flip_uv);
+            n     = 2;
+            sl[0] = 0; su[0] = ivec2(u, v); sw[0] = 0;
+            sl[1] = 1; su[1] = ivec2(u, v); sw[1] = 0;
+        } else {
+            n     = 4;
+            sl[0] = 0; su[0] = ivec2(u, v); sw[0] = u & 1;
+            sl[1] = 0; su[1] = ivec2((u + binc) & 255, v); sw[1] = u & 1;
+            sl[2] = 0; su[2] = ivec2(u, (v + binc) & 255); sw[2] = u & 1;
+            sl[3] = 0; su[3] = ivec2((u + binc) & 255, (v + binc) & 255); sw[3] = u & 1;
+        }
+    }
+    ivec4 s[4];
+    [[dont_unroll]] for (int i = 0; i < n; i++)
+        s[i] = colour_convert(fetch_pixel(level_addr(sl[i], su[i].x, su[i].y)), colour_depth, sw[i], col4444);
+
+    ivec4 tcol = s[0];
+    if (kind == 0) {
+        if (!bilin)
+            tcol.rgb = ((tcol.rgb << 3) + 4) & 0xff;
+        else
+            tcol = bilerp(s[0], s[1], s[2], s[3], uf & 31, vf & 31);
+    } else if (kind == 1) {
+        tcol.rgb = ((tcol.rgb << 3) + 4) & 0xff;
+    } else if (!bilin) {
+        int t    = (bot.x & 0x7f) >> 2;
+        tcol.rgb = ((s[0].rgb << 3) + ((t * (s[1].rgb - s[0].rgb)) >> 2) + 4) & 0xff;
+        tcol.a   = s[1].a;
+    } else {
+        tcol = bilerp(s[0], s[1], s[2], s[3], (uf >> compress) & 31, (vf >> compress) & 31);
+    }
+    tcol.a = min(tcol.a + global_trans, 15);
+    return tcol;
+}
+
+int clip255(int v) { return min(v, 255); }
+
+/* The smooth-shading or shadow light at words w (two words): from555's colour scaled by the plane's value */
+ivec3 shade_light(uint s0, uint s1, int x, int y, int x_off, int y_off)
+{
+    int   frac = (to_int16(s0) << 2) + to_int16(s1 >> 16) * (y - y_off) + to_int16(s1) * (x - x_off);
+    ivec3 h    = from555(s0 >> 16) >> 3;
+    frac       = clamp(frac, 0, 0x10000) >> 8;
+    h          = ((h * frac) >> 5) & 0xff;
+    if (frac == 0x100)
+        h = (h + 4) & 0xff;
+    return h;
+}
+
+void texas(int x, int y, uint address, int shadow, int fog)
+{
+    if ((uint(x) >= uint(MAX_W)) || (uint(y) >= uint(MAX_H)))
+        return;
+    if (address == MASKING_PLANE_ADDR)
+        return;
+    uint tsp[13];
+    [[dont_unroll]] for (uint i = 0u; i < 13u; i++)
+        tsp[i] = tsp_word(address + i);
+    uint w0  = tsp[0];
+    uint w1  = tsp[1];
+    uint inc = address;
+    int  x_off = 0, y_off = 0;
+    ivec3 base = ivec3(0);
+    ivec4 col;
+
+    if ((w0 & MASK_SMOOTH_SHADE) != 0u) {
+        x_off = to_int16(w1 >> 16);
+        y_off = to_int16(w1);
+    } else {
+        base = ivec3(int(w0 & 0xffu), int((w1 >> 24) & 0xffu), int((w1 >> 16) & 0xffu));
+        ivec3 sh = from555(w1 & 0xffffu);
+        if (((w0 & MASK_SHADOW_FLAG) != 0u) && (shadow == 0))
+            base = min(base + sh, 255);
+    }
+
+    if ((w0 & MASK_TEXTURE) != 0u) {
+        uint  w2 = tsp[2], w3 = tsp[3], w4 = tsp[4], w5 = tsp[5], w6 = tsp[6], w7 = tsp[7];
+        ivec2 pmip = ivec2(int((w2 & MASK_PMIP_M) >> 24), int((w2 & MASK_PMIP_E) >> 18));
+        col = texture_pixel(x, y, to_int16(w5), to_int16(w5 >> 16), to_int16(w4), to_int16(w7), to_int16(w7 >> 16),
+                            to_int16(w6), to_int16(w3), to_int16(w3 >> 16), to_int16(w2), int((w0 & MASK_EXPONENT) >> 18),
+                            (w4 >> 16) | (w6 & 0x00ff0000u), int((w6 & MASK_MAP_SIZE) >> 28), pmip,
+                            (w6 & MASK_8_16_MAPS) != 0u, (w6 & MASK_MIP_MAPPED) != 0u, (w6 & MASK_4444_555) != 0u,
+                            int((w0 & MASK_GLOBAL_TRANS) >> 13), int((w0 & MASK_FLIP_UV) >> 11));
+        if ((w0 & MASK_SMOOTH_SHADE) == 0u)
+            col.rgb = ((col.rgb * base) >> 8) & 0xff;
+        inc += 8u;
+    } else {
+        col = ivec4(base, 0);
+        inc += 2u;
+    }
+
+    if ((w0 & MASK_SMOOTH_SHADE) != 0u) {
+        ivec3 h = shade_light(tsp[inc - address], tsp[inc - address + 1u], x, y, x_off, y_off);
+        inc += 2u;
+        if (((w0 & MASK_SHADOW_FLAG) != 0u) && (shadow == 0)) {
+            ivec3 s = shade_light(tsp[inc - address], tsp[inc - address + 1u], x, y, x_off, y_off);
+            h       = min(s + h, 255);
+            inc += 2u;
+        }
+        if ((w0 & MASK_TEXTURE) == 0u)
+            col = ivec4(h, 0);
+        else
+            col.rgb = ((col.rgb * h) >> 8) & 0xff;
+    }
+
+    if ((w0 & MASK_FLAT_HIGHLIGHT) != 0u) {
+        uint  hw = tsp[inc - address];
+        ivec3 h  = from555(hw >> 16) >> 3;
+        ivec3 s  = from555(hw & 0xffffu);
+        if (((w0 & MASK_SHADOW_FLAG) != 0u) && (shadow == 0))
+            h = min(h + (s >> 3), 31);
+        col.rgb = min(col.rgb + (h << 3), 255);
+    }
+
+    uint fogc = frame[KF_FOG_COLOUR];
+    if ((((fogc >> 24) & 1u) != 0u) && ((w0 & MASK_DISABLE_FOG) == 0u)) {
+        ivec3 fc = ivec3(int((fogc >> 16) & 0xffu), int((fogc >> 8) & 0xffu), int(fogc & 0xffu));
+        col.rgb  = ((((fc - col.rgb) * fog) >> 8) + col.rgb) & 0xff;
+    }
+
+    uint at = uint(y * MAX_W + x);
+    if ((w0 & MASK_TRANS) != 0u) {
+        int   al = (col.a == 15) ? 16 : col.a;
+        uint  dd = rgb[at];
+        ivec3 dc = ivec3(int((dd >> 16) & 0xffu), int((dd >> 8) & 0xffu), int(dd & 0xffu));
+        col.rgb  = (((dc * al) >> 4) + (((16 - al) * col.rgb) >> 4)) & 0xff;
+    }
+    rgb[at] = WRITTEN | (uint(col.r) << 16) | (uint(col.g) << 8) | uint(col.b);
+}
+
+int fog_factor(int depth)
+{
+    int idx = depth >> int(frame[KF_FOG_SHIFT] & 0x1fu);
+    if (idx < 0)
+        idx = 0;
+    int fac = idx >> 7;
+    if (fac > 8)
+        fac = 9;
+    return int((frame[KF_FOG_TABLE + uint(idx & 0x7f)] & 0xffu) >> uint(fac));
+}
+
+bool x_visible(int x)
+{
+    uint xc = frame[KF_XCLIP];
+    if (((xc & (1u << 12)) != 0u) && (x < int(xc & 0x3ffu) - 1))
+        return false;
+    if (((xc & (1u << 28)) != 0u) && (x >= int((xc >> 16) & 0x3ffu)))
+        return false;
+    return true;
+}
+
+void main()
+{
+    uint span = gl_WorkGroupID.y * 32768u + gl_WorkGroupID.x;
+    if (span >= pc.n_spans)
+        return;
+    uint sp  = span * KN_WORDS;
+    int  x   = int(spans[sp + KN_X]) + int(gl_LocalInvocationID.x);
+    int  y   = int(spans[sp + KN_Y]);
+    uint sch = spans[sp + KN_SCHED];
+    uint p0  = spans[sp + KN_P0];
+    uint o0  = spans[sp + KN_FIRST_OBJECT];
+    uint no  = spans[sp + KN_N_OBJECTS];
+
+    I_depth = 0; U_depth = 0; I_visib = 0; I_forward = 0; shad_temp = 0; U_visib = 0; U_shadow = 0;
+    I_id = 0u; U_id = 0u;
+
+    for (uint o = o0; o < o0 + no; o++) {
+        uint ob          = o * KO_WORDS;
+        uint first       = objects[ob + KO_FIRST];
+        uint count       = objects[ob + KO_COUNT];
+        bool translucent = false;
+        /* The planes, then (where the object ends its region) the flush: one cell site for both */
+        uint steps = count + ((objects[ob + KO_LAST_IN_REGION] != 0u) ? 1u : 0u);
+        for (uint k = 0u; k < steps; k++) {
+            bool flush = (k == count);
+            uint w     = 0u, index = 0u;
+            int  C     = 0;
+            if (flush) {
+                /* expand_instruction's flush: load_u_closer, visible, mux_sel; depth 0. The span is shaded first if
+                   the object went translucent, then again after the flush. */
+                if (translucent && x_visible(x) && (U_id != 0u))
+                    texas(x, y, (U_id & 0xfffffu) << 1, U_shadow, fog_factor(U_depth));
+                translucent = false;
+                w     = 1u | (3u << 5) | (1u << 9) | (1u << 12);
+                index = 0u;
+                C     = 0;
+            } else {
+                uint pl = (first + k) * KP_WORDS;
+                w       = sched[sch + first + k - p0];
+                index   = planes[pl + KP_INDEX];
+                if ((w & 1u) != 0u) {
+                    uvec2 a = uvec2(planes[pl + KP_A], planes[pl + KP_A + 1u]);
+                    uvec2 b = uvec2(planes[pl + KP_B], planes[pl + KP_B + 1u]);
+                    uvec2 v = add64(add64(mul64(a, x), mul64(b, y)), mul64(i64(int(planes[pl + KP_C])), 256));
+                    if (((w >> 11) & 1u) != 0u)
+                        C = shr8_low(v);
+                    else
+                        C = shr8_low(add64(v, uvec2(((int(v.y) >> 31) != 0) ? 255u : 0u, 0u)));
+                }
+                if (planes[pl + KP_INSTR] == BEGIN_TRANS)
+                    translucent = true;
+            }
+            if ((w & 1u) != 0u)
+                cell_process(w, C, index);
+            if (flush || ((k + 1u == count) && !flush && (steps == count) && translucent)) {
+                if (x_visible(x) && (U_id != 0u))
+                    texas(x, y, (U_id & 0xfffffu) << 1, U_shadow, fog_factor(U_depth));
+            }
+        }
+    }
+}

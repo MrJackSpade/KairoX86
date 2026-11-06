@@ -60,6 +60,8 @@
 #include <86box/thread.h>
 #include "vid_powervr_pcx_tables.h"
 #include "vid_powervr_pcx_render.h"
+#include <86box/kairo_gpu.h> /* KairoX86#269 */
+#include <86box/kairo_gpu_powervr.h>
 
 /* PCI identity. */
 #define PCX_VENDOR_NEC      0x1033
@@ -237,10 +239,10 @@ typedef struct pcx_t {
         event_t      *go, *done;
     } helper[PCX_MAX_HELPERS];
     pcxr_job_t    *rjob;
+    void          *k_gpu; /* KairoX86#269: the tiles' GPU state (kairo_gpu_powervr.h), NULL in software */
     volatile int   render_quit;
     int            render_pending;
     atomic_int     render_ready;   /* set by the render thread when the frame is drawn */
-    double         render_late_us; /* emulated time the end of render was held back */
     int            render_discard;
     uint32_t      *isp_buf;
     uint32_t      *rgb;
@@ -274,7 +276,7 @@ typedef struct pcx_t {
     int      dump_object_kb;
 
     /* Statistics. */
-    double   stat_render_ms, stat_render_max_ms, stat_wait_ms, stat_output_ms, stat_late_ms;
+    double   stat_render_ms, stat_render_max_ms, stat_wait_ms, stat_output_ms;
     uint32_t stat_frames;
     uint32_t frames;
     uint32_t dumps;
@@ -604,8 +606,16 @@ pcx_render_thread(void *priv)
         }
         pcx->job_start_ms = pcx_now_ms();
         memset(pcx->rgb, 0, PCXR_MAX_W * PCXR_MAX_H * sizeof(uint32_t));
-        if (pcxr_prepare(pcx->rjob, &pcx->job, &pcx->job_res) > 0)
-            pcx_run_phase(pcx, PCX_PHASE_TILES);
+        if (pcxr_prepare(pcx->rjob, &pcx->job, &pcx->job_res) > 0) {
+            if (pcx->k_gpu != NULL) {
+                /* KairoX86#269: the tiles drawn on the GPU */
+                kairo_pvr_lists_t lists;
+                if (pcxr_gpu_lists(pcx->rjob, &lists) < 0)
+                    fatal("PowerVR on the GPU: no memory for a frame's lists\n");
+                kairo_pvr_gpu_render(pcx->k_gpu, &lists);
+            } else
+                pcx_run_phase(pcx, PCX_PHASE_TILES);
+        }
         pcx_pack_area(pcx);
         if (pcx->pack_y1 >= pcx->pack_y0)
             pcx_run_phase(pcx, PCX_PHASE_PACK);
@@ -668,7 +678,6 @@ pcx_render_frame(pcx_t *pcx)
 
     pcx->render_pending = 1;
     pcx->render_discard = 0;
-    pcx->render_late_us = 0.0;
     atomic_store(&pcx->render_ready, 0);
     thread_set_event(pcx->render_go);
 }
@@ -700,27 +709,15 @@ pcx_render_output(pcx_t *pcx)
     cycles = orig_cycles;
 }
 
-/* How often the end of render looks again for a frame the host has not
-   finished, in emulated microseconds. */
-#define PCX_RENDER_POLL_US 250.0
-
 static void
 pcx_render_done(void *priv)
 {
     pcx_t *pcx = (pcx_t *) priv;
 
-    /* If the host has not finished drawing the frame yet, the card is
-       simply still busy: hold the end of render back in emulated time
-       rather than stalling the emulated PC until the host catches up.
-       Stalling froze the guest's clocks, and the catch-up afterwards
-       could drop timer interrupts, so games that count them ran in slow
-       motion while reporting a normal frame rate. */
-    if (pcx->render_pending && !atomic_load(&pcx->render_ready)) {
-        pcx->render_late_us += PCX_RENDER_POLL_US;
-        timer_on_auto(&pcx->render_timer, PCX_RENDER_POLL_US);
-        return;
-    }
-
+    /* KairoX86#294: the end of render comes at the frame's emulated render
+       time whatever the host's speed: a frame the host has not finished is
+       waited for here (pcx_render_wait), as the Voodoos wait for their
+       render threads, so the guest sees the same moment in every run. */
     if (pcx->render_pending) {
         double t0 = pcx_now_ms(), t1;
         pcx_render_wait(pcx);
@@ -732,7 +729,6 @@ pcx_render_done(void *priv)
            the frame buffer writes held up the emulation thread. */
         pcx->stat_wait_ms += t1 - t0;
         pcx->stat_output_ms += pcx_now_ms() - t1;
-        pcx->stat_late_ms += pcx->render_late_us / 1000.0;
         pcx->stat_render_ms += pcx->job_ms;
         if (pcx->job_ms > pcx->stat_render_max_ms)
             pcx->stat_render_max_ms = pcx->job_ms;
@@ -740,12 +736,12 @@ pcx_render_done(void *priv)
             pcx_log(pcx, PCX_LOG_SUMMARY,
                     "PowerVR: frames %u-%u: render %.1f ms average (%.1f max) on %d thread(s), "
                     "emulation waited %.1f ms and wrote output %.2f ms per frame; "
-                    "emulated render time %.1f ms + %.1f ms held back for the host\n",
+                    "emulated render time %.1f ms\n",
                     pcx->frames - 99, pcx->frames, pcx->stat_render_ms / 100.0, pcx->stat_render_max_ms,
                     pcx->n_helpers + 1, pcx->stat_wait_ms / 100.0, pcx->stat_output_ms / 100.0,
-                    pcx->render_delay_us / 1000.0, pcx->stat_late_ms / 100.0);
+                    pcx->render_delay_us / 1000.0);
             pcx->stat_frames = 0;
-            pcx->stat_render_ms = pcx->stat_render_max_ms = pcx->stat_wait_ms = pcx->stat_output_ms = pcx->stat_late_ms = 0.0;
+            pcx->stat_render_ms = pcx->stat_render_max_ms = pcx->stat_wait_ms = pcx->stat_output_ms = 0.0;
         }
     }
     if (pcx->debug_tile && pcx_bus_master_enabled(pcx)) {
@@ -1225,10 +1221,15 @@ pcx_init(const device_t *info)
     pcx->dump_from      = device_get_config_int("dump_from");
     pcx->dump_object_kb = 256;
 
-    pcx->tex_mem = calloc(1, PCX_TEXMEM_SIZE);
+    /* KairoX86#269: with Hardware acceleration on, the texture memory and the frame's RGB buffer are memory the GPU
+       shares, and the tiles are drawn there */
+    pcx->tex_mem = kairo_gpu_on ? kairo_gpu_alloc(PCX_TEXMEM_SIZE) : calloc(1, PCX_TEXMEM_SIZE);
     if (pcx->chip == PCX_CHIP_PCX2) {
         pcx->isp_buf         = calloc(PCX_TLB_ENTRIES, 0x4000);
-        pcx->rgb             = calloc(PCXR_MAX_W * PCXR_MAX_H, sizeof(uint32_t));
+        pcx->rgb             = kairo_gpu_on ? kairo_gpu_alloc(PCXR_MAX_W * PCXR_MAX_H * sizeof(uint32_t))
+                                            : calloc(PCXR_MAX_W * PCXR_MAX_H, sizeof(uint32_t));
+        if (kairo_gpu_on)
+            pcx->k_gpu = kairo_pvr_gpu_open((uint32_t *) pcx->tex_mem, PCX_TEXMEM_SIZE / 4, pcx->rgb);
         pcx->out_buf         = malloc(PCXR_MAX_W * PCXR_MAX_H * 4);
         pcx->spans           = malloc(PCX_MAX_SPANS * sizeof(struct pcx_span_t));
         pcx->row_spans       = calloc(PCXR_MAX_H, sizeof(uint16_t));
@@ -1293,12 +1294,18 @@ pcx_close(void *priv)
         thread_destroy_event(pcx->render_finished);
         pcxr_job_destroy(pcx->rjob);
     }
+    kairo_pvr_gpu_close(pcx->k_gpu); /* KairoX86#269 */
     free(pcx->isp_buf);
-    free(pcx->rgb);
+    if (kairo_gpu_on) {
+        kairo_gpu_free(pcx->rgb);
+        kairo_gpu_free(pcx->tex_mem);
+    } else {
+        free(pcx->rgb);
+        free(pcx->tex_mem);
+    }
     free(pcx->out_buf);
     free(pcx->spans);
     free(pcx->row_spans);
-    free(pcx->tex_mem);
     free(pcx);
 }
 

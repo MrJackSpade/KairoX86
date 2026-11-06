@@ -11,6 +11,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <time.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -278,6 +279,8 @@ kairo_gpu_close(void)
         kairo_gpu_scanout_close();
         kairo_gpu_voodoo_close();
         kairo_gpu_virge_close();
+        kairo_gpu_mach64_close();
+        kairo_gpu_powervr_close();
         vkDestroyFence(gpu.device, gpu.done, NULL);
         vkDestroyCommandPool(gpu.device, gpu.commands, NULL);
         vkDestroyDevice(gpu.device, NULL);
@@ -413,9 +416,16 @@ kairo_gpu_kernel(const char *name, const uint32_t *spirv, size_t spirv_bytes, in
                     .module = module, .pName = "main" },
         .layout = kernel->layout
     };
+    /* How long the driver takes to build it, reported: a kernel that builds slowly stalls the machine where it is
+       first used (KairoX86#237: one kernel took minutes until its heavy functions had one call site each) */
+    struct timespec built_from, built_to;
+    clock_gettime(CLOCK_MONOTONIC, &built_from);
     const VkResult made = vkCreateComputePipelines(gpu.device, VK_NULL_HANDLE, 1, &pipeline_info, NULL, &kernel->pipeline);
+    clock_gettime(CLOCK_MONOTONIC, &built_to);
     vkDestroyShaderModule(gpu.device, module, NULL);
     vk_check(made, name);
+    fprintf(stderr, "kairo-gpu: kernel %s built in %.0f ms\n", name,
+            (double) (built_to.tv_sec - built_from.tv_sec) * 1e3 + (double) (built_to.tv_nsec - built_from.tv_nsec) / 1e6);
 
     const VkDescriptorPoolSize       pool_size = { .type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .descriptorCount = (uint32_t) buffers };
     const VkDescriptorPoolCreateInfo pool_info = { .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO, .maxSets = 1,

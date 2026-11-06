@@ -25,6 +25,8 @@
  */
 
 #include "vid_ati_mach64.h"
+#include <86box/kairo_gpu.h>        /* KairoX86#237 */
+#include <86box/kairo_gpu_mach64.h>
 
 /* GUI registers, byte offsets in the register block. */
 #define DST_BRES_LNTH  0x120 /* also LEAD_BRES_LNTH */
@@ -223,6 +225,9 @@ struct mach64_3d_t {
     atomic_uint                 job_gen;
     atomic_int                  job_left;
     uint64_t                    spin_ticks;
+
+    /* KairoX86#237: the rows' GPU state (kairo_gpu_mach64.h), NULL in software */
+    void *k_gpu;
 };
 
 static int
@@ -1962,6 +1967,7 @@ struct mach64_3d_rows_job_t {
     uint32_t           z_base;
     int                z_pitch;
     int                dp_constant;
+    int                line; /* a 3D line's pixels, each a row: one outside the Z buffer is not drawn */
     int                nrows;
 };
 
@@ -2009,8 +2015,12 @@ mach64_3d_draw_row(mach64_3d_t *ctx, const mach64_3d_rows_job_t *job, const mach
         int      draw  = mach64_3d_pixel_source(ctx, px, shade, s, t, dsdx, dtdx, dsdy, dtdy, &src);
 
         if (draw && px->z_enabled) {
-            depth = mach64_3d_s16_12_depth(z);
-            draw  = mach64_3d_z_test(depth, mach64_3d_vram_read16(mach64, z_addr), (px->z_cntl >> Z_TEST_SHIFT) & 7);
+            if (job->line && ((x < 0) || (x >= job->z_pitch) || (y < 0)))
+                draw = 0;
+            else {
+                depth = mach64_3d_s16_12_depth(z);
+                draw  = mach64_3d_z_test(depth, mach64_3d_vram_read16(mach64, z_addr), (px->z_cntl >> Z_TEST_SHIFT) & 7);
+            }
         }
         if (draw) {
             uint32_t raw        = 0;
@@ -2236,11 +2246,153 @@ mach64_3d_helpers_close(mach64_3d_t *ctx)
  * runs then, and a pixel any of them packs without dithering ends the
  * diffusion state as one packed by this thread would.
  */
+/* KairoX86#237: every page of len bytes at addr marked changed (mach64_3d_vram_changed's mark), wrapping as video
+   memory does */
+static void
+mach64_3d_mark_changed(const mach64_t *mach64, uint32_t addr, uint32_t len)
+{
+    const uint8_t stamp = mach64->svga.monitor->mon_changeframecount;
+
+    if (len == 0)
+        return;
+    if (len > mach64->vram_mask)
+        len = mach64->vram_mask + 1;
+    for (uint64_t page = addr >> 12; page <= (((uint64_t) addr + len - 1) >> 12); page++)
+        mach64->svga.changedvram[(((uint32_t) page << 12) & mach64->vram_mask) >> 12] = stamp;
+}
+
+/* KairoX86#237: the rows walked so far recorded for the GPU (kairo_gpu_mach64.h), with what their pixels read
+   from the job, the registers and the palettes as they are now */
+static void
+mach64_3d_gpu_rows(mach64_3d_t *ctx, const mach64_3d_rows_job_t *job)
+{
+    const mach64_t          *mach64 = ctx->mach64;
+    const mach64_3d_pixel_t *px     = &job->px;
+    const mach64_3d_interp_t *p     = &job->p;
+    uint32_t                 record[KM_WORDS] = { 0 };
+    uint32_t                 palettes[KAIRO_M64_PALETTE_WORDS];
+    uint32_t                 rows[MACH64_3D_ROWS * KR_WORDS];
+
+    record[KM_FLAGS] = (px->textured ? KAIRO_M64_TEXTURED : 0) | (px->z_enabled ? KAIRO_M64_Z_ENABLED : 0) |
+                       (px->z_write ? KAIRO_M64_Z_WRITE : 0) | (px->dst_compare ? KAIRO_M64_DST_COMPARE : 0) |
+                       (job->dp_constant ? KAIRO_M64_DP_CONSTANT : 0) | (job->line ? KAIRO_M64_LINE : 0) |
+                       ((job->lead_dir < 0) ? KAIRO_M64_LEAD_LEFT : 0) | ((uint32_t) px->alpha_fog << 8);
+    record[KM_CNTL]         = px->cntl;
+    record[KM_Z_CNTL]       = px->z_cntl;
+    record[KM_DST_BASE]     = job->dst.base;
+    record[KM_DST_PITCH]    = (uint32_t) job->dst.pitch;
+    record[KM_DST_FORMAT]   = (uint32_t) job->dst.format;
+    record[KM_DST_BPP]      = (uint32_t) job->dst.bpp;
+    record[KM_Z_BASE]       = job->z_base;
+    record[KM_Z_PITCH]      = (uint32_t) job->z_pitch;
+    record[KM_FOG]          = mach64->dp_frgd_clr;
+    record[KM_CLR_CMP_CNTL] = mach64->clr_cmp_cntl;
+    record[KM_CLR_CMP_CLR]  = mach64->clr_cmp_clr;
+    record[KM_CLR_CMP_MASK] = mach64->clr_cmp_mask;
+    record[KM_WRITE_MASK]   = mach64->write_mask;
+    record[KM_DP_SRC]       = mach64->dp_src;
+    record[KM_DP_BKGD_CLR]  = mach64->dp_bkgd_clr;
+    record[KM_DP_FRGD_CLR]  = mach64->dp_frgd_clr;
+    record[KM_DP_PIX_WIDTH] = mach64->dp_pix_width;
+    record[KM_RX]           = (uint32_t) p->rx;
+    record[KM_RX + 1]       = (uint32_t) p->gx;
+    record[KM_RX + 2]       = (uint32_t) p->bx;
+    record[KM_RX + 3]       = (uint32_t) p->ax;
+    record[KM_RX + 4]       = (uint32_t) p->zx;
+    record[KM_SX2]          = (uint32_t) p->sx2;
+    record[KM_SX2 + 1]      = (uint32_t) p->tx2;
+    record[KM_SX2 + 2]      = (uint32_t) p->sxy2;
+    record[KM_SX2 + 3]      = (uint32_t) p->txy2;
+    if (px->textured) {
+        const mach64_3d_texture_t *largest = &px->texture[0];
+        const int                  levels  = (px->cntl & MIP_MAP_DISABLE) ? 1 : (largest->max_lod + 1);
+
+        record[KM_TEX_FORMAT]  = (uint32_t) largest->format;
+        record[KM_TEX_BPP]     = (uint32_t) largest->bpp;
+        record[KM_TEX_DYNAMIC] = (uint32_t) largest->dynamic_range;
+        record[KM_KEY_FCN]     = largest->key_fcn;
+        record[KM_KEY]         = largest->key;
+        record[KM_KEY_MASK]    = largest->key_mask;
+        record[KM_MAX_LOD]     = (uint32_t) largest->max_lod;
+        record[KM_LEVELS]      = (uint32_t) levels;
+        for (int level = 0; level < levels; level++) {
+            const mach64_3d_texture_t *map = &px->texture[level];
+            uint32_t                  *out = &record[KM_MAPS + level * KM_MAP_WORDS];
+
+            out[KM_MAP_BASE]        = map->base;
+            out[KM_MAP_PITCH_LOG2]  = (uint32_t) map->pitch_log2;
+            out[KM_MAP_WIDTH_MASK]  = (uint32_t) map->width_mask;
+            out[KM_MAP_HEIGHT_MASK] = (uint32_t) map->height_mask;
+            out[KM_MAP_COORD_SHIFT] = (uint32_t) map->coord_shift;
+            out[KM_MAP_HEIGHT_LOG2] = (uint32_t) map->height_log2;
+        }
+    }
+
+    memcpy(palettes, ctx->texture_palette, 256 * 4);
+    memcpy(palettes + 256, mach64->svga.pallook, 256 * 4);
+
+    for (int i = 0; i < job->nrows; i++) {
+        const mach64_3d_row_t *row = &ctx->rows[i];
+        uint32_t              *out = &rows[i * KR_WORDS];
+        const int64_t          st[6] = { row->s, row->sxi, row->syi, row->t, row->txi, row->tyi };
+        const uint32_t         n     = (uint32_t) (row->end - row->first);
+
+        /* The pages it may write changed now, as the CPU's pixels mark theirs, so the display draws its lines again */
+        mach64_3d_mark_changed(mach64, job->dst.base + (row->y * job->dst.pitch + row->first) * job->dst.bpp, n * job->dst.bpp);
+        if (px->z_write)
+            mach64_3d_mark_changed(mach64, job->z_base + (row->y * job->z_pitch + row->first) * 2, n * 2);
+
+        out[KR_Y]     = (uint32_t) row->y;
+        out[KR_FIRST] = (uint32_t) row->first;
+        out[KR_END]   = (uint32_t) row->end;
+        out[KR_LEAD]  = (uint32_t) row->lead;
+        out[KR_DRAW]  = 0;
+        out[KR_R]     = (uint32_t) row->r;
+        out[KR_R + 1] = (uint32_t) row->g;
+        out[KR_R + 2] = (uint32_t) row->b;
+        out[KR_R + 3] = (uint32_t) row->a;
+        out[KR_R + 4] = (uint32_t) row->z;
+        for (int k = 0; k < 6; k++) {
+            out[KR_S + k * 2]     = (uint32_t) (uint64_t) st[k];
+            out[KR_S + k * 2 + 1] = (uint32_t) ((uint64_t) st[k] >> 32);
+        }
+    }
+    kairo_mach64_gpu_draw(ctx->k_gpu, record, palettes, rows, job->nrows);
+}
+
+/* KairoX86#237: what the GPU draws on or reads, drawn before the processor, the display or another engine
+   reads or writes len bytes at addr */
+void
+mach64_3d_kairo_touch(mach64_t *mach64, uint32_t addr, uint32_t len)
+{
+    if ((mach64->gt3d != NULL) && (mach64->gt3d->k_gpu != NULL))
+        kairo_mach64_gpu_touch(mach64->gt3d->k_gpu, addr & mach64->vram_mask, len);
+}
+
+/* The SVGA core's memory handlers and display (svga->kairo_touch) */
+static void
+mach64_3d_svga_touch(svga_t *svga, uint32_t addr, uint32_t len)
+{
+    mach64_3d_kairo_touch((mach64_t *) svga->priv, addr, len);
+}
+
+void
+mach64_3d_kairo_drain(mach64_t *mach64)
+{
+    if ((mach64->gt3d != NULL) && (mach64->gt3d->k_gpu != NULL))
+        kairo_mach64_gpu_drain(mach64->gt3d->k_gpu);
+}
+
 static void
 mach64_3d_draw_rows(mach64_3d_t *ctx, const mach64_3d_rows_job_t *job, uint32_t pixels)
 {
     mach64_3d_dither_t own;
     int                threads = ctx->threads;
+
+    if (ctx->k_gpu != NULL) {
+        mach64_3d_gpu_rows(ctx, job);
+        return;
+    }
 
     if (!mach64_3d_rows_shared(ctx, job, pixels)) {
         for (int i = 0; i < job->nrows; i++)
@@ -2330,6 +2482,7 @@ mach64_3d_draw_trapezoid(mach64_3d_t *ctx, uint32_t cmd)
     job.z_pitch = ((z_off_pitch >> 22) & 0x3ff) << 3;
     job.nrows   = 0;
     job.lead_dir = lead_dir;
+    job.line     = 0;
     mach64_3d_pixel_init(ctx, &job.dst, job.z_pitch, &job.px);
     mach64_3d_interp_load(ctx, p);
 
@@ -2484,11 +2637,9 @@ mach64_3d_draw_line(mach64_3d_t *ctx, uint32_t cmd)
     int                inc     = mach64_3d_sign_extend(mach64->dst_bres_inc, 18);
     int                dec     = mach64_3d_sign_extend(mach64->dst_bres_dec, 18);
     uint32_t           z_off_pitch;
-    uint32_t           z_base;
-    int                z_pitch;
-    mach64_3d_dst_t    dst;
-    mach64_3d_pixel_t  px;
-    mach64_3d_interp_t p;
+    uint32_t           batch = 0;
+    mach64_3d_rows_job_t job;
+    mach64_3d_interp_t  *p = &job.p;
 
     /* LINE_DIS loads the line without drawing it. */
     if (cmd & LINE_DIS)
@@ -2499,49 +2650,47 @@ mach64_3d_draw_line(mach64_3d_t *ctx, uint32_t cmd)
         return;
     if ((((ctx->regs[SCALE_3D_CNTL >> 2] >> SCALE_3D_FCN_SHIFT) & 3) == FCN_TEXTURE) && !mach64_3d_bytes_per_pixel(mach64_3d_src_format(mach64)))
         return;
-    if (!mach64_3d_dst_init(mach64, &dst))
+    if (!mach64_3d_dst_init(mach64, &job.dst))
         return;
 
-    z_off_pitch = ctx->regs[Z_OFF_PITCH >> 2];
-    z_base      = (z_off_pitch & 0xfffff) << 3;
-    z_pitch     = ((z_off_pitch >> 22) & 0x3ff) << 3;
-    mach64_3d_pixel_init(ctx, &dst, z_pitch, &px);
-    mach64_3d_interp_load(ctx, &p);
+    /* Each pixel drawn is a row of one, its own leading edge, so its texture steps are the
+       registers' X and Y ones (KairoX86#237: drawn as a trapezoid's rows are). */
+    z_off_pitch     = ctx->regs[Z_OFF_PITCH >> 2];
+    job.z_base      = (z_off_pitch & 0xfffff) << 3;
+    job.z_pitch     = ((z_off_pitch >> 22) & 0x3ff) << 3;
+    job.nrows       = 0;
+    job.lead_dir    = 1;
+    job.line        = 1;
+    job.dp_constant = 0;
+    mach64_3d_pixel_init(ctx, &job.dst, job.z_pitch, &job.px);
+    mach64_3d_interp_load(ctx, p);
 
     for (int i = 0; i < len; i++) {
         /* DST_LAST_PEL draws the last pixel. */
-        int draw = ((i < (len - 1)) || (mach64->dst_cntl & DST_LAST_PEL)) && (x >= dst.left) && (x <= dst.right) && (y >= dst.top) && (y <= dst.bottom);
+        if (((i < (len - 1)) || (mach64->dst_cntl & DST_LAST_PEL)) && (x >= job.dst.left) && (x <= job.dst.right) &&
+            (y >= job.dst.top) && (y <= job.dst.bottom)) {
+            mach64_3d_row_t *row = &ctx->rows[job.nrows++];
 
-        if (draw) {
-            uint32_t addr   = dst.base + (y * dst.pitch + x) * dst.bpp;
-            uint32_t z_addr = 0;
-            uint16_t depth  = 0;
-            rgba_t   shade  = { mach64_3d_s8_12_color(p.r), mach64_3d_s8_12_color(p.g), mach64_3d_s8_12_color(p.b),
-                                mach64_3d_s8_12_color(p.a) };
-            rgba_t   src;
-
-            draw = mach64_3d_pixel_source(ctx, &px, shade, p.s, p.t, p.sxi, p.txi, p.syi, p.tyi, &src);
-            if (draw && px.z_enabled) {
-                if ((x < 0) || (x >= z_pitch) || (y < 0))
-                    draw = 0;
-                else {
-                    z_addr = z_base + (y * z_pitch + x) * 2;
-                    depth  = mach64_3d_s16_12_depth(p.z);
-                    draw   = mach64_3d_z_test(depth, mach64_3d_vram_read16(mach64, z_addr), (px.z_cntl >> Z_TEST_SHIFT) & 7);
-                }
-            }
-            if (draw) {
-                if (px.alpha_fog == ALPHA_FOG_BLEND)
-                    src = mach64_3d_blend(px.cntl, src, mach64_3d_read_dst(ctx, addr, dst.format));
-                if (px.dst_compare &&
-                    mach64_3d_destination_compare_inhibits(mach64->clr_cmp_cntl, mach64->clr_cmp_clr, mach64->clr_cmp_mask,
-                                                           mach64_3d_vram_read(mach64, addr, dst.bpp), px.dst_compare_mask))
-                    draw = 0;
-            }
-            if (draw) {
-                mach64_3d_write_dst(ctx, &ctx->dither, addr, dst.format, src, x, y);
-                if (px.z_write)
-                    mach64_3d_vram_write(mach64, z_addr, depth, 2);
+            row->y     = y;
+            row->lead  = x;
+            row->first = x;
+            row->end   = x + 1;
+            row->r     = p->r;
+            row->g     = p->g;
+            row->b     = p->b;
+            row->a     = p->a;
+            row->z     = p->z;
+            row->s     = p->s;
+            row->sxi   = p->sxi;
+            row->syi   = p->syi;
+            row->t     = p->t;
+            row->txi   = p->txi;
+            row->tyi   = p->tyi;
+            batch++;
+            if (job.nrows == MACH64_3D_ROWS) {
+                mach64_3d_draw_rows(ctx, &job, batch);
+                job.nrows = 0;
+                batch     = 0;
             }
         }
 
@@ -2552,23 +2701,25 @@ mach64_3d_draw_line(mach64_3d_t *ctx, uint32_t cmd)
            every major step, DEC as well when the minor axis moves. */
         if (y_major) {
             y += y_dir;
-            mach64_3d_interp_step_y(&p);
+            mach64_3d_interp_step_y(p);
         } else {
             x += x_dir;
-            mach64_3d_interp_step_x(&p);
+            mach64_3d_interp_step_x(p);
         }
         err += inc;
         if ((err > 0) || ((err == 0) && !zneg)) {
             err += dec;
             if (y_major) {
                 x += x_dir;
-                mach64_3d_interp_step_x(&p);
+                mach64_3d_interp_step_x(p);
             } else {
                 y += y_dir;
-                mach64_3d_interp_step_y(&p);
+                mach64_3d_interp_step_y(p);
             }
         }
     }
+    if (job.nrows)
+        mach64_3d_draw_rows(ctx, &job, batch);
 
     /* DST_X/Y end on the last pixel of the line, drawn or not: Windows
        chains connected lines from there. */
@@ -2890,115 +3041,237 @@ mach64_scaler_write_pixel(mach64_3d_t *ctx, uint32_t addr, int format, int x, in
  * by the X and Y accumulators from SCALE_HACC and SCALE_VACC; a pixel past
  * the source's edge repeats the edge.
  */
+typedef struct mach64_scaler_t {
+    int      replicate;
+    uint32_t src_base;
+    int      src_width;
+    int      src_height;
+    uint32_t src_pitch;
+    uint32_t x_inc;
+    uint32_t xuv_inc;
+    uint32_t y_inc;
+    int32_t  h_start;
+    int32_t  uv_start;
+    int32_t  v_start;
+    int      src_format;
+    int      dst_format;
+    int      dst_bpp;
+    int      dst_pitch;
+    uint32_t dst_base;
+    int      dst_x;
+    int      dst_y;
+    int      dst_width;
+    int      dst_height;
+    int      x_dir;
+    int      y_dir;
+    int      sc_left;
+    int      sc_right;
+    int      sc_top;
+    int      sc_bottom;
+} mach64_scaler_t;
+
+/* The rectangle from the registers; returns whether it draws */
+static int
+mach64_scaler_setup(mach64_3d_t *ctx, mach64_scaler_t *sc)
+{
+    const mach64_t *mach64 = ctx->mach64;
+    const uint32_t *regs   = ctx->regs;
+
+    sc->replicate  = !!(regs[SCALE_3D_CNTL >> 2] & SCALE_PIX_REP);
+    sc->src_base   = regs[SCALE_Y_OFF >> 2] & ~7;
+    sc->src_width  = regs[SCALE_WIDTH >> 2] & 0x1fff;
+    sc->src_height = regs[SCALE_HEIGHT >> 2] & 0x1fff;
+    sc->src_pitch  = regs[SCALE_Y_PITCH >> 2] & 0x1fff;
+    sc->x_inc      = regs[SCALE_X_INC >> 2] & 0x001ffff0;
+    sc->xuv_inc    = regs[SCALE_XUV_INC >> 2] & 0x001ffff0;
+    sc->y_inc      = regs[SCALE_Y_INC >> 2] & 0x001ffff0;
+    sc->h_start    = mach64_3d_sign_extend(regs[SCALE_HACC >> 2], 21);
+    sc->uv_start   = mach64_3d_sign_extend(regs[SCALE_UV_HACC >> 2], 21);
+    sc->v_start    = mach64_3d_sign_extend(regs[SCALE_VACC >> 2], 21);
+    sc->src_format = mach64_3d_src_format(mach64);
+    sc->dst_format = mach64_3d_dst_format(mach64);
+    sc->dst_bpp    = mach64_3d_bytes_per_pixel(sc->dst_format);
+    sc->dst_pitch  = ((mach64->dst_off_pitch >> 22) & 0x3ff) << 3;
+    sc->dst_base   = (mach64->dst_off_pitch & 0xfffff) << 3;
+    sc->dst_x      = mach64_3d_sign_extend(mach64->dst_y_x >> 16, 13);
+    sc->dst_y      = mach64_3d_sign_extend(mach64->dst_y_x, 15);
+    sc->dst_width  = (mach64->dst_height_width >> 16) & 0x1fff;
+    sc->dst_height = mach64->dst_height_width & 0x1fff;
+    sc->x_dir      = (mach64->dst_cntl & DST_X_DIR) ? 1 : -1;
+    sc->y_dir      = (mach64->dst_cntl & DST_Y_DIR) ? 1 : -1;
+    sc->sc_left    = mach64_3d_sign_extend(mach64->sc_left_right, 13);
+    sc->sc_right   = mach64_3d_sign_extend(mach64->sc_left_right >> 16, 13);
+    sc->sc_top     = mach64_3d_sign_extend(mach64->sc_top_bottom, 15);
+    sc->sc_bottom  = mach64_3d_sign_extend(mach64->sc_top_bottom >> 16, 15);
+    return sc->src_width && sc->src_height && sc->src_pitch && sc->dst_width && sc->dst_height &&
+           mach64_scaler_source_bpp(sc->src_format) && sc->dst_bpp && mach64_scaler_destination_supported(sc->dst_format);
+}
+
+/* The rectangle's pixel dx across and dy down, from its start */
+static void
+mach64_scaler_pixel(mach64_3d_t *ctx, const mach64_scaler_t *sc, int dx, int dy)
+{
+    uint64_t vram_size  = (uint64_t) ctx->mach64->vram_mask + 1;
+    int      y          = sc->dst_y + dy * sc->y_dir;
+    int32_t  v_acc      = sc->v_start + (int32_t) (dy * sc->y_inc);
+    int      src_y      = mach64_scaler_accum_pixel(v_acc);
+    unsigned v_fraction = mach64_scaler_accum_fraction4(v_acc);
+    int      src_y_next;
+    int      x          = sc->dst_x + dx * sc->x_dir;
+    int32_t  h_acc      = sc->h_start + (int32_t) (dx * sc->x_inc);
+    int      src_x      = mach64_scaler_accum_pixel(h_acc);
+    unsigned h_fraction = mach64_scaler_accum_fraction4(h_acc);
+    int      src_x_next;
+    int      inhibits;
+    int64_t  addr;
+    rgba_t   src;
+
+    if (src_y < 0)
+        src_y = 0;
+    if (src_y >= sc->src_height)
+        src_y = sc->src_height - 1;
+    src_y_next = (src_y + 1 >= sc->src_height) ? (sc->src_height - 1) : (src_y + 1);
+
+    if ((x < 0) || (y < 0) || (x < sc->sc_left) || (x > sc->sc_right) || (y < sc->sc_top) || (y > sc->sc_bottom))
+        return;
+
+    if (src_x < 0)
+        src_x = 0;
+    if (src_x >= sc->src_width)
+        src_x = sc->src_width - 1;
+    src_x_next = (src_x + 1 >= sc->src_width) ? (sc->src_width - 1) : (src_x + 1);
+
+    inhibits = mach64_scaler_source_inhibits(ctx, sc->src_format, sc->src_base, sc->src_pitch, src_x, src_x_next, src_y,
+                                             src_y_next, h_fraction, v_fraction, sc->replicate);
+
+    if (sc->src_format == 11) {
+        int      uv_width    = (sc->src_width + 1) >> 1;
+        int32_t  uv_acc      = sc->uv_start + (int32_t) (dx * sc->xuv_inc);
+        int      uv_x        = mach64_scaler_accum_pixel(uv_acc);
+        unsigned uv_fraction = mach64_scaler_accum_fraction4(uv_acc);
+        int      uv_x_next;
+
+        if (uv_x < 0)
+            uv_x = 0;
+        if (uv_x >= uv_width)
+            uv_x = uv_width - 1;
+        uv_x_next = (uv_x + 1 >= uv_width) ? (uv_width - 1) : (uv_x + 1);
+
+        src = mach64_scaler_sample_yuyv(ctx, sc->src_base, sc->src_pitch, src_x, src_x_next, uv_x, uv_x_next, src_y,
+                                        src_y_next, h_fraction, uv_fraction, v_fraction, sc->replicate);
+    } else {
+        src = mach64_scaler_read_source(ctx, sc->src_format, sc->src_base, sc->src_pitch, src_x, src_y);
+        if (!sc->replicate) {
+            rgba_t below       = mach64_scaler_read_source(ctx, sc->src_format, sc->src_base, sc->src_pitch, src_x, src_y_next);
+            rgba_t right       = mach64_scaler_read_source(ctx, sc->src_format, sc->src_base, sc->src_pitch, src_x_next, src_y);
+            rgba_t below_right = mach64_scaler_read_source(ctx, sc->src_format, sc->src_base, sc->src_pitch, src_x_next,
+                                                           src_y_next);
+
+            src = mach64_scaler_lerp_rgba(mach64_scaler_lerp_rgba(src, below, v_fraction),
+                                          mach64_scaler_lerp_rgba(right, below_right, v_fraction), h_fraction);
+        }
+    }
+
+    addr = (int64_t) sc->dst_base + ((int64_t) y * sc->dst_pitch + x) * sc->dst_bpp;
+    if ((addr < 0) || (((uint64_t) addr + sc->dst_bpp) > vram_size))
+        return;
+    mach64_scaler_write_pixel(ctx, addr, sc->dst_format, x, y, src, inhibits);
+}
+
+/* KairoX86#237: the rectangle recorded for the GPU (kairo_gpu_mach64.h): each destination line inside the scissors a
+   row of the pixels it may draw, with the registers its pixels read */
+static void
+mach64_scaler_gpu(mach64_3d_t *ctx, const mach64_scaler_t *sc)
+{
+    const mach64_t *mach64           = ctx->mach64;
+    const uint32_t  cntl             = ctx->regs[SCALE_3D_CNTL >> 2];
+    uint32_t        record[KM_WORDS] = { 0 };
+    uint32_t        palettes[KAIRO_M64_PALETTE_WORDS];
+    uint32_t        rows[MACH64_3D_ROWS * KR_WORDS] = { 0 };
+    int             count = 0;
+    /* The pixels of a line, the same on each: across from dst_x by x_dir, inside the scissors and right of 0 */
+    int first = (sc->x_dir > 0) ? sc->dst_x : (sc->dst_x - (sc->dst_width - 1));
+    int last  = (sc->x_dir > 0) ? (sc->dst_x + (sc->dst_width - 1)) : sc->dst_x;
+
+    if (first < 0)
+        first = 0;
+    if (first < sc->sc_left)
+        first = sc->sc_left;
+    if (last > sc->sc_right)
+        last = sc->sc_right;
+    if (first > last)
+        return;
+
+    record[KM_FLAGS] = KAIRO_M64_SCALER | ((sc->x_dir < 0) ? KAIRO_M64_LEAD_LEFT : 0) | ((sc->y_dir < 0) ? KAIRO_M64_Y_UP : 0) |
+                       (sc->replicate ? KAIRO_M64_REPLICATE : 0) | (((cntl >> ALPHA_FOG_SHIFT) & 3) << 8);
+    record[KM_CNTL]         = cntl;
+    record[KM_DST_BASE]     = sc->dst_base;
+    record[KM_DST_PITCH]    = (uint32_t) sc->dst_pitch;
+    record[KM_DST_FORMAT]   = (uint32_t) sc->dst_format;
+    record[KM_DST_BPP]      = (uint32_t) sc->dst_bpp;
+    record[KM_CLR_CMP_CNTL] = mach64->clr_cmp_cntl;
+    record[KM_CLR_CMP_CLR]  = mach64->clr_cmp_clr;
+    record[KM_CLR_CMP_MASK] = mach64->clr_cmp_mask;
+    record[KM_WRITE_MASK]   = mach64->write_mask;
+    record[KM_DP_PIX_WIDTH] = mach64->dp_pix_width;
+    record[KS_SRC_BASE]     = sc->src_base;
+    record[KS_SRC_WIDTH]    = (uint32_t) sc->src_width;
+    record[KS_SRC_HEIGHT]   = (uint32_t) sc->src_height;
+    record[KS_SRC_PITCH]    = sc->src_pitch;
+    record[KS_SRC_FORMAT]   = (uint32_t) sc->src_format;
+    record[KS_X_INC]        = sc->x_inc;
+    record[KS_XUV_INC]      = sc->xuv_inc;
+    record[KS_Y_INC]        = sc->y_inc;
+    record[KS_H_START]      = (uint32_t) sc->h_start;
+    record[KS_UV_START]     = (uint32_t) sc->uv_start;
+    record[KS_V_START]      = (uint32_t) sc->v_start;
+    record[KS_DST_X]        = (uint32_t) sc->dst_x;
+    record[KS_DST_Y]        = (uint32_t) sc->dst_y;
+    record[KS_DP_MIX]       = mach64->dp_mix;
+    memcpy(palettes, ctx->texture_palette, 256 * 4);
+    memcpy(palettes + 256, mach64->svga.pallook, 256 * 4);
+
+    for (int dy = 0; dy < sc->dst_height; dy++) {
+        const int y = sc->dst_y + dy * sc->y_dir;
+        uint32_t *row;
+
+        if ((y < 0) || (y < sc->sc_top) || (y > sc->sc_bottom))
+            continue;
+        row            = &rows[count * KR_WORDS];
+        row[KR_Y]      = (uint32_t) y;
+        row[KR_FIRST]  = (uint32_t) first;
+        row[KR_END]    = (uint32_t) (last + 1);
+        row[KR_LEAD]   = (uint32_t) sc->dst_x;
+        mach64_3d_mark_changed(mach64, sc->dst_base + (uint32_t) (y * sc->dst_pitch + first) * (uint32_t) sc->dst_bpp,
+                               (uint32_t) (last + 1 - first) * (uint32_t) sc->dst_bpp);
+        if (++count == MACH64_3D_ROWS) {
+            kairo_mach64_gpu_draw(ctx->k_gpu, record, palettes, rows, count);
+            count = 0;
+        }
+    }
+    if (count)
+        kairo_mach64_gpu_draw(ctx->k_gpu, record, palettes, rows, count);
+}
+
 static void
 mach64_scaler_draw(mach64_3d_t *ctx)
 {
-    mach64_t       *mach64     = ctx->mach64;
-    const uint32_t *regs       = ctx->regs;
-    int             replicate  = !!(regs[SCALE_3D_CNTL >> 2] & SCALE_PIX_REP);
-    uint32_t        src_base   = regs[SCALE_Y_OFF >> 2] & ~7;
-    int             src_width  = regs[SCALE_WIDTH >> 2] & 0x1fff;
-    int             src_height = regs[SCALE_HEIGHT >> 2] & 0x1fff;
-    uint32_t        src_pitch  = regs[SCALE_Y_PITCH >> 2] & 0x1fff;
-    uint32_t        x_inc      = regs[SCALE_X_INC >> 2] & 0x001ffff0;
-    uint32_t        xuv_inc    = regs[SCALE_XUV_INC >> 2] & 0x001ffff0;
-    uint32_t        y_inc      = regs[SCALE_Y_INC >> 2] & 0x001ffff0;
-    int32_t         h_start    = mach64_3d_sign_extend(regs[SCALE_HACC >> 2], 21);
-    int32_t         uv_start   = mach64_3d_sign_extend(regs[SCALE_UV_HACC >> 2], 21);
-    int32_t         v_start    = mach64_3d_sign_extend(regs[SCALE_VACC >> 2], 21);
-    int             src_format = mach64_3d_src_format(mach64);
-    int             dst_format = mach64_3d_dst_format(mach64);
-    int             dst_bpp    = mach64_3d_bytes_per_pixel(dst_format);
-    int             dst_pitch  = ((mach64->dst_off_pitch >> 22) & 0x3ff) << 3;
-    uint32_t        dst_base   = (mach64->dst_off_pitch & 0xfffff) << 3;
-    int             dst_x      = mach64_3d_sign_extend(mach64->dst_y_x >> 16, 13);
-    int             dst_y      = mach64_3d_sign_extend(mach64->dst_y_x, 15);
-    int             dst_width  = (mach64->dst_height_width >> 16) & 0x1fff;
-    int             dst_height = mach64->dst_height_width & 0x1fff;
-    int             x_dir      = (mach64->dst_cntl & DST_X_DIR) ? 1 : -1;
-    int             y_dir      = (mach64->dst_cntl & DST_Y_DIR) ? 1 : -1;
-    int             sc_left    = mach64_3d_sign_extend(mach64->sc_left_right, 13);
-    int             sc_right   = mach64_3d_sign_extend(mach64->sc_left_right >> 16, 13);
-    int             sc_top     = mach64_3d_sign_extend(mach64->sc_top_bottom, 15);
-    int             sc_bottom  = mach64_3d_sign_extend(mach64->sc_top_bottom >> 16, 15);
-    uint64_t        vram_size  = (uint64_t) mach64->vram_mask + 1;
+    mach64_scaler_t sc;
     uint32_t        vacc_advanced;
 
-    if (src_width && src_height && src_pitch && dst_width && dst_height && mach64_scaler_source_bpp(src_format) && dst_bpp &&
-        mach64_scaler_destination_supported(dst_format)) {
-        for (int dy = 0; dy < dst_height; dy++) {
-            int      y          = dst_y + dy * y_dir;
-            int32_t  v_acc      = v_start + (int32_t) (dy * y_inc);
-            int      src_y      = mach64_scaler_accum_pixel(v_acc);
-            unsigned v_fraction = mach64_scaler_accum_fraction4(v_acc);
-            int      src_y_next;
-
-            if (src_y < 0)
-                src_y = 0;
-            if (src_y >= src_height)
-                src_y = src_height - 1;
-            src_y_next = (src_y + 1 >= src_height) ? (src_height - 1) : (src_y + 1);
-
-            for (int dx = 0; dx < dst_width; dx++) {
-                int      x          = dst_x + dx * x_dir;
-                int32_t  h_acc      = h_start + (int32_t) (dx * x_inc);
-                int      src_x      = mach64_scaler_accum_pixel(h_acc);
-                unsigned h_fraction = mach64_scaler_accum_fraction4(h_acc);
-                int      src_x_next;
-                int      inhibits;
-                int64_t  addr;
-                rgba_t   src;
-
-                if ((x < 0) || (y < 0) || (x < sc_left) || (x > sc_right) || (y < sc_top) || (y > sc_bottom))
-                    continue;
-
-                if (src_x < 0)
-                    src_x = 0;
-                if (src_x >= src_width)
-                    src_x = src_width - 1;
-                src_x_next = (src_x + 1 >= src_width) ? (src_width - 1) : (src_x + 1);
-
-                inhibits = mach64_scaler_source_inhibits(ctx, src_format, src_base, src_pitch, src_x, src_x_next, src_y,
-                                                         src_y_next, h_fraction, v_fraction, replicate);
-
-                if (src_format == 11) {
-                    int      uv_width    = (src_width + 1) >> 1;
-                    int32_t  uv_acc      = uv_start + (int32_t) (dx * xuv_inc);
-                    int      uv_x        = mach64_scaler_accum_pixel(uv_acc);
-                    unsigned uv_fraction = mach64_scaler_accum_fraction4(uv_acc);
-                    int      uv_x_next;
-
-                    if (uv_x < 0)
-                        uv_x = 0;
-                    if (uv_x >= uv_width)
-                        uv_x = uv_width - 1;
-                    uv_x_next = (uv_x + 1 >= uv_width) ? (uv_width - 1) : (uv_x + 1);
-
-                    src = mach64_scaler_sample_yuyv(ctx, src_base, src_pitch, src_x, src_x_next, uv_x, uv_x_next, src_y,
-                                                    src_y_next, h_fraction, uv_fraction, v_fraction, replicate);
-                } else {
-                    src = mach64_scaler_read_source(ctx, src_format, src_base, src_pitch, src_x, src_y);
-                    if (!replicate) {
-                        rgba_t below       = mach64_scaler_read_source(ctx, src_format, src_base, src_pitch, src_x, src_y_next);
-                        rgba_t right       = mach64_scaler_read_source(ctx, src_format, src_base, src_pitch, src_x_next, src_y);
-                        rgba_t below_right = mach64_scaler_read_source(ctx, src_format, src_base, src_pitch, src_x_next,
-                                                                       src_y_next);
-
-                        src = mach64_scaler_lerp_rgba(mach64_scaler_lerp_rgba(src, below, v_fraction),
-                                                      mach64_scaler_lerp_rgba(right, below_right, v_fraction), h_fraction);
-                    }
-                }
-
-                addr = (int64_t) dst_base + ((int64_t) y * dst_pitch + x) * dst_bpp;
-                if ((addr < 0) || (((uint64_t) addr + dst_bpp) > vram_size))
-                    continue;
-                mach64_scaler_write_pixel(ctx, addr, dst_format, x, y, src, inhibits);
+    if (mach64_scaler_setup(ctx, &sc)) {
+        if (ctx->k_gpu != NULL)
+            mach64_scaler_gpu(ctx, &sc);
+        else {
+            for (int dy = 0; dy < sc.dst_height; dy++) {
+                for (int dx = 0; dx < sc.dst_width; dx++)
+                    mach64_scaler_pixel(ctx, &sc, dx, dy);
             }
         }
     }
 
     /* SCALE_VACC moves on by the lines drawn. */
-    vacc_advanced              = (uint32_t) ((int64_t) v_start + (int64_t) dst_height * y_inc);
+    vacc_advanced              = (uint32_t) ((int64_t) sc.v_start + (int64_t) sc.dst_height * sc.y_inc);
     ctx->regs[SCALE_VACC >> 2] = (ctx->regs[SCALE_VACC >> 2] & ~0x001ffff0) | (vacc_advanced & 0x001ffff0);
 }
 
@@ -3309,12 +3582,18 @@ mach64_3d_init(mach64_t *mach64)
     mach64_3d_dither_table_init();
     ctx->mach64  = mach64;
     ctx->threads = ((mach64->render_threads == 2) || (mach64->render_threads == 4)) ? mach64->render_threads : 1;
+    /* KairoX86#237: with Hardware acceleration on, the rows drawn on the GPU */
+    if (kairo_gpu_on) {
+        ctx->k_gpu              = kairo_mach64_gpu_open(mach64->svga.vram, mach64->vram_mask, (int32_t *) &ctx->dither);
+        mach64->svga.kairo_touch = mach64_3d_svga_touch;
+    }
     return ctx;
 }
 
 void
 mach64_3d_close(mach64_3d_t *ctx)
 {
+    kairo_mach64_gpu_close(ctx->k_gpu); /* KairoX86#237 */
     mach64_3d_helpers_close(ctx);
     free(ctx);
 }

@@ -1378,17 +1378,10 @@ s3_virge_render_sync(svga_t *svga)
     virge_t *virge = (virge_t *) svga->priv;
 
     s3_virge_wait_fifo_idle(virge);
-    /* KairoX86#272: on the GPU, what the line shows drawn (all of video memory when an overlay reads it
-       from elsewhere too) */
-    if (virge->k_gpu != NULL) {
-        if (svga->overlay_on)
-            kairo_virge_gpu_touch(virge->k_gpu, 0, virge->vram_mask + 1);
-        else
-            kairo_virge_gpu_touch(virge->k_gpu,
-                                  (svga->force_old_addr ? svga->memaddr : svga->remap_func(svga, svga->memaddr)) & svga->vram_display_mask,
-                                  (uint32_t) (svga->hdisp + svga->scrollcache + 64) * 4);
+    /* KairoX86#272: on the GPU, what the line, the overlay and the cursor show is drawn by the display's touches
+       (vid_svga.c, KairoX86#237) */
+    if (virge->k_gpu != NULL)
         return;
-    }
     s3_virge_wait_3d_idle(virge);
 }
 

@@ -20,6 +20,7 @@
 #define VID_POWERVR_PCX_RENDER_H
 
 #include <stdint.h>
+#include <86box/kairo_gpu_powervr.h> /* KairoX86#269 */
 
 #define PCXR_MAX_W 1024
 #define PCXR_MAX_H 1024
@@ -76,5 +77,9 @@ int pcxr_pack(uint32_t packmode, uint32_t rgb, int x, int y, uint32_t *out);
    start of the row), written to out in the frame buffer's byte order.
    Returns the number of bytes written. */
 uint32_t pcxr_pack_run(uint32_t packmode, const uint32_t *src, int x, int n, int y, uint8_t *out);
+
+/* KairoX86#269: a prepared job's frame as the GPU kernel's lists (86box/kairo_gpu_powervr.h), valid until the next
+   call; 0, or -1 without memory */
+int pcxr_gpu_lists(pcxr_job_t *job, kairo_pvr_lists_t *out);
 
 #endif
