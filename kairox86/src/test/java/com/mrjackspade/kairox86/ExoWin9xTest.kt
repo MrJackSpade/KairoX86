@@ -119,8 +119,10 @@ class ExoWin9xTest {
         assertEquals("W98-P.vhd", ExoWin9x.dosboxParent("W98-C.vhd"))
         assertEquals("W98-P.vhd", ExoWin9x.dosboxParent(null))
         assertEquals("win98Jap.vhd", ExoWin9x.dosboxParent("win98Jap.vhd"))
-        assertEquals("dosbox/x98/parent/win98Jap.vhd", ExoWin9x.parentSource("win98Jap.vhd"))
-        assertEquals("86Box98/parent/W98-P.vhd", ExoWin9x.parentSource("W98-P.vhd"))
+        assertEquals("dosbox/x98/parent/win98Jap.vhd", ExoWin9x.parentSource("win98Jap.vhd", playCfg = false))
+        assertEquals("86Box98/parent/W98-P.vhd", ExoWin9x.parentSource("W98-P.vhd", playCfg = false))
+        // A Play.cfg game's image is one of eXo's 86Box ones, Windows ME's too (Wing Commander IV DVD)
+        assertEquals("86Box98/parent/ME-P.vhd", ExoWin9x.parentSource("ME-P.vhd", playCfg = true))
         val japanese = ExoWin9x.Windows("win98Jap.vhd", 16645, 16, 63, Win9xMachine.Machine(Win9xMachine.GA686BX, listOf(
             Win9xMachine.Setting("Video", "gfxcard", "s3_trio64_pci"), Win9xMachine.Setting("Video", "voodoo", "1"),
             Win9xMachine.Setting("3Dfx Voodoo Graphics", "type", "voodoo"), Win9xMachine.Setting("Sound", "sndcard", "sb16"),
@@ -217,6 +219,17 @@ class ExoWin9xTest {
         assertThrows(IllegalStateException::class.java) {
             ExoWin9x.translate(daytona.replace("W98-C.vhd", "../../x/W98.vhd"), members) { it }
         }
+    }
+
+    @Test
+    fun anImgmountOfAMissingFileMountsNothingAsInDosboxX() {
+        // Who Killed Taylor French: its Play.conf mounts an .iso its archive does not hold (it has the
+        // disc as .cue and .bin). DOSBox-X's IMGMOUNT fails and the game boots with no CD drive.
+        val mounts = ExoWin9x.dosboxMounts("[autoexec]\nIMGMOUNT e \"T.iso\" -t cdrom -ide 2m\nIMGMOUNT d \"T.vhd\"\n")
+        val config = ExoWin9x.translateDosbox(template, english, mounts, listOf("T/T.vhd", "T/T.cue", "T/T.bin"), { it }) { 1008L * 10 }.config
+        assertFalse(config, config.contains("cdrom_01_image_path"))
+        // The game's disk takes the first free position, which the failed mount did not take
+        assertTrue(config, config.contains("hdd_02_fn = T.vhd\nhdd_02_ide_channel = 0:1\n"))
     }
 
     @Test

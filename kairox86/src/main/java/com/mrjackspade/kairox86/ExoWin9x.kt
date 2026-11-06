@@ -210,8 +210,13 @@ object ExoWin9x {
     /** The Windows image a DOSBox-X game's Play.conf boots ([dosboxWindows]) as the image it runs on here. */
     fun dosboxParent(windows: String?): String = if (windows == null || windows.lowercase() in DOSBOX_ENGLISH_98) PARENT_86BOX else windows
 
-    /** Where the Windows image [name] is in eXo's emulators folder: eXo's 86Box image, or a DOSBox-X one. */
-    fun parentSource(name: String): String = if (name == PARENT_86BOX) "$EMULATOR_FOLDER/parent/$name" else "dosbox/x98/parent/$name"
+    /**
+     * Where the Windows image [name] is in eXo's emulators folder: a Play.cfg game's ([playCfg]) is
+     * one of eXo's 86Box images (`W98-P.vhd`, `ME-P.vhd`, ...), as is [PARENT_86BOX] for a DOSBox-X
+     * game; any other a DOSBox-X game boots is DOSBox-X's.
+     */
+    fun parentSource(name: String, playCfg: Boolean): String =
+        if (playCfg || name == PARENT_86BOX) "$EMULATOR_FOLDER/parent/$name" else "dosbox/x98/parent/$name"
 
     /**
      * The Windows image a DOSBox-X game runs on: its name ([dosboxParent]), its geometry (its VHD
@@ -229,7 +234,9 @@ object ExoWin9x {
      * `-ide` names, or else the first free (IDE_Auto: each controller's master, then its slave). The
      * disks DOSBox-X makes of its mounted archives at BOOT ([Mount.converted]) come last, each the
      * start's child ([startChild]) over its image. A drive on the tertiary or quaternary controller
-     * needs the machine to have it.
+     * needs the machine to have it. An `IMGMOUNT` naming a file the game's archive lacks mounts nothing,
+     * as in DOSBox-X: the command fails, that drive does not exist and takes no IDE position, and the
+     * rest of the start goes on (eXo's Who Killed Taylor French names an .iso its archive does not hold).
      */
     fun translateDosbox(template: String, windows: Windows, mounts: List<Mount>, members: Collection<String>, parentPath: (String) -> String,
                         sectors: (String) -> Long): Translation {
@@ -251,7 +258,10 @@ object ExoWin9x {
             taken[at] = true
             return at
         }
-        val placed = (mounts.filter { !it.converted } + mounts.filter { it.converted }).map { it to position(it) }
+        // An IMGMOUNT of a file that is not there fails in DOSBox-X and mounts nothing: every image of
+        // it must exist
+        val mounted = mounts.filter { mount -> mount.converted || mount.images.all { byName[it.substringAfterLast('/').lowercase()] != null } }
+        val placed = (mounted.filter { !it.converted } + mounted.filter { it.converted }).map { it to position(it) }
         val disks = placed.filter { !it.first.cdrom }.map { Triple(member(it.first.images.single()), it.second, it.first.converted) }
         val cds = placed.filter { it.first.cdrom }.map { member(it.first.images.first()) to it.second }
         // The tertiary and quaternary controllers' positions need the controller

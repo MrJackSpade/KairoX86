@@ -19,6 +19,8 @@
 // Options:
 //   --warmup <n>    run n frames before measuring (script frames count from the start)
 //   --shots <n>     write the picture every n measured frames as <work dir>/frame-<frame>.bmp
+//   --audio <file>  write the sound the first run makes, warmup included, as raw interleaved 16-bit
+//                   stereo at the rate the "audio " line gives, so a check can measure its level
 //   --hashes <file> write each frame's picture hash, sound hash and sound frames, warmup included,
 //                   and last the guest's state at the end (registers, tsc and all RAM)
 //   --seed <n>      the repeatable run's seed (default 1, so two runs repeat; 0 runs as the app does)
@@ -212,6 +214,7 @@ int main(int argc, char **argv) {
     long warmup = 0, shots = 0, runs = 1;
     uint32_t seed = 1;
     std::string hashes_path;
+    std::string audio_path;
     std::vector<MediaEvent> media;
     std::vector<std::array<long, 3>> places;
     std::string commands;
@@ -222,6 +225,7 @@ int main(int argc, char **argv) {
         if (option == "--warmup") warmup = std::atol(value.c_str());
         else if (option == "--shots") shots = std::atol(value.c_str());
         else if (option == "--hashes") hashes_path = value;
+        else if (option == "--audio") audio_path = value;
         else if (option == "--seed") seed = uint32_t(std::strtoul(value.c_str(), nullptr, 0));
         else if (option == "--runs") runs = std::atol(value.c_str());
         else if (option == "--media") {
@@ -268,6 +272,12 @@ int main(int argc, char **argv) {
         std::printf("start %.3f s\n", std::chrono::duration<double>(Clock::now() - started).count());
 
         std::vector<int16_t> audio(48000 * 2);
+        std::FILE *audio_out = nullptr;
+        if (!audio_path.empty() && run == 0) {
+            audio_out = std::fopen(audio_path.c_str(), "wb");
+            if (!audio_out) return fail("cannot write " + audio_path);
+            std::printf("audio %d Hz stereo 16-bit\n", machine->sample_rate());
+        }
         std::vector<double> times;
         times.reserve(size_t(frames));
         long loading = 0, last_loading = -1;
@@ -324,6 +334,7 @@ int main(int argc, char **argv) {
             uint64_t sound = 1469598103934665603ull;
             while ((got = machine->read_audio(audio.data(), uint32_t(audio.size() / 2))) > 0) {
                 total += got;
+                if (audio_out && std::fwrite(audio.data(), 4, got, audio_out) != got) return fail("cannot write " + audio_path);
                 sound = hash(reinterpret_cast<const uint8_t *>(audio.data()), size_t(got) * 4, sound);
             }
             uint32_t width = 0, height = 0;
@@ -377,6 +388,7 @@ int main(int argc, char **argv) {
         std::snprintf(state, sizeof(state), "state %016llx", (unsigned long long) machine->state());
         std::printf("%s\n", state);
         lines[size_t(run)].push_back(state);
+        if (audio_out && std::fclose(audio_out) != 0) return fail("cannot write " + audio_path);
         machine->close();
     }
 

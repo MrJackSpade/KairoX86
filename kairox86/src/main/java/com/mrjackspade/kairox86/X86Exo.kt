@@ -77,13 +77,13 @@ class X86Exo(private val context: Context, private val docs: X86Documents) {
      */
     private fun windows(tree: Uri, game: ExoWin9x.Game, asked: String, cancelled: AtomicBoolean, progress: (String) -> Unit): ExoWin9x.Windows {
         // The image by the name the collection gives it, however the Play.conf spells it
-        val name = checkNotNull(emulatorName(tree, game, ExoWin9x.parentSource(asked))) {
-            "${game.name}'s collection has no ${ExoWin9x.EMULATORS_ROOT}/${ExoWin9x.parentSource(asked)}"
+        val name = checkNotNull(emulatorName(tree, game, ExoWin9x.parentSource(asked, playCfg = false))) {
+            "${game.name}'s collection has no ${ExoWin9x.EMULATORS_ROOT}/${ExoWin9x.parentSource(asked, playCfg = false)}"
         }.substringAfterLast('/')
         val image = parentFile(game, name)
         if (!image.isFile) {
             progress(context.getString(FrontendR.string.kairo_disk_preparing, name))
-            unpackParent(tree, game, image, cancelled)
+            unpackParent(tree, game, image, playCfg = false, cancelled)
         }
         return Vhd.open(image).use { disk ->
             val volume = FatVolume(disk)
@@ -117,7 +117,7 @@ class X86Exo(private val context: Context, private val docs: X86Documents) {
         val parent = File(checkNotNull(config[X86Library.HARD_DISKS, "hdd_01_vhd_parent"]) { "${game.name}'s ${X86Library.CONFIG} names no Windows image" })
         if (!parent.isFile) {
             progress(context.getString(FrontendR.string.kairo_disk_preparing, parent.name))
-            unpackParent(tree, game, parent, cancelled)
+            unpackParent(tree, game, parent, gameConfig(tree, game).first == ExoWin9x.PLAY_86BOX, cancelled)
         }
     }
 
@@ -157,6 +157,10 @@ class X86Exo(private val context: Context, private val docs: X86Documents) {
                 }
                 check(!mount.cdrom && !mount.folder) { "${game.name}'s ${ExoWin9x.PLAY_DOSBOX_X} copies from drive ${copy.sourceDrive}:, which is not a hard disk" }
                 val name = mount.images.single().substringAfterLast('/')
+                // A drive whose IMGMOUNT failed (its image is not in the game's archive) does not exist,
+                // so DOSBox-X's xcopy from it copies nothing
+                val mounted = (2..MAX_DISKS).mapNotNull { config[X86Library.HARD_DISKS, "hdd_%02d_fn".format(it)] }
+                if (mounted.none { it.equals(name, ignoreCase = true) }) continue
                 val image = checkNotNull(dir.listFiles().orEmpty().firstOrNull { it.name.equals(name, ignoreCase = true) && it.isFile }) {
                     context.getString(FrontendR.string.kairo_disk_member_missing, name)
                 }
@@ -182,13 +186,13 @@ class X86Exo(private val context: Context, private val docs: X86Documents) {
     private fun mounts(tree: Uri, game: ExoWin9x.Game, folder: String, mounts: List<ExoWin9x.Mount>,
                        members: List<String>): Pair<List<ExoWin9x.Mount>, List<String>> {
         val all = members.toMutableList()
-        val made = mounts.map { mount ->
-            if (!mount.folder) return@map mount
+        val made = mounts.mapNotNull { mount ->
+            if (!mount.folder) return@mapNotNull mount
             val name = mount.images.single().substringAfterLast('/')
             check(name.endsWith(".zip", ignoreCase = true)) { context.getString(R.string.exo_folder_cd, game.name) }
-            val archive = checkNotNull(members.firstOrNull { it.substringAfterLast('/').equals(name, ignoreCase = true) }) {
-                context.getString(FrontendR.string.kairo_disk_member_missing, name)
-            }.substringAfterLast('/')
+            // A MOUNT of an archive that is not there fails in DOSBox-X and mounts nothing
+            val archive = members.firstOrNull { it.substringAfterLast('/').equals(name, ignoreCase = true) }
+                ?.substringAfterLast('/') ?: return@mapNotNull null
             val disk = archive.substringBeforeLast('.') + " (zip).vhd"
             if (docs.children(tree, folder).none { it.name == disk && !it.folder }) {
                 val source = unpackMember(tree, game, folder, archive, AtomicBoolean(false))
@@ -243,11 +247,12 @@ class X86Exo(private val context: Context, private val docs: X86Documents) {
         return File(context.filesDir, "exowin9x/$key/$name")
     }
 
-    private fun unpackParent(tree: Uri, game: ExoWin9x.Game, target: File, cancelled: AtomicBoolean) {
+    /** Unpacks the Windows image [target] of a Play.cfg game ([playCfg]) or a DOSBox-X one ([ExoWin9x.parentSource]). */
+    private fun unpackParent(tree: Uri, game: ExoWin9x.Game, target: File, playCfg: Boolean, cancelled: AtomicBoolean) {
         check(target.parentFile!!.isDirectory || target.parentFile!!.mkdirs()) { context.getString(R.string.machine_create_failed, target.path) }
         val partial = File(target.path + ".part")
         try {
-            val (input, crc) = checkNotNull(emulatorEntry(tree, game, ExoWin9x.parentSource(target.name))) { "${game.name}'s collection has no ${target.name}" }
+            val (input, crc) = checkNotNull(emulatorEntry(tree, game, ExoWin9x.parentSource(target.name, playCfg))) { "${game.name}'s collection has no ${target.name}" }
             input.use { source ->
                 val sum = CRC32()
                 partial.outputStream().use { output -> copy(source, output, sum, cancelled) }
