@@ -6,7 +6,9 @@
  * and then copied from the frame buffer into memory above 1 MB for the end state. Trapezoid fills through all 16
  * boolean operations, solid and patterned, opaque and transparent, with the screen-door masks; blits (BITBLT) in
  * every direction, overlapping, a smear, the fast blit and mono expansion from video memory (raster and block);
- * lines (AUTOLINE) through the operations and Gouraud lines with a Z buffer; host data (ILOAD) in colour and mono.
+ * lines (AUTOLINE) through the operations and Gouraud lines with a Z buffer; host data (ILOAD) in colour and mono;
+ * at 16 and 32 bits, Gouraud trapezoids (with and without the Z buffer) and textured ones (TEXTURE_TRAP, nearest and
+ * bilinear, plain and modulated), their edges slanted.
  * The engine's status is never read. Any other card returns at once.
  *
  * Copyright 2026 MrJackSpade. GPL-2.0-or-later.
@@ -203,6 +205,77 @@ static void p_host(u32 salt) {
     iload(AT_BLK | BMONOLEF | BOP(0xc) | TRANSC, 280, 20, 64, 60, 2 * 60, salt + 3);
 }
 
+enum { AR1 = 0x1c64, AR2 = 0x1c68, AR4 = 0x1c70, AR6 = 0x1c78, TMR0 = 0x2c00, TEXORG = 0x2c24, TEXWIDTH = 0x2c28,
+       TEXHEIGHT = 0x2c2c, TEXCTL = 0x2c30, TEXTRANS = 0x2c34, TEXFILTER = 0x2c58 };
+#define OP_TEXTURE_TRAP 0x6u
+#define SDXR            0x20u
+#define TEXBASE         0x1e0000u /* the texture: past the Z buffer's first 300 rows */
+
+/* A trapezoid from [xl, xr) at row y, h rows: its left edge moving right a pixel every 2 rows and its right edge
+   left one every 3 */
+static void trap(u32 ctl, u32 xl, u32 xr, u32 y, u32 h) {
+    reg(DWGCTL, ctl | SHFTZERO);
+    reg(AR0, 2);
+    reg(AR1, 0);
+    reg(AR2, (u32) -1);
+    reg(AR6, 3);
+    reg(AR4, 0);
+    reg(AR5, (u32) -1);
+    reg(SGN, SDXR);
+    reg(FXBNDRY, (xr << 16) | xl);
+    reg(YDSTLEN + GO, (y << 16) | h);
+}
+
+/* Shaded trapezoids (16 and 32 bits): Gouraud, without and through a 16-bit Z buffer (less-than), and textured
+   (64 x 64 RGB565, nearest and bilinear, with and without modulation by the shading) */
+static void p_shaded(u32 salt) {
+    reg(ZORG, ZBASE);
+    for (u32 i = 0; i < W * 300 / 2; i++)
+        ((volatile u32 *) (fb + ZBASE))[i] = 0xffffffffu;
+    for (u32 i = 0; i < 64 * 64 / 2; i++)
+        ((volatile u32 *) (fb + TEXBASE))[i] = pattern(i % 32, i / 32, salt);
+    for (u32 k = 0; k < 6; k++) {
+        reg(DR0, (0x2000u + k * 0x1800u) << 15);
+        reg(DR2, (u32) (((int) k - 3) * 0x40) << 15);
+        reg(DR3, 0x20u << 15);
+        reg(DR4, (0x20u + k * 0x20u) << 15);
+        reg(DR6, 0x1u << 14);
+        reg(DR7, (u32) -(0x1 << 13));
+        reg(DR8, (0x40u + k * 0x10u) << 15);
+        reg(DR10, (u32) -(0x1 << 14));
+        reg(DR11, 0x1u << 14);
+        reg(DR12, (0xe0u - k * 0x18u) << 15);
+        reg(DR14, 0x1u << 13);
+        reg(DR15, 0x1u << 13);
+        trap(OP_TRAP | ((k < 2) ? AT_I : (AT_ZI | ZLT)) | BOP(0xc), 20 + (k % 3) * 200, 200 + (k % 3) * 200,
+             10 + (k / 3) * 60, 120);
+    }
+    reg(TEXORG, TEXBASE);
+    reg(TEXWIDTH, 6u | (63u << 18));
+    reg(TEXHEIGHT, 6u | (63u << 18));
+    reg(TEXTRANS, 0);
+    for (u32 k = 0; k < 4; k++) {
+        reg(TEXCTL, 3u | (3u << 16) | (1u << 21) | ((k & 2) ? (1u << 29) : 0)); /* RGB565, pitch 64, NPCEN */
+        reg(TEXFILTER, k & 1);
+        reg(TMR0 + 6 * 4, (k * 5u) << 14);                    /* s */
+        reg(TMR0 + 7 * 4, (k * 3u) << 14);                    /* t */
+        reg(TMR0 + 0 * 4, (u32) (0x5000 + k * 0x1000));       /* ds/dx */
+        reg(TMR0 + 1 * 4, (u32) (0x1800 - k * 0x400));        /* ds/dy */
+        reg(TMR0 + 2 * 4, (u32) (0x1000 + k * 0x800));        /* dt/dx */
+        reg(TMR0 + 3 * 4, (u32) (0x4000 + k * 0x800));        /* dt/dy */
+        reg(TMR0 + 4 * 4, 0);
+        reg(TMR0 + 5 * 4, 0);
+        reg(TMR0 + 8 * 4, 0);
+        reg(DR0, (0x1000u + k * 0x2000u) << 15);
+        reg(DR2, 0);
+        reg(DR3, 0x10u << 15);
+        reg(DR4, 0xc0u << 15);
+        reg(DR8, (0x60u + k * 0x20u) << 15);
+        reg(DR12, 0xffu << 15);
+        trap(OP_TEXTURE_TRAP | ((k & 1) ? (AT_ZI | ZLT) : AT_I) | BOP(0xc), 20 + k * 150, 160 + k * 150, 200, 90);
+    }
+}
+
 /* The control aperture: the 16 KB BAR (BAR 0 on the Millennium and Mystique, BAR 1 on the Mystique 220 and
    Millennium II) */
 static int find(void) {
@@ -248,6 +321,12 @@ void test_main(void) {
         for (u32 p = 0; p < sizeof(passes) / sizeof(passes[0]); p++) {
             clear(0x20 + p + wi * 8);
             passes[p](p + wi * 8);
+            wait_ticks(4);
+            copy_out();
+        }
+        if ((bytes == 2) || (bytes == 4)) { /* the shaded trapezoids draw 16 and 32-bit pixels */
+            clear(0x30 + wi);
+            p_shaded(0x38 + wi);
             wait_ticks(4);
             copy_out();
         }

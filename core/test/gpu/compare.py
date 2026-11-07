@@ -8,7 +8,8 @@ fails). A mismatch writes a diff image beside the run and fails. Cards run --job
              [--frames n] [--shots n] [--a off|on] [--b off|on] [--jobs n]
 
 Each card runs on its bus's test board (the bus from the core's hardware list): PCI and AGP cards on the 686BX,
-MCA cards on the PS/2 Model 55 SX, the rest (ISA, VLB, the boards' own) on the 486, period boards whose BIOSes
+MCA cards (and the MCA XGA and XGA-2, add-ons beside the board's own VGA) on the PS/2 Model 80 type 3 (its CMOS
+unset, so F1 past POST's 161 and 163), the rest (ISA, VLB, the boards' own) on the 486, period boards whose BIOSes
 they suit; a card its board does not take runs on the first that does. The add-on 3D cards (Voodoo Graphics,
 Voodoo2) run beside the 686BX's S3 Trio64. The 3dfx cards' software side draws with 86Box's C rasteriser
 (their recompiler off: KairoX86#289). Every test ends halted at TEST_END: a run that does not get there
@@ -35,8 +36,14 @@ BOARDS = {
     '686bx': "machine = 686bx\ncpu_family = pentiumpro\ncpu_speed = 200000000\ncpu_multi = 3\nmem_size = 65536\n",
     # 8 MB: a Mach64 GX's aperture must fit above the memory and below an ISA card's 16 MB
     '486ap4': "machine = 486ap4\ncpu_family = i486dx2\ncpu_speed = 66666666\ncpu_multi = 2\nmem_size = 8192\n",
-    'ibmps2_m55ls': "machine = ibmps2_m55ls\ncpu_family = i386sx\ncpu_speed = 16000000\ncpu_multi = 1\nmem_size = 4096\n",
+    # A 486 for a short POST; 8 MB: the XGA test keeps its passes from 2 MB up, and the XGA's 1 MB aperture sits at
+    # 12 MB. Not the Model 55 SX or LS: their POST stops with error 102 under the recompiler (KairoX86#304)
+    'ibmps2_m80_type3': "machine = ibmps2_m80_type3\ncpu_family = i486dx2\ncpu_speed = 66666666\ncpu_multi = 2\n"
+                        "mem_size = 8192\n",
 }
+# A board's input: the Model 80's CMOS was never set (no reference diskette), so POST stops at 161 and 163 waiting
+# for F1, which it is given well after the prompt appears
+SCRIPT = {'ibmps2_m80_type3': '3100:+0x3b,3106:-0x3b'}
 # The add-on cards: each one's [Video] line, its own section and the card beside it, an S3 Trio64 (the Voodoos drawn
 # by the C rasteriser on the software side, KairoX86#289; the PowerVR PCX2, KairoX86#269), or the IBM VGA beside the
 # 8514/A, whose ports the S3 has too (KairoX86#238; IBM's, and ATI's 8514 Ultra with the Mach8 engine)
@@ -46,9 +53,13 @@ ADD_ONS = {
     'powervr': ('powervr = 1\n', '', 's3_trio64_pci'),
     '8514a': ('8514a = 1\n', '', 'vga'),
     '8514a_ati': ('8514a = 1\n', '\n[IBM 8514/A clone (ISA)]\nextensions = 1\n', 'vga'),
+    'xga_mca': ('xga = 1\n', '\n[XGA (MCA)]\ntype = 0\n', 'internal'),
+    'xga2_mca': ('xga = 1\n', '\n[XGA (MCA)]\ntype = 1\n', 'internal'),
 }
+# The add-ons' boards, where not the 686BX
+ADD_ON_BOARD = {'xga_mca': 'ibmps2_m80_type3', 'xga2_mca': 'ibmps2_m80_type3'}
 # Each bus's board; any other bus (ISA, VLB, none) the 486's
-BUS_BOARD = {'pci': '686bx', 'agp': '686bx', 'mca': 'ibmps2_m55ls'}
+BUS_BOARD = {'pci': '686bx', 'agp': '686bx', 'mca': 'ibmps2_m80_type3'}
 # Cards whose software path fails on their bus's board, each on one where it works until its bug is fixed
 CARD_BOARD = {
     'quadcolor': '686bx',  # KairoX86#286: on the 486AP4 it hands over no picture and the machine never boots
@@ -95,7 +106,7 @@ def run(args, folder, config, test, board):
     if board in NVR:
         shutil.copytree(NVR[board], machine / 'nvr')
     shutil.copy(Path(args.tests_folder) / f'{test}.img', machine)
-    out = subprocess.run([args.game_profile, args.roms, str(work), str(machine), str(args.frames), '-',
+    out = subprocess.run([args.game_profile, args.roms, str(work), str(machine), str(args.frames), SCRIPT.get(board, '-'),
                           '--shots', str(args.shots), '--hashes', str(folder / 'hashes.txt'), '--until-halt', TEST_END],
                          capture_output=True, text=True, cwd=os.path.dirname(args.game_profile))
     (folder / 'run.log').write_text(out.stdout + out.stderr)
@@ -195,7 +206,7 @@ def main():
     def board_of(card):
         """The card's test board: its bus's (BUS_BOARD), or else the first board that takes it."""
         if card in ADD_ONS:
-            return '686bx'
+            return ADD_ON_BOARD.get(card, '686bx')
         own = CARD_BOARD.get(card) or BUS_BOARD.get(bus.get(card), '486ap4')
         return own if card in takes[own] else next((b for b in BOARDS if card in takes[b]), None)
     cards = sorted(set().union(*takes.values()) - {'none', 'external', 'internal'}) + sorted(ADD_ONS)

@@ -1,6 +1,6 @@
 /*
- * KairoX86's IBM XGA drawing engine test (KairoX86#283, for #280): on the INMOS XGA (ISA), set up as instance 1 through
- * its ISA POS ports, its memory through a 1 MB aperture at 12 MB and its coprocessor in the ROM window (C800:7C80), a
+ * KairoX86's IBM XGA drawing engine test (KairoX86#283, for #280): on the MCA XGA or XGA-2 (found by its POS ID in
+ * its slot) or the INMOS XGA (ISA), set up as instance 1 through its POS ports, its memory through a 1 MB aperture at 12 MB and its coprocessor in the ROM window (C800:7C80), a
  * series of passes through the engine over a cleared memory: fills and copies through every mix (the arithmetic
  * ones among them), colour compares and plane masks; blits through 1 bpp pattern maps; area fill; copies between maps
  * of 1, 4, 8 and 16 bits a pixel; Bresenham lines in every octant; short-stroke vectors. After each pass the XGA's
@@ -13,7 +13,9 @@
 
 #define IO       0x2110u                          /* instance 1 */
 #define APERTURE ((volatile u32 *) 0x00c00000u)   /* 1 MB at 12 MB */
-#define COP      ((volatile u32 *) (0xc8000u + 0x7c00u + 0x80u))
+/* The coprocessor's registers in the ROM window at C800h: instance 1's, at 1C80h in the MCA XGA's 8 KB window and
+   7C80h in the INMOS card's 32 KB one */
+static volatile u32 *COP;
 #define MAPS     0x00400000u                      /* the maps' addresses: instance 1's 4 MB window */
 
 static void cop(u32 off, u32 v) { COP[off / 4] = v; }
@@ -133,11 +135,22 @@ static void p_lines(u32 salt) {
 
 void test_main(void) {
     __asm__ volatile("fninit");
-    /* The INMOS XGA: its ISA POS, instance 1, the 1 MB aperture at 12 MB, the coprocessor at C800:7C80 */
-    outb(0x96, 0x09);
+    /* An MCA XGA or XGA-2 (POS ID 8FDBh or 8FDAh) in the slot it answers in, else the INMOS XGA through its ISA POS
+       (slot 1's setup); either: instance 1, the 1 MB aperture at 12 MB, the coprocessor in the ROM window at C800h */
+    u8 slot = 0x09;
+    for (u8 s = 0; s < 8; s++) {
+        outb(0x96, (u8) (0x08 | s));
+        const u16 id = (u16) (inb(0x100) | (inb(0x101) << 8));
+        if ((id == 0x8fdbu) || (id == 0x8fdau)) {
+            slot = (u8) (0x08 | s);
+            break;
+        }
+    }
+    COP = (volatile u32 *) ((slot == 0x09) ? 0xc8000u + 0x7c80u : 0xc8000u + 0x1c80u);
+    outb(0x96, slot);
     outb(0x105, 0x0c);
     outb(0x104, 0x00);
-    outb(0x102, 0x41);
+    outb(0x102, 0x43); /* on, instance 1 (the INMOS card forces it), the ROM window at C800h */
     if (inb(0x102) == 0xff)
         return;
     outb(IO + 0, 0x04); /* extended graphics */
