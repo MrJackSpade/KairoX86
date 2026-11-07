@@ -287,7 +287,9 @@ get_next_qc2_pixel(quadcolor_t *quadcolor)
     quadcolor->qc2mask = ~quadcolor->qc2mask;
     uint8_t pixel = (quadcolor->vram_2[quadcolor->qc2idx] & mask) >> (quadcolor->qc2mask & 4);
 
-    quadcolor->qc2idx += quadcolor->qc2mask >> 7;
+    /* KairoX86#307: the second plane's 64K address counter wraps (it ran past vram_2 while no vertical sync came
+       to reset it) */
+    quadcolor->qc2idx = (quadcolor->qc2idx + (quadcolor->qc2mask >> 7)) & 0xffff;
 
     return quadcolor->quadcolor_2_oe ? pixel : 0;
 }
@@ -298,7 +300,7 @@ quadcolor_skip_qc2(quadcolor_t *quadcolor, uint32_t pixels)
 {
     for (uint32_t i = 0; i < pixels; i++) {
         quadcolor->qc2mask = ~quadcolor->qc2mask;
-        quadcolor->qc2idx += quadcolor->qc2mask >> 7;
+        quadcolor->qc2idx  = (quadcolor->qc2idx + (quadcolor->qc2mask >> 7)) & 0xffff; /* KairoX86#307 */
     }
 }
 

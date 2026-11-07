@@ -58,6 +58,49 @@
 #include "kairo/startup_typer.h"
 #include "x86_machine.h"
 
+#ifdef _WIN32
+#include <windows.h>
+#include <psapi.h>
+
+// A crash's report (KairoX86#307): the exception, then the stack unwound from the faulting frame, each frame as its
+// module and offset (for llvm-symbolizer), on stderr. The crash then goes on as it would: the process still ends
+// with the exception's code.
+static void report_address(const char *what, DWORD64 address) {
+    HMODULE module = nullptr;
+    char    name[MAX_PATH] = "?";
+    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           reinterpret_cast<LPCSTR>(address), &module))
+        GetModuleFileNameA(module, name, sizeof(name));
+    std::fprintf(stderr, "crash %s %s+0x%llx\n", what, name,
+                 (unsigned long long) (address - reinterpret_cast<DWORD64>(module)));
+}
+
+static LONG WINAPI report_crash(EXCEPTION_POINTERS *info) {
+    std::fprintf(stderr, "crash: exception %08lx at %p, thread %lu\n", info->ExceptionRecord->ExceptionCode,
+                 info->ExceptionRecord->ExceptionAddress, GetCurrentThreadId());
+    if (info->ExceptionRecord->ExceptionCode == EXCEPTION_ACCESS_VIOLATION)
+        std::fprintf(stderr, "crash: %s of %p\n", info->ExceptionRecord->ExceptionInformation[0] ? "write" : "read",
+                     reinterpret_cast<void *>(info->ExceptionRecord->ExceptionInformation[1]));
+    CONTEXT context = *info->ContextRecord;
+    for (int depth = 0; (depth < 48) && context.Rip; depth++) {
+        report_address("frame", context.Rip);
+        DWORD64           base     = 0;
+        PRUNTIME_FUNCTION function = RtlLookupFunctionEntry(context.Rip, &base, nullptr);
+        if (!function) {
+            // A leaf: its return address is at the stack's top
+            context.Rip = *reinterpret_cast<DWORD64 *>(context.Rsp);
+            context.Rsp += 8;
+            continue;
+        }
+        void   *handler_data = nullptr;
+        DWORD64 frame        = 0;
+        RtlVirtualUnwind(UNW_FLAG_NHANDLER, base, context.Rip, function, &context, &handler_data, &frame, nullptr);
+    }
+    std::fflush(stderr);
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+#endif
+
 namespace fs = std::filesystem;
 
 namespace {
@@ -207,6 +250,9 @@ struct Diag {
 #endif
 
 int main(int argc, char **argv) {
+#ifdef _WIN32
+    SetUnhandledExceptionFilter(report_crash);
+#endif
     if (argc < 6) return fail("usage: game_profile <ROM set> <work dir> <machine folder> <frames> <script> [options]");
     const fs::path work = fs::path(reinterpret_cast<const char8_t *>(argv[2]));
     const fs::path source = fs::path(reinterpret_cast<const char8_t *>(argv[3]));
