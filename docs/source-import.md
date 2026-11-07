@@ -99,6 +99,7 @@
 - **`kairox86-gpu-olivetti` group:** the Olivetti OGC's 16-line text (underline included) and 640 x 400 graphics on the GPU (KairoX86#245). Checked by `core/test/gpu/cgaext.c`.
 - **`kairox86-gpu-compaq` group:** the Compaq CGA's 350-line text on the GPU as text cells (KairoX86#243). Checked by `core/test/gpu/cgaext.c`.
 - **`kairox86-gpu-jega` group:** the JEGA's Japanese text on the GPU as text cells through a 33-colour line palette, a double-byte character two cells (KairoX86#262). Checked by `core/test/gpu/jega.c`.
+- **`kairox86-gpu-genius-text` group:** the Genius VHR's text on the GPU when it is the line's only layer (KairoX86#255), when its transparent drawing comes out as plain text; text over graphics stays the CPU's.
 
 ## 86Box's translations
 

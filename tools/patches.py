@@ -5336,6 +5336,15 @@ KAIROX86_GPU_JEGA = [
      '        int        bg            = 0;\n\n        /* KairoX86#262: the GPU draws the line, else the CPU (after what the GPU still has to draw there) */\n        if (jega_render_text_gpu(jega, p, vram, *sc, *hdisp, *scrollcache, memaddr, mask, blinked, crtcreset, attrblink))\n            return;\n        if (kairo_gpu_on)\n            kairo_gpu_scan_touch(buffer32, (uint32_t) (p - buffer32->dat), (uint32_t) (buffer32->w - *x_add));\n\n'),
 ]
 
+# KairoX86#255: the Genius VHR's text on the GPU when it is the line's only layer (no graphics under the MDA text, no
+# MDA text over the CGA's), when its transparent drawing comes out as plain text: as text cells (9 dots, or 8 doubled),
+# coloured as the CPU colours them. Text over graphics stays the CPU's.
+KAIROX86_GPU_GENIUS_TEXT = [
+    ('86box/src/video/vid_genius.c',
+     '\n    for (int x = 0; x < w; x++) {\n',
+     "\n    /* KairoX86#255: text that is the line's only layer (no graphics under the MDA text, no MDA text over the CGA's)\n       draws as plain text, its background pixels the line's own: the GPU draws it as text cells, coloured as the CPU\n       colours them. Not while the card is disabled, when its dots and its ninth column take different colours. */\n    if (kairo_gpu_on && genius->enabled && (ctrl & 8) && (w > 0) && (mda ? !(genius->cga_ctrl & 8) : !(genius->mda_ctrl & 8))) {\n        bitmap_t *bm    = buffer32;\n        uint32_t *cells = kairo_gpu_scan(bm, bm->kairo_gpu, (uint32_t) (bm->line[dl] - bm->dat), KAIRO_SCAN_TEXT,\n                                         (uint32_t) (w * cw * (cols80 ? 1 : 2)), (uint32_t) w, pal_lookup, 256, (uint32_t) cw, 0,\n                                         cols80 ? 0 : KAIRO_SCAN_WIDE);\n        for (int x = 0; x < w; x++) {\n            chr        = framebuf[(addr + 2 * x) & 0x3FFF];\n            attr       = framebuf[(addr + 2 * x + 1) & 0x3FFF];\n            drawcursor = ((memaddr == cursoraddr) && cursorline && genius->enabled && (ctrl & 8));\n            switch (crtc[10] & 0x60) {\n                case 0x00:\n                    drawcursor = drawcursor && (genius->blink & 16);\n                    break;\n                case 0x60:\n                    drawcursor = drawcursor && (genius->blink & 32);\n                    break;\n                default:\n                    break;\n            }\n            blink = ((genius->blink & 16) && (ctrl & 0x20) && (attr & 0x80) && !drawcursor);\n            if (ctrl & 0x20)\n                attr &= 0x7F;\n            const uint32_t inv = (genius->genius_control & 0x20) ? 15 : 0;\n            if (mda && (scanline == charh) && ((attr & 7) == 1)) {\n                /* The underline: every dot one colour */\n                const uint32_t u = (uint32_t) mdaattr[attr][blink][1] ^ inv;\n                cells[x]         = 0xff | (u << 8) | (u << 16) | (1u << 24);\n                continue;\n            }\n            const uint32_t dat   = mda ? fontdat8x12[chr][scanline] : fontdat[chr][scanline];\n            uint32_t       fg    = (uint32_t) mdaattr[attr][blink][1] ^ inv;\n            uint32_t       bg    = (uint32_t) mdaattr[attr][blink][0] ^ inv;\n            const bool     ninth = (cw == 9) && ((chr & ~0x1f) == 0xc0) && (dat & 1);\n            if (drawcursor) {\n                fg ^= (uint32_t) mdaattr[attr][0][1];\n                bg ^= (uint32_t) mdaattr[attr][0][1];\n            }\n            cells[x] = dat | ((fg & 0xff) << 8) | ((bg & 0xff) << 16) | (ninth ? (1u << 24) : 0);\n            ++memaddr;\n        }\n        kairo_gpu_scan_commit();\n        return;\n    }\n\n    for (int x = 0; x < w; x++) {\n"),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -5438,6 +5447,7 @@ PATCHES = {
     'kairox86-gpu-olivetti': KAIROX86_GPU_OLIVETTI,
     'kairox86-gpu-compaq': KAIROX86_GPU_COMPAQ,
     'kairox86-gpu-jega': KAIROX86_GPU_JEGA,
+    'kairox86-gpu-genius-text': KAIROX86_GPU_GENIUS_TEXT,
 }
 
 ADDED = [

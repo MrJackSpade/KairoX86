@@ -457,6 +457,53 @@ genius_textline(genius_t *genius, uint8_t background, int mda, int cols80)
     else
         cursorline = ((crtc[10] & 0x1F) <= scanline) && ((crtc[11] & 0x1F) >= scanline);
 
+    /* KairoX86#255: text that is the line's only layer (no graphics under the MDA text, no MDA text over the CGA's)
+       draws as plain text, its background pixels the line's own: the GPU draws it as text cells, coloured as the CPU
+       colours them. Not while the card is disabled, when its dots and its ninth column take different colours. */
+    if (kairo_gpu_on && genius->enabled && (ctrl & 8) && (w > 0) && (mda ? !(genius->cga_ctrl & 8) : !(genius->mda_ctrl & 8))) {
+        bitmap_t *bm    = buffer32;
+        uint32_t *cells = kairo_gpu_scan(bm, bm->kairo_gpu, (uint32_t) (bm->line[dl] - bm->dat), KAIRO_SCAN_TEXT,
+                                         (uint32_t) (w * cw * (cols80 ? 1 : 2)), (uint32_t) w, pal_lookup, 256, (uint32_t) cw, 0,
+                                         cols80 ? 0 : KAIRO_SCAN_WIDE);
+        for (int x = 0; x < w; x++) {
+            chr        = framebuf[(addr + 2 * x) & 0x3FFF];
+            attr       = framebuf[(addr + 2 * x + 1) & 0x3FFF];
+            drawcursor = ((memaddr == cursoraddr) && cursorline && genius->enabled && (ctrl & 8));
+            switch (crtc[10] & 0x60) {
+                case 0x00:
+                    drawcursor = drawcursor && (genius->blink & 16);
+                    break;
+                case 0x60:
+                    drawcursor = drawcursor && (genius->blink & 32);
+                    break;
+                default:
+                    break;
+            }
+            blink = ((genius->blink & 16) && (ctrl & 0x20) && (attr & 0x80) && !drawcursor);
+            if (ctrl & 0x20)
+                attr &= 0x7F;
+            const uint32_t inv = (genius->genius_control & 0x20) ? 15 : 0;
+            if (mda && (scanline == charh) && ((attr & 7) == 1)) {
+                /* The underline: every dot one colour */
+                const uint32_t u = (uint32_t) mdaattr[attr][blink][1] ^ inv;
+                cells[x]         = 0xff | (u << 8) | (u << 16) | (1u << 24);
+                continue;
+            }
+            const uint32_t dat   = mda ? fontdat8x12[chr][scanline] : fontdat[chr][scanline];
+            uint32_t       fg    = (uint32_t) mdaattr[attr][blink][1] ^ inv;
+            uint32_t       bg    = (uint32_t) mdaattr[attr][blink][0] ^ inv;
+            const bool     ninth = (cw == 9) && ((chr & ~0x1f) == 0xc0) && (dat & 1);
+            if (drawcursor) {
+                fg ^= (uint32_t) mdaattr[attr][0][1];
+                bg ^= (uint32_t) mdaattr[attr][0][1];
+            }
+            cells[x] = dat | ((fg & 0xff) << 8) | ((bg & 0xff) << 16) | (ninth ? (1u << 24) : 0);
+            ++memaddr;
+        }
+        kairo_gpu_scan_commit();
+        return;
+    }
+
     for (int x = 0; x < w; x++) {
 #if 0
     if ((genius->genius_charh & 0x10) && ((addr + 2 * x) > 0x0FFF))
