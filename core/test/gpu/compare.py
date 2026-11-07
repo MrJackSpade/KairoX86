@@ -46,15 +46,42 @@ BOARDS = {
     # hooks it (the later Award BIOSes of the 486AP4 and 686BX hand it a stub their memory test then wipes)
     'asus386': "machine = asus386\ncpu_family = i386dx\ncpu_speed = 33333333\ncpu_multi = 1\nmem_size = 4096\n",
 }
+# The machines with their own video (KairoX86#311-#324), each its first CPU and speed and its most memory (the 286s their least: a shorter memory test): the 8086
+# machines (8088, 8086, 80186, 286: no 32-bit code) boot the 8086 tests (make_tests.py, rt86.S) from a 360 KB drive
+BOARDS_8086 = {
+    'ibmpcjr': ('8088', 4772728, 640), 'ibmpcjx': ('8088', 4772728, 512), 'tandy1000sx': ('8088', 4772728, 640),
+    'tandy1000hx': ('8088', 4772728, 640), 'tandy1000sl2': ('8086', 7159092, 768), 't1000': ('8088', 4772728, 1280),
+    't1200': ('8086', 7159092, 2048), 'pc1512': ('8086', 8000000, 640), 'pc1640': ('8086', 7159092, 640),
+    'pc2086': ('8086', 7159092, 640), 'pc3086': ('8086', 7159092, 640), 'pc200': ('8086', 7159092, 640),
+    'ppc512': ('8086', 7159092, 640), 'ibm5140': ('80c88', 4772728, 640), 'v86p': ('8086', 7159092, 1024),
+    'ibmps2_m25': ('8086', 8000000, 640), 'ibmps2_m30': ('8086', 8000000, 640), 'ibm3270pc': ('8088', 4772728, 640),
+    'ibm5550': ('8086', 8000000, 640), 'portableiii': ('286', 8000000, 640), 't3100e': ('286', 12500000, 1024),
+    'tandy2000': ('80186', 8000000, 768),
+}
+for _m, (_family, _speed, _mem) in BOARDS_8086.items():
+    BOARDS[_m] = f"machine = {_m}\ncpu_family = {_family}\ncpu_speed = {_speed}\ncpu_multi = 1\nmem_size = {_mem}\n"
+# The Cyrix MediaGX's board (KairoX86#315), a 586: the tests the other boards run
+BOARDS['p5gxm'] = "machine = p5gxm\ncpu_family = mediagxm\ncpu_speed = 166666666\ncpu_multi = 5\nmem_size = 65536\n"
+# Boards whose POST takes longer than the batch's frames: the Toshiba T3100e's memory test
+BOARD_FRAMES = {'t3100e': 12000}
+# The 8086 tests' floppies (make_tests.py)
+FLOPPY_360K = 368640
 # A board's input: the Model 80's CMOS was never set (no reference diskette), so POST stops at 161 and 163 waiting
 # for F1, which it is given well after the prompt appears
 SCRIPT = {'ibmps2_m80_type3': '3100:+0x3b,3106:-0x3b',
+          # its battery reported discharged: any key to go on
+          't1000': '300:+0x39,306:-0x39,600:+0x39,606:-0x39',
+          # The 8086 machines' unset CMOS or configuration, each prompt answered as it asks (F1, or Enter to keep the
+          # floppy type offered), at a few points through a POST of unknown length
+          't1200': '800:+0x1c,806:-0x1c,1600:+0x1c,1606:-0x1c,2400:+0x1c,2406:-0x1c',
+          **{m: '800:+0x3b,806:-0x3b,1600:+0x3b,1606:-0x3b,2400:+0x3b,2406:-0x3b,3200:+0x3b,3206:-0x3b,4000:+0x3b,4006:-0x3b'
+             for m in ('ibm3270pc', 'v86p', 'ibmps2_m30', 'portableiii', 't3100e', 'ibm5140')},
           # its CMOS unset too: "CMOS checksum error", F1 to continue
           'nupro592': '600:+0x3b,606:-0x3b',
           # its CMOS unset: F1 runs Setup, left without saving (Esc, Y, Enter)
           'asus386': '200:+0x3b,206:-0x3b,400:+0x01,406:-0x01,500:+0x15,506:-0x15,520:+0x1c,526:-0x1c'}
 # Boards' own graphics chips (gfxcard = internal), each named as its chip's device is, on its board
-ONBOARD = {'chips_69000_onboard': 'nupro592'}
+ONBOARD = {'chips_69000_onboard': 'nupro592', **{f'{m}_video': m for m in BOARDS_8086}, 'p5gxm_video': 'p5gxm'}
 # The add-on cards: each one's [Video] line, its own section and the card beside it, an S3 Trio64 (the Voodoos drawn
 # by the C rasteriser on the software side, KairoX86#289; the PowerVR PCX2, KairoX86#269), or the IBM VGA beside the
 # 8514/A, whose ports the S3 has too (KairoX86#238; IBM's, and ATI's 8514 Ultra with the Mach8 engine)
@@ -81,6 +108,9 @@ CARD_BOARD = {
 VOODOO_FAMILY = ('voodoo', 'velocity', 'ctl3d_banshee', 'q3d_raven')
 # Where every test ends (runtime.c): its HLT with interrupts off, as the machine's stop reports it
 TEST_END = '0000:8003'
+# The 8088, 8086 and 80186 cores (808x) stop one byte on, past the same HLT (rt86.S keeps runtime.c's layout); the
+# 286s' stop where the others do
+TEST_END_8086 = '0000:8004'
 # Each board's saved CMOS (booting A: first), from the repository's test set, where it has one
 NVR = {'486ap4': Path(__file__).resolve().parents[3] / 'roms' / 'uitest' / 'dos486' / 'nvr'}
 
@@ -102,9 +132,12 @@ def machine_config(board, card, test, accel, name):
         # Banshee is instance 1)
         voodoo = f"\n[{name}]\nrecompiler = 0\n\n[{name} #1]\nrecompiler = 0\n"
     return (f"[Machine]\n{BOARDS[board]}cpu_use_dynarec = 1\nfpu_type = internal\ntime_sync = disabled\n\n"
-            f"[Video]\n{video}{voodoo}\n[Input devices]\nkeyboard_type = keyboard_ps2\nmouse_type = none\n\n"
+            f"[Video]\n{video}{voodoo}\n[Input devices]\n"
+            # The 8086 machines take their own keyboards (an XT-class board reads no PS/2 keyboard)
+            + ("" if board in BOARDS_8086 else "keyboard_type = keyboard_ps2\n") + "mouse_type = none\n\n"
             f"[Storage controllers]\nhdc = none\n\n"
-            f"[Floppy and CD-ROM drives]\nfdd_01_type = 35_2hd\nfdd_01_fn = {test}.img\nfdd_02_type = none\n\n"
+            f"[Floppy and CD-ROM drives]\nfdd_01_type = {'525_2dd' if board in BOARDS_8086 else '35_2hd'}\n"
+            f"fdd_01_fn = {test}.img\nfdd_02_type = none\n\n"
             f"[KairoX86]\nhardware_acceleration = {1 if accel == 'on' else 0}\n")
 
 
@@ -120,15 +153,16 @@ def run(args, folder, config, test, board):
     if board in NVR:
         shutil.copytree(NVR[board], machine / 'nvr')
     shutil.copy(Path(args.tests_folder) / f'{test}.img', machine)
-    out = subprocess.run([args.game_profile, args.roms, str(work), str(machine), str(args.frames), SCRIPT.get(board, '-'),
-                          '--shots', str(args.shots), '--hashes', str(folder / 'hashes.txt'), '--until-halt', TEST_END],
+    out = subprocess.run([args.game_profile, args.roms, str(work), str(machine), str(max(args.frames, BOARD_FRAMES.get(board, 0))), SCRIPT.get(board, '-'),
+                          '--shots', str(args.shots), '--hashes', str(folder / 'hashes.txt'), '--until-halt',
+                          TEST_END_8086 if BOARDS_8086.get(board, ('286',))[0] != '286' else TEST_END],
                          capture_output=True, text=True, cwd=os.path.dirname(args.game_profile))
     (folder / 'run.log').write_text(out.stdout + out.stderr)
     if out.returncode != 0:
         raise RuntimeError(f'game_profile failed ({out.returncode}): {(out.stdout + out.stderr).strip()[-300:]}')
     # The test ran to its end: a machine stuck in its BIOS, or a test that never finished, matches itself but tests nothing
     if not any(line.startswith('halted ') for line in out.stdout.splitlines()):
-        raise RuntimeError(f'the test did not reach its end in {args.frames} frames')
+        raise RuntimeError(f'the test did not reach its end in {max(args.frames, BOARD_FRAMES.get(board, 0))} frames')
     # A run with Hardware acceleration on must have run on the GPU: the machine names it (KairoX86#232)
     started = next((line[len('started '):] for line in out.stdout.splitlines() if line.startswith('started ')), None)
     if started is None:
@@ -237,7 +271,11 @@ def main():
             print(f'{card}: no test board takes it', flush=True)
             return [(card, '-', 'no test board takes it')]
         found = []
+        # The 8086 machines boot the 8086 tests only, the others the rest
+        for8086 = board in BOARDS_8086
         for test in tests:
+            if ((Path(args.tests_folder) / f'{test}.img').stat().st_size == FLOPPY_360K) != for8086:
+                continue
             folder = out / card / test
             try:
                 ha, wa = run(args, folder / f'a-{args.a}', machine_config(board, card, test, args.a, names.get(card)), test, board)

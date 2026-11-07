@@ -4,10 +4,15 @@
  * 4 GB limit, so the program reaches a card's linear framebuffer above 1 MB while it still calls the BIOS),
  * and jumps to the program with DS = ES = 0.
  *
- * SECTORS when it is assembled (core/test/gpu/make_tests.py). A 1.44 MB floppy: 18 sectors a track, 2 heads.
+ * SECTORS when it is assembled (core/test/gpu/make_tests.py). A 1.44 MB floppy: 18 sectors a track, 2 heads; SPT
+ * another count (9 for the 360 KB floppies of the 8086 machines' tests). With LOADER_8086 (those machines: no 32-bit
+ * registers, no protected mode) the program is jumped to without the A20 line or unreal mode.
  *
  * Copyright 2026 MrJackSpade. GPL-2.0-or-later.
  */
+#ifndef SPT
+#define SPT 18
+#endif
     .code16
     .text
     .globl _start
@@ -28,7 +33,7 @@ _start:
     je      2f
     movw    %si, %ax
     xorw    %dx, %dx
-    movw    $18, %cx
+    movw    $SPT, %cx
     divw    %cx                     /* ax = track * 2 + head, dx = sector - 1 */
     movb    %dl, %cl
     incb    %cl                     /* sector */
@@ -47,6 +52,12 @@ _start:
     incw    %si
     jmp     1b
 
+#ifdef LOADER_8086
+2:  xorw    %ax, %ax
+    movw    %ax, %ds
+    movw    %ax, %es
+    ljmp    $0, $0x8000
+#else
     /* The A20 line on (the keyboard controller's output port), so addresses with bit 20 set reach memory
        there and not 1 MB lower; checked: 0:0500h and FFFFh:0510h are the same byte while it is off */
 2:  call    kbc_wait
@@ -99,6 +110,7 @@ a20_fail:
     movw    $0x0e41, %ax            /* 'A' on the screen, then stop */
     int     $0x10
     jmp     5f
+#endif
 
 fail:
     movw    $0x0e46, %ax            /* 'F' on the screen, then stop */
@@ -106,6 +118,7 @@ fail:
 5:  hlt
     jmp     5b
 
+#ifndef LOADER_8086
     .p2align 3
 gdt:
     .quad   0
@@ -113,6 +126,7 @@ gdt:
 gdt_desc:
     .word   gdt_desc - gdt - 1
     .long   gdt
+#endif
 drive:
     .byte   0
 

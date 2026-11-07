@@ -38,6 +38,7 @@
 #include <86box/timer.h>
 #include <86box/pit.h>
 #include <86box/video.h>
+#include <86box/kairo_gpu.h> /* KairoX86#318 */
 #include <86box/vid_mcga.h>
 #include "cpu.h"
 #include "808x_marty_86box.h"
@@ -917,10 +918,98 @@ mcga_render_mode13(mcga_t *dev, int y)
             MCGA_LINE(dev, y)[x] = dev->palette[dev->vram[(row + (x >> 1)) & 0xffff]];
 }
 
+/* KairoX86#318: picture row y (mcga_render_line's, read as each mode reads it) to the GPU's scanout queue, in the
+   colours the CPU gives it; returns whether the GPU draws it. The CRT's only: the LCD panel composes its own picture
+   from rows it keeps (mcga_lcd_present). */
+static bool
+mcga_render_line_gpu(mcga_t *dev, int y)
+{
+    if (!kairo_gpu_on || dev->lcd || !(dev->cga_mode & MCGA_CGA_ENABLE))
+        return false;
+    bitmap_t      *bitmap = buffer32;
+    const uint32_t out    = (uint32_t) (buffer32->line[y] - bitmap->dat);
+    const bool     wide   = mcga_is_double_width(dev, 0) != 0;
+    const uint16_t sa     = ((dev->crtc[0x0c] << 8) | dev->crtc[0x0d]);
+
+    switch (mcga_mode(dev)) {
+        case MCGA_MODE_CGA4: { /* 2 bits a pixel, twice across when wide */
+            const int      source_y = y >> 1;
+            const uint32_t row      = (uint32_t) (sa << 1) + ((source_y & 1) * 0x2000) + ((source_y >> 1) * 80);
+            uint32_t       colours[4];
+            for (unsigned pixel = 0; pixel < 4; pixel++)
+                colours[pixel] = dev->palette[mcga_cga4_color(dev, pixel)];
+            uint8_t *bytes = (uint8_t *) kairo_gpu_scan(bitmap, bitmap->kairo_gpu, out, KAIRO_SCAN_BITS, wide ? 640 : 320, 20, colours, 4, 2,
+                                                        0, wide ? KAIRO_SCAN_WIDE : 0);
+            for (int byte = 0; byte < 80; byte++)
+                bytes[byte] = dev->vram[0x8000 + ((row + byte) & 0x7fff)];
+            break;
+        }
+        case MCGA_MODE_CGA6:   /* 1 bit a pixel, the foreground or palette 0 */
+        case MCGA_MODE_11: {
+            const bool     six     = mcga_mode(dev) == MCGA_MODE_CGA6;
+            const uint32_t row     = six ? ((uint32_t) (sa << 1) + (((y >> 1) & 1) * 0x2000) + (((y >> 1) >> 1) * 80))
+                                         : ((uint32_t) (sa << 1) + ((uint32_t) y * 80));
+            const uint8_t  fg      = (dev->cga_mode & MCGA_CGA_BW) ? 0x07 : (dev->border & 0x0f);
+            const uint32_t colours[2] = { dev->palette[0], dev->palette[fg] };
+            uint8_t *bytes = (uint8_t *) kairo_gpu_scan(bitmap, bitmap->kairo_gpu, out, KAIRO_SCAN_BITS, 640, 20, colours, 2, 1, 0, 0);
+            for (int byte = 0; byte < 80; byte++)
+                bytes[byte] = six ? dev->vram[0x8000 + ((row + byte) & 0x7fff)] : dev->vram[(row + byte) & 0xffff];
+            break;
+        }
+        case MCGA_MODE_13: { /* a byte a pixel through the palette */
+            const uint32_t row   = (uint32_t) (sa << 1) + ((uint32_t) (y >> 1) * 320);
+            uint8_t       *bytes = (uint8_t *) kairo_gpu_scan(bitmap, bitmap->kairo_gpu, out, KAIRO_SCAN_8, wide ? 640 : 320, 80,
+                                                              dev->palette, 256, 0xff, 0, wide ? KAIRO_SCAN_WIDE : 0);
+            /* Each pixel its own byte when wide; the CPU's narrow line reads one byte for each two of its pixels */
+            for (int x = 0; x < 320; x++)
+                bytes[x] = dev->vram[(row + (wide ? x : (x >> 1))) & 0xffff];
+            break;
+        }
+        default: { /* text: cells of 8 dots, twice across when wide, their colours resolved as the CPU does */
+            int cols = mcga_width(dev);
+            cols /= wide ? 16 : 8;
+            if ((cols <= 0) || (cols > 256))
+                return false;
+            const int      height      = (dev->crtc[0x09] + 1) << 1;
+            const int      glyph_line  = y % height;
+            const int      row         = y / height;
+            const uint16_t start       = sa & 0x3fff;
+            const uint16_t cursor      = ((dev->crtc[0x0e] << 8) | dev->crtc[0x0f]) & 0x3fff;
+            const int      cursor_line = glyph_line >> 1;
+            uint32_t *cells = kairo_gpu_scan(bitmap, bitmap->kairo_gpu, out, KAIRO_SCAN_TEXT, (uint32_t) cols * (wide ? 16 : 8), (uint32_t) cols,
+                                             dev->palette, 16, 8, 0, wide ? KAIRO_SCAN_WIDE : 0);
+            for (int column = 0; column < cols; column++) {
+                const uint16_t cell = (start + (row * cols) + column) & 0x3fff;
+                const uint8_t  chr  = dev->vram[0x8000 + ((cell << 1) & 0x7fff)];
+                const uint8_t  attr = dev->vram[0x8000 + (((cell << 1) + 1) & 0x7fff)];
+                const unsigned page = (dev->crtc[0x12] & 0x10) ? ((attr >> 3) & 1) : ((dev->crtc[0x12] >> 5) & 1);
+                uint8_t        fg   = (dev->crtc[0x12] & 0x10) ? (attr & 0x07) : (attr & 0x0f);
+                uint8_t        bg   = (dev->cga_mode & MCGA_CGA_BLINK) ? ((attr >> 4) & 0x07) : ((attr >> 4) & 0x0f);
+                uint8_t        bits = dev->font_ram[(page * 0x1000) + (chr * 16) + glyph_line];
+                if ((dev->cga_mode & MCGA_CGA_BLINK) && (attr & 0x80) && (dev->blink & 0x10))
+                    fg = bg;
+                const int cursor_on = !(dev->crtc[0x0a] & 0x20) && (cell == cursor) && (cursor_line >= (dev->crtc[0x0a] & 0x0f)) &&
+                                      (cursor_line <= (dev->crtc[0x0b] & 0x0f)) && (dev->blink & 0x08);
+                if (cursor_on)
+                    bits = 0xff;
+                cells[column] = bits | ((uint32_t) fg << 8) | ((uint32_t) bg << 16);
+            }
+            break;
+        }
+    }
+    kairo_gpu_scan_commit();
+    return true;
+}
+
 static void
 mcga_render_line(mcga_t *dev, int y)
 {
     const int width = mcga_width(dev);
+
+    if (mcga_render_line_gpu(dev, y))
+        return; /* KairoX86#318 */
+    if (kairo_gpu_on && !dev->lcd) /* the CPU draws the row: what the GPU still has to draw there first */
+        kairo_gpu_scan_touch(buffer32, (uint32_t) (buffer32->line[y] - buffer32->dat), (uint32_t) buffer32->w);
 
     if (!(dev->cga_mode & MCGA_CGA_ENABLE)) {
         for (int x = 0; x < width; x++)

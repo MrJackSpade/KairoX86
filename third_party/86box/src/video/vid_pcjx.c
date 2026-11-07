@@ -28,6 +28,7 @@
 #include <86box/video.h>
 #include <86box/vid_cga.h>
 #include <86box/vid_cga_comp.h>
+#include <86box/kairo_gpu.h> /* KairoX86#320 */
 #include "cpu.h"
 
 #include <86box/vid_pcjx.h>
@@ -181,6 +182,14 @@ vid_get_h_overscan_delta(pcjx_video_t *video)
     return ret * coef;
 }
 
+/* KairoX86#320: the CPU is about to draw on row [line]: what the GPU still has to draw there first */
+static void
+pcjx_gpu_touch(int line)
+{
+    if (kairo_gpu_on)
+        kairo_gpu_scan_touch(buffer32, (uint32_t) (buffer32->line[line] - buffer32->dat), (uint32_t) buffer32->w);
+}
+
 static void
 vid_blit_v_overscan(pcjx_video_t *video)
 {
@@ -205,12 +214,16 @@ vid_blit_v_overscan(pcjx_video_t *video)
         x = (video->crtc[1] << 4) + ho_s;
 
     for (i = 0; i < h; i++) {
+        pcjx_gpu_touch(y0 + i); /* KairoX86#320 */
+        pcjx_gpu_touch(y + i);
         hline(buffer32, 0, y0 + i, x, cols);
         hline(buffer32, 0, y + i, x, cols);
 
         if (video->composite) {
-            Composite_Process(pcjx_raster_mode(video), 0, x >> 2, buffer32->line[y0 + i]);
-            Composite_Process(pcjx_raster_mode(video), 0, x >> 2, buffer32->line[y + i]);
+            if (!Composite_Process_gpu(pcjx_raster_mode(video), 0, x >> 2, buffer32->line[y0 + i])) /* KairoX86#241 */
+                Composite_Process(pcjx_raster_mode(video), 0, x >> 2, buffer32->line[y0 + i]);
+            if (!Composite_Process_gpu(pcjx_raster_mode(video), 0, x >> 2, buffer32->line[y + i]))
+                Composite_Process(pcjx_raster_mode(video), 0, x >> 2, buffer32->line[y + i]);
         } else {
             video_process_8(x, y0 + i);
             video_process_8(x, y + i);
@@ -472,7 +485,27 @@ vid_render(pcjx_video_t *video, int line, int ho_s, int ho_d)
     uint8_t pixels[16];
     int width = (pcjx_raster_mode(video) & 1) ? 8 : 16;
 
+    pcjx_gpu_touch(line); /* KairoX86#320 */
     hline(buffer32, 0, line, video->crtc[1] * width + ho_s, (video->array[2] & 15) + 16);
+    /* KairoX86#320: with Hardware acceleration on (and no composite output, which decodes the CPU's pixels), each
+       cell's colour codes (vid_cell's) go to the GPU's scanout queue as 4 bits a pixel, coloured as video_process_8
+       colours them */
+    if (kairo_gpu_on && !video->composite && (video->crtc[1] > 0) && (video->crtc[1] <= 256)) {
+        uint32_t colours[16];
+        for (int v = 0; v < 16; v++)
+            colours[v] = pal_lookup[v + 16];
+        const uint32_t pixels_n = (uint32_t) (video->crtc[1] * width);
+        uint8_t       *bytes    = (uint8_t *) kairo_gpu_scan(buffer32, buffer32->kairo_gpu,
+                                                             (uint32_t) (&buffer32->line[line][ho_d] - buffer32->dat), KAIRO_SCAN_BITS,
+                                                             pixels_n, (pixels_n / 2 + 3) / 4, colours, 16, 4, 0, 0);
+        for (int x = 0; x < video->crtc[1]; x++) {
+            vid_cell(video, video->memaddr++, video->scanline, pixels);
+            for (int c = 0; c < width; c += 2)
+                bytes[(x * width + c) / 2] = (uint8_t) (((pixels[c] & 15) << 4) | (pixels[c + 1] & 15));
+        }
+        kairo_gpu_scan_commit();
+        return;
+    }
     for (int x = 0; x < video->crtc[1]; x++) {
         vid_cell(video, video->memaddr++, video->scanline, pixels);
         for (int c = 0; c < width; c++)
@@ -632,6 +665,7 @@ pcjx_vid_out(uint16_t port, uint8_t val, uint8_t vp_mask, void *priv)
 static void
 vid_render_blank(pcjx_video_t *video, int line, int ho_s)
 {
+    pcjx_gpu_touch(line); /* KairoX86#320 */
     if (pcjx_raster_mode(video) & 1)
         hline(buffer32, 0, line, (video->crtc[1] << 3) + ho_s, (video->array[2] & 0xf) + 16);
     else
@@ -648,9 +682,10 @@ vid_render_process(pcjx_video_t *video, int line, int ho_s)
     else
         x = (video->crtc[1] << 4) + ho_s;
 
-    if (video->composite)
-        Composite_Process(pcjx_raster_mode(video), 0, x >> 2, buffer32->line[line]);
-    else
+    if (video->composite) {
+        if (!Composite_Process_gpu(pcjx_raster_mode(video), 0, x >> 2, buffer32->line[line])) /* KairoX86#241 */
+            Composite_Process(pcjx_raster_mode(video), 0, x >> 2, buffer32->line[line]);
+    } else
         video_process_8(x, line);
 }
 

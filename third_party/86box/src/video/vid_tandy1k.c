@@ -45,6 +45,7 @@
 #include <86box/video.h>
 #include <86box/vid_cga.h>
 #include <86box/vid_cga_comp.h>
+#include <86box/kairo_gpu.h> /* KairoX86#321 */
 #include <86box/m_tandy1k.h>
 #include <86box/machine.h>
 #include <86box/plat_unused.h>
@@ -406,6 +407,131 @@ vid_read(uint32_t addr, void *priv)
     }
 }
 
+/* KairoX86#321: the CPU is about to draw on row [line]: what the GPU still has to draw there first */
+static void
+tandy_gpu_touch(int line)
+{
+    if (kairo_gpu_on && (line >= 0))
+        kairo_gpu_scan_touch(buffer32, (uint32_t) (buffer32->line[line] - buffer32->dat), (uint32_t) buffer32->w);
+}
+
+/* KairoX86#321: line [line]'s pixels (vid_render's, read as it reads them, from hos_offs on) to the GPU's scanout
+   queue, coloured as video_process_8 will colour them, on the rows the CPU draws them on; returns whether the GPU
+   draws them. Not with composite output (the CPU's pixels are decoded) or a line scrolled left past its start
+   (hos_offs below 0, its first character cut). */
+static bool
+tandy_render_gpu(tandy_t *dev, int line, int hos_offs, uint16_t cursoraddr)
+{
+    t1kvid_t      *vid   = dev->vid;
+    const uint32_t cells = vid->crtc[1];
+
+    if (!kairo_gpu_on || vid->composite || (hos_offs < 0) || (cells == 0))
+        return false;
+    bitmap_t *bitmap = buffer32;
+    uint32_t  colours[16];
+    uint32_t  words[256];
+    uint32_t  kind;
+    uint32_t  count;
+    uint32_t  n;
+    uint32_t  ncol  = 16;
+    uint32_t  bits  = 0;
+    uint32_t  flags = 0;
+    int       rows  = 1;
+    uint8_t  *bytes = (uint8_t *) words;
+
+    if (cells > 128)
+        return false;
+    if (dev->is_sl2 && (vid->array[5] & 1)) { /* 640 x 200 x 16: twice the characters, 4 pixels of 4 bits each */
+        for (int v = 0; v < 16; v++)
+            colours[v] = pal_lookup[vid->array[v + 16] + 16];
+        for (uint32_t x = 0; x < cells * 2; x++) {
+            bytes[x * 2]     = vid->vram[(vid->memaddr << 1) & 0xffff];
+            bytes[x * 2 + 1] = vid->vram[((vid->memaddr << 1) + 1) & 0xffff];
+            vid->memaddr++;
+        }
+        kind = KAIRO_SCAN_BITS, bits = 4, count = cells * 8, n = cells;
+    } else if (vid->array[3] & 0x10) { /* 320 x 200 x 16 (each pixel twice) or 160 x 200 x 16 (four times) */
+        const bool     wide = (vid->mode & 1) != 0;
+        const uint32_t bank = (wide || !dev->is_sl2) ? ((vid->scanline & 3) * 0x2000) : ((vid->scanline & 1) * 0x2000);
+        for (int v = 0; v < 16; v++)
+            colours[v] = pal_lookup[vid->array[(v & vid->array[1] & 0x0f) + 16] + 16];
+        for (uint32_t x = 0; x < cells; x++) {
+            bytes[x * 2]     = vid->vram[((vid->memaddr << 1) & 0x1fff) + bank];
+            bytes[x * 2 + 1] = vid->vram[((vid->memaddr << 1) & 0x1fff) + bank + 1];
+            vid->memaddr++;
+        }
+        kind = KAIRO_SCAN_BITS, bits = 4, count = cells * (wide ? 8 : 16), n = (cells * 2 + 3) / 4;
+        flags = wide ? KAIRO_SCAN_WIDE : KAIRO_SCAN_WIDE4;
+    } else if (vid->array[3] & 0x08) { /* 640 x 200 x 4: a character's two bytes two planes */
+        for (int v = 0; v < 16; v++)
+            colours[v] = pal_lookup[vid->array[((v & 3) & vid->array[1]) + 16] + 16];
+        for (uint32_t x = 0; x < cells; x++) {
+            words[x] = vid->vram[((vid->memaddr << 1) & 0x1fff) + ((vid->scanline & 3) * 0x2000)]
+                       | (vid->vram[((vid->memaddr << 1) & 0x1fff) + ((vid->scanline & 3) * 0x2000) + 1] << 8);
+            vid->memaddr++;
+        }
+        kind = KAIRO_SCAN_PLANES, count = cells * 8, n = cells;
+    } else if ((vid->mode & 1) || !(vid->mode & 2)) { /* 80- or 40-column text */
+        const bool wide = !(vid->mode & 1);
+        for (uint32_t x = 0; x < cells; x++) {
+            const uint8_t chr        = vid->vram[(vid->memaddr << 1) & 0x3fff];
+            const uint8_t attr       = vid->vram[((vid->memaddr << 1) + 1) & 0x3fff];
+            const int     drawcursor = ((vid->memaddr == cursoraddr) && vid->cursorvisible && vid->cursoron);
+            uint32_t      fg         = vid->array[((attr & 15) & vid->array[1]) + 16] + 16;
+            uint32_t      bg;
+            if (vid->mode & 0x20) {
+                bg = vid->array[(((attr >> 4) & 7) & vid->array[1]) + 16] + 16;
+                if ((vid->blink & 16) && (attr & 0x80) && !drawcursor)
+                    fg = bg;
+            } else
+                bg = vid->array[((attr >> 4) & vid->array[1]) + 16] + 16;
+            /* Below the font's 8 lines only the line-drawing characters go on, their last line repeated */
+            const uint32_t dots = (vid->scanline & 8) ? (((chr >= 0xb3) && (chr <= 0xdf)) ? fontdat[chr][7] : 0)
+                                                      : fontdat[chr][vid->scanline & 7];
+            const uint32_t flip = drawcursor ? 15 : 0;
+            words[x]            = dots | ((fg ^ flip) << 8) | ((bg ^ flip) << 16);
+            vid->memaddr++;
+        }
+        kind = KAIRO_SCAN_TEXT, bits = 8, count = cells * (wide ? 16 : 8), n = cells, ncol = 0;
+        flags = wide ? KAIRO_SCAN_WIDE : 0;
+    } else { /* 320 x 200 x 4 (2 bits, each twice) or 640 x 200 x 2 (1 bit, on two rows) */
+        const bool two = !(vid->mode & 16);
+        if (two) {
+            const int col = (vid->col & 16) ? 8 : 0;
+            int       c4[4];
+            c4[0] = vid->col & 15;
+            if (vid->mode & 4)
+                c4[1] = col | 3, c4[2] = col | 4, c4[3] = col | 7;
+            else if (vid->col & 32)
+                c4[1] = col | 3, c4[2] = col | 5, c4[3] = col | 7;
+            else
+                c4[1] = col | 2, c4[2] = col | 4, c4[3] = col | 6;
+            for (int v = 0; v < 4; v++)
+                colours[v] = pal_lookup[vid->array[(c4[v] & vid->array[1]) + 16] + 16];
+            ncol = 4;
+        } else {
+            colours[0] = pal_lookup[0];
+            colours[1] = pal_lookup[vid->array[(vid->col & vid->array[1]) + 16] + 16];
+            ncol       = 2;
+            rows       = 2;
+        }
+        for (uint32_t x = 0; x < cells; x++) {
+            bytes[x * 2]     = vid->vram[((vid->memaddr << 1) & 0x1fff) + ((vid->scanline & 1) * 0x2000)];
+            bytes[x * 2 + 1] = vid->vram[((vid->memaddr << 1) & 0x1fff) + ((vid->scanline & 1) * 0x2000) + 1];
+            vid->memaddr++;
+        }
+        kind = KAIRO_SCAN_BITS, bits = two ? 2 : 1, count = cells * 16, n = (cells * 2 + 3) / 4;
+        flags = two ? KAIRO_SCAN_WIDE : 0;
+    }
+    for (int r = 0; r < rows; r++) {
+        uint32_t *at = kairo_gpu_scan(bitmap, bitmap->kairo_gpu, (uint32_t) (&bitmap->line[line + r][hos_offs] - bitmap->dat), kind,
+                                      count, n, (ncol != 0) ? colours : pal_lookup, (ncol != 0) ? ncol : 256, bits, 0, flags);
+        memcpy(at, words, n * sizeof(uint32_t));
+        kairo_gpu_scan_commit();
+    }
+    return true;
+}
+
 static void
 vid_render(tandy_t *dev, int line, int hos_offs)
 {
@@ -434,6 +560,8 @@ vid_render(tandy_t *dev, int line, int hos_offs)
         return;
     }
 
+    tandy_gpu_touch(line); /* KairoX86#321: both rows the CPU may draw on */
+    tandy_gpu_touch(line + 1);
     if (vid->array[3] & 4) {
         border_val = cols[0];
     } else if ((vid->mode & 0x12) == 0x12) {
@@ -466,7 +594,9 @@ vid_render(tandy_t *dev, int line, int hos_offs)
         buffer32->line[line][out_x + c] = border_val;
     }
 
-    if (dev->is_sl2 && (vid->array[5] & 1)) { /*640x200x16*/
+    if (tandy_render_gpu(dev, line, hos_offs, cursoraddr)) {
+        /* KairoX86#321: the GPU draws the pixels */
+    } else if (dev->is_sl2 && (vid->array[5] & 1)) { /*640x200x16*/
         for (x = 0; x < vid->crtc[1] * 2; x++) {
             dat = (vid->vram[(vid->memaddr << 1) & 0xffff] << 8) | vid->vram[((vid->memaddr << 1) + 1) & 0xffff];
             vid->memaddr++;
@@ -689,6 +819,7 @@ vid_render_blank(tandy_t *dev, int line)
     if (line < 0)
         return;
 
+    tandy_gpu_touch(line); /* KairoX86#321 */
     if (vid->array[3] & 4) {
         if (vid->mode & 1)
             hline(buffer32, 0, line, (vid->crtc[1] << 3) + 16, (vid->array[2] & 0xf) + 16);
@@ -718,9 +849,10 @@ vid_render_process(tandy_t *dev, int line)
     else
         x = (vid->crtc[1] << 4) + 16;
 
-    if (!dev->is_sl2 && vid->composite)
-        Composite_Process(vid->mode, 0, x >> 2, buffer32->line[line]);
-    else
+    if (!dev->is_sl2 && vid->composite) {
+        if (!Composite_Process_gpu(vid->mode, 0, x >> 2, buffer32->line[line])) /* KairoX86#241 */
+            Composite_Process(vid->mode, 0, x >> 2, buffer32->line[line]);
+    } else
         video_process_8(x, line);
 }
 

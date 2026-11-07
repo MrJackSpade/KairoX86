@@ -33,6 +33,7 @@
 #include <86box/video.h>
 #include <86box/vid_cga.h>
 #include <86box/vid_cga_comp.h>
+#include <86box/kairo_gpu.h> /* KairoX86#319 */
 #include <86box/plat_unused.h>
 #include "cpu.h"
 
@@ -283,6 +284,97 @@ vid_get_h_overscan_delta(pcjr_t *pcjr)
     return ret * coef;
 }
 
+/* KairoX86#319: the CPU is about to draw on row [line]: what the GPU still has to draw there first */
+static void
+pcjr_gpu_touch(int line)
+{
+    if (kairo_gpu_on)
+        kairo_gpu_scan_touch(buffer32, (uint32_t) (buffer32->line[line] - buffer32->dat), (uint32_t) buffer32->w);
+}
+
+/* KairoX86#319: line [line]'s pixels (vid_render's, read as it reads them, from ho_d on) to the GPU's scanout queue,
+   coloured as video_process_8 will colour them; returns whether the GPU draws them. Not with composite output, which
+   decodes the CPU's pixels (Composite_Process_gpu decodes them on the GPU). */
+static bool
+pcjr_render_gpu(pcjr_t *pcjr, int line, int ho_d, uint16_t offset, uint16_t mask, uint16_t cursoraddr)
+{
+    const uint32_t cells = pcjr->crtc[1];
+
+    if (!kairo_gpu_on || pcjr->composite || (cells == 0))
+        return false;
+    bitmap_t      *bitmap = buffer32;
+    const uint32_t out    = (uint32_t) (&bitmap->line[line][ho_d] - bitmap->dat);
+    uint32_t       colours[16];
+    uint8_t       *bytes;
+
+    /* The gate array's palette through its mask, as the 16-colour and 640 x 200 x 4 modes take it */
+    for (int v = 0; v < 16; v++)
+        colours[v] = pal_lookup[pcjr->array[(v & pcjr->array[1] & 0x0f) + 16] + 16];
+    switch ((pcjr->array[0] & 0x13) | ((pcjr->array[3] & 0x08) << 5)) {
+        case 0x13: /* 320 x 200 x 16: 4 pixels of 4 bits a character, each twice across */
+        case 0x12: /* 160 x 200 x 16: the same, each four times */
+            bytes = (uint8_t *) kairo_gpu_scan(bitmap, bitmap->kairo_gpu, out, KAIRO_SCAN_BITS, cells * ((pcjr->array[0] & 1) ? 8 : 16),
+                                               (cells * 2 + 3) / 4, colours, 16, 4, 0,
+                                               (pcjr->array[0] & 1) ? KAIRO_SCAN_WIDE : KAIRO_SCAN_WIDE4);
+            for (uint32_t x = 0; x < cells; x++) {
+                bytes[x * 2]     = pcjr->vram[((pcjr->memaddr << 1) & mask) + offset];
+                bytes[x * 2 + 1] = pcjr->vram[((pcjr->memaddr << 1) & mask) + offset + 1];
+                pcjr->memaddr++;
+            }
+            break;
+        case 0x03: { /* 640 x 200 x 4: a character's two bytes two planes */
+            uint32_t *planes = kairo_gpu_scan(bitmap, bitmap->kairo_gpu, out, KAIRO_SCAN_PLANES, cells * 8, cells, colours, 16, 0, 0, 0);
+            for (uint32_t x = 0; x < cells; x++) {
+                planes[x] = pcjr->vram[((pcjr->memaddr << 1) & mask) + offset] | (pcjr->vram[((pcjr->memaddr << 1) & mask) + offset + 1] << 8);
+                pcjr->memaddr++;
+            }
+            break;
+        }
+        case 0x01: /* 80- and 40-column text */
+        case 0x00: {
+            const bool wide  = !(pcjr->array[0] & 1);
+            uint32_t  *text  = kairo_gpu_scan(bitmap, bitmap->kairo_gpu, out, KAIRO_SCAN_TEXT, cells * (wide ? 16 : 8), cells, pal_lookup,
+                                              256, 8, 0, wide ? KAIRO_SCAN_WIDE : 0);
+            for (uint32_t x = 0; x < cells; x++) {
+                const uint8_t chr        = pcjr->vram[((pcjr->memaddr << 1) & mask) + offset];
+                const uint8_t attr       = pcjr->vram[((pcjr->memaddr << 1) & mask) + offset + 1];
+                const int     drawcursor = ((pcjr->memaddr == cursoraddr) && pcjr->cursorvisible && pcjr->cursoron);
+                uint32_t      fg         = pcjr->array[((attr & 15) & pcjr->array[1] & 0x0f) + 16] + 16;
+                uint32_t      bg;
+                if (pcjr->array[3] & 4) {
+                    bg = pcjr->array[(((attr >> 4) & 7) & pcjr->array[1] & 0x0f) + 16] + 16;
+                    if ((pcjr->blink & 16) && (attr & 0x80) && !drawcursor)
+                        fg = bg;
+                } else
+                    bg = pcjr->array[((attr >> 4) & pcjr->array[1] & 0x0f) + 16] + 16;
+                const uint32_t dots = (pcjr->scanline & 8) ? 0 : fontdat[chr][pcjr->scanline & 7];
+                const uint32_t flip = drawcursor ? 15 : 0;
+                text[x]             = dots | ((fg ^ flip) << 8) | ((bg ^ flip) << 16);
+                pcjr->memaddr++;
+            }
+            break;
+        }
+        case 0x02: /* 320 x 200 x 4: 2 bits a pixel, twice across, the palette unmasked */
+        case 0x102: { /* 640 x 200 x 2: 1 bit a pixel */
+            const bool two = ((pcjr->array[0] & 0x13) | ((pcjr->array[3] & 0x08) << 5)) == 0x02;
+            for (int v = 0; v < 4; v++)
+                colours[v] = pal_lookup[pcjr->array[v + 16] + 16];
+            bytes = (uint8_t *) kairo_gpu_scan(bitmap, bitmap->kairo_gpu, out, KAIRO_SCAN_BITS, cells * 16, (cells * 2 + 3) / 4, colours,
+                                               two ? 4 : 2, two ? 2 : 1, 0, two ? KAIRO_SCAN_WIDE : 0);
+            for (uint32_t x = 0; x < cells; x++) {
+                bytes[x * 2]     = pcjr->vram[((pcjr->memaddr << 1) & mask) + offset];
+                bytes[x * 2 + 1] = pcjr->vram[((pcjr->memaddr << 1) & mask) + offset + 1];
+                pcjr->memaddr++;
+            }
+            break;
+        }
+        default: /* no pixels: only the border, the CPU's */
+            return false;
+    }
+    kairo_gpu_scan_commit();
+    return true;
+}
+
 static void
 vid_blit_v_overscan(pcjr_t *pcjr)
 {
@@ -307,12 +399,16 @@ vid_blit_v_overscan(pcjr_t *pcjr)
         x = (pcjr->crtc[1] << 4) + ho_s;
 
     for (i = 0; i < h; i++) {
+        pcjr_gpu_touch(y0 + i); /* KairoX86#319 */
+        pcjr_gpu_touch(y + i);
         hline(buffer32, 0, y0 + i, x, cols);
         hline(buffer32, 0, y + i, x, cols);
 
         if (pcjr->composite) {
-            Composite_Process(pcjr->array[0], 0, x >> 2, buffer32->line[y0 + i]);
-            Composite_Process(pcjr->array[0], 0, x >> 2, buffer32->line[y + i]);
+            if (!Composite_Process_gpu(pcjr->array[0], 0, x >> 2, buffer32->line[y0 + i])) /* KairoX86#241 */
+                Composite_Process(pcjr->array[0], 0, x >> 2, buffer32->line[y0 + i]);
+            if (!Composite_Process_gpu(pcjr->array[0], 0, x >> 2, buffer32->line[y + i]))
+                Composite_Process(pcjr->array[0], 0, x >> 2, buffer32->line[y + i]);
         } else {
             video_process_8(x, y0 + i);
             video_process_8(x, y + i);
@@ -335,6 +431,7 @@ vid_render(pcjr_t *pcjr, int line, int ho_s, int ho_d)
 
     cols[0]        = (pcjr->array[2] & 0xf) + 16;
 
+    pcjr_gpu_touch(line); /* KairoX86#319 */
     if (pcjr->array[0] & 1)
         hline(buffer32, 0, line, (pcjr->crtc[1] << 3) + ho_s, cols[0]);
     else
@@ -354,6 +451,8 @@ vid_render(pcjr_t *pcjr, int line, int ho_s, int ho_d)
         default:
             break;
     }
+    if (pcjr_render_gpu(pcjr, line, ho_d, offset, mask, cursoraddr))
+        return; /* KairoX86#319: the GPU draws the pixels */
     switch ((pcjr->array[0] & 0x13) | ((pcjr->array[3] & 0x08) << 5)) {
         case 0x13: /*320x200x16*/
             for (x = 0; x < pcjr->crtc[1]; x++) {
@@ -497,6 +596,7 @@ vid_render(pcjr_t *pcjr, int line, int ho_s, int ho_d)
 static void
 vid_render_blank(pcjr_t *pcjr, int line, int ho_s)
 {
+    pcjr_gpu_touch(line); /* KairoX86#319 */
     if (pcjr->array[3] & 4) {
         if (pcjr->array[0] & 1)
             hline(buffer32, 0, line, (pcjr->crtc[1] << 3) + ho_s, (pcjr->array[2] & 0xf) + 16);
@@ -520,9 +620,10 @@ vid_render_process(pcjr_t *pcjr, int line, int ho_s)
     else
         x = (pcjr->crtc[1] << 4) + ho_s;
 
-    if (pcjr->composite)
-        Composite_Process(pcjr->array[0], 0, x >> 2, buffer32->line[line]);
-    else
+    if (pcjr->composite) {
+        if (!Composite_Process_gpu(pcjr->array[0], 0, x >> 2, buffer32->line[line])) /* KairoX86#241 */
+            Composite_Process(pcjr->array[0], 0, x >> 2, buffer32->line[line]);
+    } else
         video_process_8(x, line);
 }
 
