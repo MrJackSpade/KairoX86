@@ -18,7 +18,7 @@
 
 #include "gpu_internal.h"
 
-_Static_assert(sizeof(kairo_gpu_scan_t) == 32, "kairo_gpu_scan_t's size changed: shaders/scanout.comp reads it");
+_Static_assert(sizeof(kairo_gpu_scan_t) == 48, "kairo_gpu_scan_t's size changed: shaders/scanout.comp reads it");
 
 static const uint32_t scanout_spirv[] = {
 #include "scanout.comp.inc"
@@ -146,6 +146,37 @@ kairo_gpu_scan_cut(const void *bitmap, uint32_t start, uint32_t count)
 }
 
 void
+kairo_gpu_scan_patch(const void *bitmap, uint32_t start, uint32_t count, const uint32_t *ax, uint32_t *from, uint32_t *to)
+{
+    *from = *to = start;
+    pthread_mutex_lock(&queue_lock);
+    if ((line_count != 0) && (queued_bitmap == bitmap)) {
+        kairo_gpu_scan_t *queued = lines->data;
+        /* The last queued line over these pixels: the one drawn last */
+        for (uint32_t i = line_count; i-- > 0;) {
+            kairo_gpu_scan_t *line = &queued[i];
+            const uint32_t    lo   = (start > line->out + line->skip) ? start : line->out + line->skip;
+            const uint32_t    hi   = ((start + count) < (line->out + line->count)) ? (start + count) : (line->out + line->count);
+            if (lo >= hi)
+                continue;
+            if (line->patch_count != 0)
+                fatal("GPU scanout: a second patch over one line\n");
+            if ((words_used + 2 * (hi - lo)) > WORDS)
+                fatal("GPU scanout: no room for a patch of %u pixels\n", (unsigned) (hi - lo));
+            memcpy((uint32_t *) words->data + words_used, &ax[2 * (lo - start)], 2 * (hi - lo) * 4);
+            line->patch_from  = lo - line->out;
+            line->patch_count = hi - lo;
+            line->patch_src   = words_used;
+            words_used += 2 * (hi - lo);
+            *from = lo;
+            *to   = hi;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&queue_lock);
+}
+
+void
 kairo_gpu_scan_commit(void)
 {
     pthread_mutex_unlock(&queue_lock);
@@ -196,6 +227,10 @@ kairo_gpu_scan(const void *bitmap, kairo_gpu_buffer_t *bitmap_gpu, uint32_t out,
     line->a                = a;
     line->skip             = b;
     line->flags            = flags;
+    line->patch_from       = 0;
+    line->patch_count      = 0;
+    line->patch_src        = 0;
+    line->reserved         = 0;
     uint32_t *at           = (uint32_t *) words->data + words_used;
     words_used += word_count;
     return at;

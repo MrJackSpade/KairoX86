@@ -25,6 +25,10 @@ struct Scan {
     uint a;
     uint skip;
     uint flags;
+    uint patch_from;  // a patch over the drawn pixels (a hardware cursor): (v & A) ^ X
+    uint patch_count;
+    uint patch_src;
+    uint reserved;
 };
 
 const uint SCAN_8 = 1u;
@@ -138,6 +142,9 @@ void main() {
             const bool on = dot < 8u ? ((cell >> (7u - dot)) & 1u) != 0u : ((cell >> 24) & 1u) != 0u;
             v = colour(palette, on ? ((cell >> 8) & 0xffu) : ((cell >> 16) & 0xffu));
         }
+        const uint p = i - lines[j].patch_from;
+        if (p < lines[j].patch_count)
+            v = (v & words[lines[j].patch_src + 2u * p]) ^ words[lines[j].patch_src + 2u * p + 1u];
         pixels[start + i] = v;
     }
 }

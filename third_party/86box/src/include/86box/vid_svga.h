@@ -291,6 +291,8 @@ typedef struct svga_t {
     uint8_t dpms;
     /* The line may be drawn on the drawing thread (vid_svga_render.c) */
     uint8_t render_async;
+    /* KairoX86#233: the line's hardware cursors were taken as a patch for the GPU (vid_svga.c svga_cursor_probe) */
+    uint8_t kairo_cursor_patched;
     uint8_t color_2bpp;
     uint8_t ksc5601_sbyte_mask;
     uint8_t ksc5601_udc_area_msb[2];
