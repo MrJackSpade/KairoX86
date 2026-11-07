@@ -43,7 +43,10 @@ extern uint32_t gxm_dc_read(uint32_t addr, void *priv);
 extern void     gxm_dc_write(uint32_t addr, uint32_t val, uint32_t mask, void *priv);
 extern void     gxm_video_set_vga(void *priv, uint8_t enables);
 extern void     gxm_video_set_gmem(void *priv, uint32_t base, uint32_t size);
-extern void     gxm_video_gmem_written(void *priv, uint32_t addr, int size);
+/* KairoX86#315: the processor is about to read or write size bytes of graphics memory at addr (the BitBLT engine's
+   GPU batch drawn first where it draws or reads there); whether it reaches the graphics memory directly as DRAM */
+extern void     gxm_video_gmem_touch(void *priv, uint32_t addr, int size);
+extern void     gxm_video_set_gmem_direct(void *priv, int direct);
 
 /* The CS5530's display interface (src/chipset/cs5530.c) gives the
    display controller its dot clock, its DACs, its gamma RAM and its video

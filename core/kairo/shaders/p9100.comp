@@ -107,7 +107,7 @@ void native_pixels(uint seg, uint row, uint first, int i0, int i1)
 
 uint ins(uint i) { return (ops[o + P9_INS + (i >> 2)] >> ((i & 3u) << 3)) & 0xffu; }
 
-uint gha_read(uint addr) { return vram[(addr & (pc.vram_mask >> 2))]; }
+uint gha_read(uint addr) { return vram[vw((addr << 2) & pc.vram_mask)]; }
 
 uint gha_nmask(uint mode, uint m)
 {
@@ -299,7 +299,7 @@ void gha_words(uint kind, uint row, uint first, int i0, int i1)
         }
         if (rops)
             data = gha_rop(mode, rs, rd);
-        vram[d & (pc.vram_mask >> 2)] = (old & ~mask) | (data & mask);
+        vram[vw((d << 2) & pc.vram_mask)] = (old & ~mask) | (data & mask);
     }
 }
 

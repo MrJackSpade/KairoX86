@@ -429,6 +429,23 @@ kairo_gpu_buffer_of(const void *data)
     return found;
 }
 
+kairo_gpu_buffer_t *
+kairo_gpu_buffer_containing(const void *p, size_t *offset)
+{
+    const uint8_t      *at    = (const uint8_t *) p;
+    kairo_gpu_buffer_t *found = NULL;
+    pthread_mutex_lock(&card_memory_lock);
+    for (int i = 0; (i < CARD_MEMORY_MAX) && (found == NULL); i++)
+        if ((card_memory[i] != NULL) && (at >= (const uint8_t *) card_memory[i]->data) &&
+            (at < (const uint8_t *) card_memory[i]->data + card_memory[i]->size))
+            found = card_memory[i];
+    pthread_mutex_unlock(&card_memory_lock);
+    if (found == NULL)
+        fatal("The PC stopped: card memory the GPU does not share\n");
+    *offset = (size_t) (at - (const uint8_t *) found->data);
+    return found;
+}
+
 void
 kairo_gpu_free(void *data)
 {

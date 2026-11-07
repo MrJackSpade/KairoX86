@@ -420,6 +420,7 @@ gxm_gmem_read(uint32_t addr, void *priv)
     if (addr >= dev->gmem_size)
         return 0xff;
 
+    gxm_video_gmem_touch(gxm_video, addr, 1);
     return ram[dev->gmem_base + addr];
 }
 
@@ -434,6 +435,7 @@ gxm_gmem_readw(uint32_t addr, void *priv)
     if ((addr + 2) > dev->gmem_size)
         return gxm_gmem_read(addr, priv) | (gxm_gmem_read(addr + 1, priv) << 8);
 
+    gxm_video_gmem_touch(gxm_video, addr, 2);
     return *(uint16_t *) &ram[dev->gmem_base + addr];
 }
 
@@ -446,6 +448,7 @@ gxm_gmem_readl(uint32_t addr, void *priv)
     if ((addr + 4) > dev->gmem_size)
         return gxm_gmem_readw(addr, priv) | (gxm_gmem_readw(addr + 2, priv) << 16);
 
+    gxm_video_gmem_touch(gxm_video, addr, 4);
     return *(uint32_t *) &ram[dev->gmem_base + addr];
 }
 
@@ -456,8 +459,8 @@ gxm_gmem_write(uint32_t addr, uint8_t val, void *priv)
 
     addr &= (GMEM_SIZE - 1);
     if (addr < dev->gmem_size) {
+        gxm_video_gmem_touch(gxm_video, addr, 1);
         ram[dev->gmem_base + addr] = val;
-        gxm_video_gmem_written(gxm_video, addr, 1);
     }
 }
 
@@ -471,8 +474,8 @@ gxm_gmem_writew(uint32_t addr, uint16_t val, void *priv)
         gxm_gmem_write(addr, val & 0xff, priv);
         gxm_gmem_write(addr + 1, val >> 8, priv);
     } else {
+        gxm_video_gmem_touch(gxm_video, addr, 2);
         *(uint16_t *) &ram[dev->gmem_base + addr] = val;
-        gxm_video_gmem_written(gxm_video, addr, 2);
     }
 }
 
@@ -486,8 +489,8 @@ gxm_gmem_writel(uint32_t addr, uint32_t val, void *priv)
         gxm_gmem_writew(addr, val & 0xffff, priv);
         gxm_gmem_writew(addr + 2, val >> 16, priv);
     } else {
+        gxm_video_gmem_touch(gxm_video, addr, 4);
         *(uint32_t *) &ram[dev->gmem_base + addr] = val;
-        gxm_video_gmem_written(gxm_video, addr, 4);
     }
 }
 
@@ -617,6 +620,7 @@ gxm_gmem_recalc(cyrix_gxm_t *dev)
     cyrix_gxm_log("MediaGX: Graphics memory at %08X, %i KB\n", dev->gmem_base, dev->gmem_size >> 10);
 
     gxm_video_set_gmem(gxm_video, dev->gmem_base, dev->gmem_size);
+    gxm_video_set_gmem_direct(gxm_video, dev->gmem_size && (dev->gmem_base < dev->dram_top)); /* KairoX86#315 */
 }
 
 /* System memory ends at BC_DRAM_TOP; above it, the processor's cycles go to
@@ -655,6 +659,7 @@ gxm_dram_recalc(cyrix_gxm_t *dev)
     }
 
     dev->dram_top = top;
+    gxm_video_set_gmem_direct(gxm_video, dev->gmem_size && (dev->gmem_base < dev->dram_top)); /* KairoX86#315 */
 
     flushmmucache_nopc();
 }

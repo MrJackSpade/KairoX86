@@ -27,23 +27,27 @@ layout(push_constant) uniform Push {
     uint in_order;
     uint n_blocks;
     uint entries; /* where the block entries start in lists */
+    uint vram_base; /* video memory's first byte in its buffer, a multiple of 4 (KairoX86#315) */
 } pc;
 
 const uint KG_OP = 0u, KG_ROW = 1u, KG_FIRST = 2u, KG_COUNT = 3u, KG_BIT = 4u, KG_BITS = 5u, KG_DIR = 6u, KG_WORDS = 8u;
 
 /* ---- video memory, little endian, wrapping at its end ---- */
 
+/* The word of video memory byte a (already masked) is in */
+uint vw(uint a) { return (pc.vram_base + a) >> 2; }
+
 uint rd8(uint addr)
 {
     uint a = addr & pc.vram_mask;
-    return (vram[a >> 2] >> ((a & 3u) * 8u)) & 0xffu;
+    return (vram[vw(a)] >> ((a & 3u) * 8u)) & 0xffu;
 }
 
 uint rd16(uint addr)
 {
     uint a = addr & pc.vram_mask;
     if ((a & 3u) <= 2u)
-        return (vram[a >> 2] >> ((a & 3u) * 8u)) & 0xffffu;
+        return (vram[vw(a)] >> ((a & 3u) * 8u)) & 0xffffu;
     return rd8(a) | (rd8(a + 1u) << 8);
 }
 
@@ -51,7 +55,7 @@ uint rd32(uint addr)
 {
     uint a = addr & pc.vram_mask;
     if ((a & 3u) == 0u)
-        return vram[a >> 2];
+        return vram[vw(a)];
     return rd8(a) | (rd8(a + 1u) << 8) | (rd8(a + 2u) << 16) | (rd8(a + 3u) << 24);
 }
 
@@ -59,15 +63,15 @@ void wr8(uint addr, uint v)
 {
     uint a     = addr & pc.vram_mask;
     uint shift = (a & 3u) * 8u;
-    vram[a >> 2] = (vram[a >> 2] & ~(0xffu << shift)) | ((v & 0xffu) << shift);
+    vram[vw(a)] = (vram[vw(a)] & ~(0xffu << shift)) | ((v & 0xffu) << shift);
 }
 
 void wr16(uint addr, uint v)
 {
     uint a = addr & pc.vram_mask;
     if ((a & 1u) == 0u) {
-        uint shift   = (a & 3u) * 8u;
-        vram[a >> 2] = (vram[a >> 2] & ~(0xffffu << shift)) | ((v & 0xffffu) << shift);
+        uint shift  = (a & 3u) * 8u;
+        vram[vw(a)] = (vram[vw(a)] & ~(0xffffu << shift)) | ((v & 0xffffu) << shift);
         return;
     }
     wr8(a, v);
@@ -78,7 +82,7 @@ void wr32(uint addr, uint v)
 {
     uint a = addr & pc.vram_mask;
     if ((a & 3u) == 0u) {
-        vram[a >> 2] = v;
+        vram[vw(a)] = v;
         return;
     }
     wr8(a, v);

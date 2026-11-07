@@ -1484,6 +1484,7 @@ api_stop(void)
     atomic_store(&dead, true);
     if (setjmp(stopped)) {
         running = false;
+        mem_release_ram(); /* KairoX86#315: main RAM may be memory the GPU shares */
         kairo_gpu_close();
         release_mappings();
         release_blocks();
@@ -1495,7 +1496,8 @@ api_stop(void)
     media_restore();
     pc_close(NULL);
     running = false;
-    /* After pc_close: every card freed its GPU objects */
+    /* After pc_close: every card freed its GPU objects; main RAM, which may be memory the GPU shares (KairoX86#315) */
+    mem_release_ram();
     kairo_gpu_close();
     release_mappings();
     release_blocks();

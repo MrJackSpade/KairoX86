@@ -1,0 +1,51 @@
+#version 450
+#extension GL_EXT_control_flow_attributes : require
+/*
+ * The Cyrix MediaGX's BitBLT and vector engine on the GPU (KairoX86#315): vid_cyrix_gxm.c's pixel (gxm_gp_blt's and
+ * gxm_gp_vector's inner step) for runs of pixels (kairo_seg_run), on the drawing engines' shared batches (seg.glsl).
+ * The walk stays the CPU's; each pixel's pattern and source are its stream words (86box/kairo_gpu_gxm.h).
+ *
+ * Copyright 2026 MrJackSpade. GPL-2.0-or-later.
+ */
+#include "seg.glsl"
+
+const uint GX_ROP = 0u, GX_FLAGS = 1u, GX_KEY = 2u, GX_ONES = 3u, GX_WORDS = 4u;
+const uint GXF_DEST = 1u, GXF_KEY = 2u, GXW_IMM = 0x80000000u;
+
+uint ow(uint o, uint i) { return ops[o + i]; }
+
+/* gxm_rop: bit k of the ROP is the output for pattern, source and destination bits (k >> 2, k >> 1, k) & 1 */
+uint rop3(uint code, uint p, uint s, uint d)
+{
+    uint r = 0u;
+    for (uint b = 0u; b < 16u; b++) {
+        const uint idx = (((p >> b) & 1u) << 2) | (((s >> b) & 1u) << 1) | ((d >> b) & 1u);
+        r |= ((code >> idx) & 1u) << b;
+    }
+    return r;
+}
+
+void card_pixels(uint seg, uint op, uint row, uint first, int i0, int i1)
+{
+    const uint o     = op * GX_WORDS;
+    const uint ones  = ow(o, GX_ONES);
+    const uint flags = ow(o, GX_FLAGS);
+    const uint pb    = (ones == 0xffffu) ? 2u : 1u;
+    const int  dir   = int(segs[seg * KG_WORDS + KG_DIR]);
+    const uint d0    = segs[seg * KG_WORDS + KG_BIT] >> 3;
+    [[dont_unroll]] for (int n = i0; n < i1; n++) {
+        const uint w  = row + uint(n) * 2u;
+        const uint p  = stream[w];
+        const uint ws = stream[w + 1u];
+        const uint a  = d0 + uint((int(first) + n * dir) * int(pb));
+        const uint s  = ((ws & GXW_IMM) != 0u) ? (ws & 0xffffu) : ((pb == 2u) ? rd16(ws) : rd8(ws));
+        if (((flags & GXF_KEY) != 0u) && (s == ow(o, GX_KEY)))
+            continue;
+        const uint d = ((flags & GXF_DEST) != 0u) ? ((pb == 2u) ? rd16(a) : rd8(a)) : ones;
+        const uint v = rop3(ow(o, GX_ROP), p, s, d) & ones;
+        if (pb == 2u)
+            wr16(a, v);
+        else
+            wr8(a, v);
+    }
+}

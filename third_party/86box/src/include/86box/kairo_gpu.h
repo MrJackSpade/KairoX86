@@ -52,6 +52,9 @@ void                kairo_gpu_buffer_free(kairo_gpu_buffer_t *buffer);
 void               *kairo_gpu_alloc(size_t size);
 void                kairo_gpu_free(void *data);
 kairo_gpu_buffer_t *kairo_gpu_buffer_of(const void *data);
+/* The buffer of the allocation p lies in, and p's byte offset in it (KairoX86#315: a card whose memory is a part of an
+   allocation, the MediaGX's frame buffer in main RAM) */
+kairo_gpu_buffer_t *kairo_gpu_buffer_containing(const void *p, size_t *offset);
 
 /* KairoX86#239: for a card's own Vulkan backend (the Rage 128's), the core's Vulkan, which it works with instead of its
    own: vkGetInstanceProcAddr, the instance, physical device, device, the queue's family and the queue (as the

@@ -33,6 +33,7 @@
 #include <86box/machine.h>
 #include <86box/m_xt_xi8088.h>
 #include <86box/config.h>
+#include <86box/kairo_gpu.h> /* KairoX86#315 */
 #include <86box/io.h>
 #include <86box/mem.h>
 #include <86box/plat.h>
@@ -64,6 +65,7 @@ page_t  *pages;       /* RAM page table */
 int      mem_pages_as_reset = 0;
 uint32_t pages_sz;    /* #pages in table */
 
+static int ram_on_gpu; /* KairoX86#315: ram is memory the GPU shares (kairo_gpu_alloc) */
 K9X_HOT uint8_t *ram;  /* the virtual RAM */
 uint8_t  page_ff[4096];
 K9X_HOT uint32_t rammask;
@@ -3267,17 +3269,20 @@ mem_reset(void)
         pages = NULL;
     }
 
-    if (ram != NULL) {
-        plat_munmap(ram, ram_size);
-        ram      = NULL;
-        ram_size = 0;
-    }
+    mem_release_ram();
 
     m = 1024UL * (size_t) mem_size;
 
     ram_size = m;
-    /* Allocate 16 extra bytes of RAM to mitigate some dynarec recompiler memory access quirks. */
-    ram      = (uint8_t *) plat_mmap(ram_size + 16, 0, &large_mem); /* allocate and clear the RAM block */
+    /* KairoX86#315: a MediaGX's graphics memory is the top of main RAM, which its BitBLT engine draws on: with Hardware
+       acceleration on, the RAM is memory the GPU shares (zeroed, as plat_mmap's) */
+    ram_on_gpu = kairo_gpu_on && (machines[machine].chipset == MACHINE_CHIPSET_CYRIX_CX5530);
+    /* Allocate 16 extra bytes of RAM to mitigate some dynarec recompiler memory access quirks. On the GPU, 4 MB more:
+       the engine's batch addresses the graphics memory's whole 22-bit window from its base (vid_cyrix_gxm.c). */
+    if (ram_on_gpu)
+        ram = (uint8_t *) kairo_gpu_alloc(ram_size + 16 + 0x400000);
+    else
+        ram = (uint8_t *) plat_mmap(ram_size + 16, 0, &large_mem); /* allocate and clear the RAM block */
     if (ram == NULL) {
         fatal("Failed to allocate RAM block. Make sure you have enough RAM available.\n");
         return;
@@ -3393,6 +3398,21 @@ mem_reset(void)
 
     purgable_page_list_head = 0;
     purgeable_page_count    = 0;
+}
+
+/* KairoX86#315: main RAM freed as it was allocated (mem_reset's, and the frontend's before the GPU closes) */
+void
+mem_release_ram(void)
+{
+    if (ram == NULL)
+        return;
+    if (ram_on_gpu)
+        kairo_gpu_free(ram);
+    else
+        plat_munmap(ram, ram_size);
+    ram        = NULL;
+    ram_size   = 0;
+    ram_on_gpu = 0;
 }
 
 void

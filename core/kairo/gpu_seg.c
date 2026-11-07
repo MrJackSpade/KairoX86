@@ -38,6 +38,7 @@ struct kairo_seg {
     size_t              spirv_bytes;
     kairo_gpu_buffer_t *ops, *segs, *lists, *stream, *vram;
     uint32_t            vram_mask, op_words;
+    uint32_t            vram_base; /* video memory's first byte in its buffer (KairoX86#315) */
     uint32_t            n_ops, n_segs, n_stream, n_entries;
     bool                in_order;
     int32_t            *block_slot; /* each block's place in the drain's list, -1 none */
@@ -74,7 +75,12 @@ kairo_seg_open(const char *name, const uint32_t *spirv, size_t spirv_bytes, uint
     s->ops         = kairo_gpu_buffer((size_t) OPS_MAX * op_words * 4);
     s->segs        = kairo_gpu_buffer((size_t) SEGS_MAX * KG_WORDS * 4);
     s->stream      = kairo_gpu_buffer((size_t) STREAM_MAX * 4);
-    s->vram        = kairo_gpu_buffer_of(vram);
+    size_t base;
+    s->vram        = kairo_gpu_buffer_containing(vram, &base);
+    if ((base & 3) || (base + (size_t) vram_mask + 1 > s->vram->size))
+        fatal("%s on the GPU: its video memory at %zu, %u bytes, in a buffer of %zu\n", name, base, vram_mask + 1,
+              s->vram->size);
+    s->vram_base   = (uint32_t) base;
     const uint32_t blocks = (vram_mask >> BLOCK_SHIFT) + 1;
     /* The lists: three words a listed block (its id, its first entry, its entries), then the entries; a segment
        spans at most a few blocks of a row, so the entries are bounded by the segments' blocks */
@@ -150,7 +156,7 @@ drain_locked(kairo_seg_t *s)
             s->block_slot[s->block_ids[k]] = -1;
     }
 
-    const uint32_t push[8] = { s->n_segs, s->vram_mask, s->in_order ? 1u : 0u, n_blocks, n_blocks * 3, 0, 0, 0 };
+    const uint32_t push[8] = { s->n_segs, s->vram_mask, s->in_order ? 1u : 0u, n_blocks, n_blocks * 3, s->vram_base, 0, 0 };
     kairo_gpu_buffer_t *const buffers[5] = { s->ops, s->segs, s->lists, s->stream, s->vram };
     kairo_gpu_run(s->kernel, buffers, push, s->in_order ? 1 : (n_blocks ? n_blocks : 1), 1, 1);
 

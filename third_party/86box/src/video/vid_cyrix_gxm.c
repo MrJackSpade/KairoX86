@@ -43,6 +43,8 @@
 #include <86box/timer.h>
 #include <86box/video.h>
 #include <86box/kairo_gpu.h> /* KairoX86#315 */
+#include <86box/kairo_gpu_seg.h>
+#include <86box/kairo_gpu_gxm.h>
 #include <86box/plat_unused.h>
 #include <86box/cyrix_gxm.h>
 
@@ -237,6 +239,19 @@ typedef struct gxm_video_t {
     int        lineno; /* The frame buffer line, for line doubling */
     int        blink;
     int        output;  /* This display is the one shown */
+
+    /* KairoX86#315: the BitBLT and vector engine's batch on the GPU and its runs (a byte, a word a pixel); seg NULL in
+       software. Its record for the operation being walked (next) and the one last put in the batch. */
+    struct {
+        kairo_seg_t     *seg;
+        kairo_seg_run_t *run[2];
+        uint32_t         next[GX_WORDS];
+        uint32_t         record[GX_WORDS];
+        uint64_t         generation;
+        int              issued;
+        int              in_order;
+        int              direct; /* the processor reaches the graphics memory directly (below the DRAM top) */
+    } k;
 } gxm_video_t;
 
 void *gxm_video = NULL;
@@ -268,6 +283,112 @@ gxm_gmem(gxm_video_t *dev, uint32_t offset)
     return &ram[dev->gmem_base + offset];
 }
 
+/* ----------------------------------------------------------------------
+   KairoX86#315: the BitBLT and vector engine on the GPU. Its frame buffer is
+   the graphics memory, the top of main RAM (memory the GPU shares on the
+   MediaGX machines, mem.c), its 22-bit offsets the batch's addresses.
+   ---------------------------------------------------------------------- */
+#define GXM_K_MASK 0x003fffff
+
+/* Whether the engine draws on the GPU now: not while the processor reaches the graphics memory as DRAM, past every
+   access hook */
+static inline int
+gxm_k_on(const gxm_video_t *dev)
+{
+    return (dev->k.seg != NULL) && !dev->k.direct;
+}
+
+/* The graphics memory at offset (len bytes) is about to be read or written by other than the batch */
+static inline void
+gxm_k_touch(gxm_video_t *dev, uint32_t offset, uint32_t len)
+{
+    if (dev->k.seg != NULL)
+        kairo_seg_touch(dev->k.seg, offset & GXM_K_MASK, len);
+}
+
+/* Whether a pixel of pb bytes at offset is in the graphics memory (gxm_gmem's test: else it is its dummy) */
+static inline int
+gxm_k_in(const gxm_video_t *dev, uint32_t offset)
+{
+    return ((offset & GXM_K_MASK) + 4) <= dev->gmem_size;
+}
+
+/* Every run into the batch: the walk has ended, the processor may meet its pixels next */
+static void
+gxm_k_flush(gxm_video_t *dev)
+{
+    if (dev->k.seg != NULL)
+        for (int i = 0; i < 2; i++)
+            kairo_seg_run_flush(dev->k.run[i]);
+}
+
+/* A run's operation in the batch: the record again only where it differs or the batch has been drawn */
+static void
+gxm_k_op(void *priv, bool in_order)
+{
+    gxm_video_t *dev = (gxm_video_t *) priv;
+
+    kairo_seg_make_room(dev->k.seg);
+    if (dev->k.issued && (dev->k.in_order == in_order) && (dev->k.generation == kairo_seg_generation(dev->k.seg)) &&
+        !memcmp(dev->k.record, dev->k.next, sizeof(dev->k.next)))
+        return;
+    memcpy(kairo_seg_op(dev->k.seg, in_order), dev->k.next, sizeof(dev->k.next));
+    memcpy(dev->k.record, dev->k.next, sizeof(dev->k.next));
+    dev->k.generation = kairo_seg_generation(dev->k.seg);
+    dev->k.in_order   = in_order;
+    dev->k.issued     = 1;
+}
+
+/* An operation's record, before its pixels: its runs flushed first where it differs, so each run is one record's */
+static void
+gxm_k_begin(gxm_video_t *dev, uint8_t rop, uint32_t flags, uint32_t key, uint32_t ones)
+{
+    const uint32_t next[GX_WORDS] = { rop, flags, key, ones };
+
+    if (memcmp(next, dev->k.next, sizeof(next))) {
+        gxm_k_flush(dev);
+        memcpy(dev->k.next, next, sizeof(next));
+    }
+}
+
+/* A pixel drawn at offset: its pattern, and its source (s, or the pixel at s_at when that is not KAIRO_SEG_RUN_NONE) */
+static void
+gxm_k_pixel(gxm_video_t *dev, uint32_t offset, uint32_t p, uint32_t s, uint32_t s_at)
+{
+    const int      pb       = (dev->k.next[GX_ONES] == 0xffff) ? 2 : 1;
+    const uint32_t words[2] = { p, (s_at == KAIRO_SEG_RUN_NONE) ? (GXW_IMM | (s & 0xffff)) : (s_at & GXM_K_MASK) };
+    const uint32_t reads[1] = { (s_at == KAIRO_SEG_RUN_NONE) ? KAIRO_SEG_RUN_NONE : (s_at & GXM_K_MASK) };
+
+    /* A run is of one pixel size: the other size's run goes in first */
+    kairo_seg_run_flush(dev->k.run[2 - pb]);
+    kairo_seg_run_pixel(dev->k.run[pb - 1], offset & GXM_K_MASK, words, reads);
+}
+
+static void
+gxm_k_close(gxm_video_t *dev)
+{
+    if (dev->k.seg == NULL)
+        return;
+    gxm_k_flush(dev);
+    kairo_seg_drain(dev->k.seg);
+    for (int i = 0; i < 2; i++)
+        kairo_seg_run_close(dev->k.run[i]);
+    kairo_seg_close(dev->k.seg);
+    dev->k.seg    = NULL;
+    dev->k.issued = 0;
+}
+
+/* The batch on the graphics memory where it is now (none without any) */
+static void
+gxm_k_open(gxm_video_t *dev)
+{
+    if (!kairo_gpu_on || !dev->gmem_size)
+        return;
+    dev->k.seg = kairo_gxm_open(&ram[dev->gmem_base], GXM_K_MASK);
+    for (int i = 0; i < 2; i++)
+        dev->k.run[i] = kairo_seg_run_open(dev->k.seg, GXM_K_MASK, (uint32_t) (i + 1), GX_PIXEL_WORDS, 1, gxm_k_op, dev);
+}
+
 void
 gxm_video_set_gmem(void *priv, uint32_t base, uint32_t size)
 {
@@ -276,14 +397,35 @@ gxm_video_set_gmem(void *priv, uint32_t base, uint32_t size)
     if (dev == NULL)
         return;
 
+    if ((dev->k.seg != NULL) && (base == dev->gmem_base) && (size == dev->gmem_size))
+        return;
+    gxm_k_close(dev); /* KairoX86#315: drawn where it was */
     dev->gmem_base = base;
     dev->gmem_size = size;
+    gxm_k_open(dev);
 }
 
 void
-gxm_video_gmem_written(UNUSED(void *priv), UNUSED(uint32_t addr), UNUSED(int size))
+gxm_video_gmem_touch(void *priv, uint32_t addr, int size)
 {
-    /* The whole frame is drawn each frame. */
+    gxm_video_t *dev = (gxm_video_t *) priv;
+
+    if (dev != NULL)
+        gxm_k_touch(dev, addr, (uint32_t) size);
+}
+
+void
+gxm_video_set_gmem_direct(void *priv, int direct)
+{
+    gxm_video_t *dev = (gxm_video_t *) priv;
+
+    if (dev == NULL)
+        return;
+    if (direct && !dev->k.direct && (dev->k.seg != NULL)) { /* the processor's from now on: everything drawn first */
+        gxm_k_flush(dev);
+        kairo_seg_drain(dev->k.seg);
+    }
+    dev->k.direct = direct;
 }
 
 /* ----------------------------------------------------------------------
@@ -364,6 +506,7 @@ gxm_vga_readb_internal(gxm_video_t *dev, uint32_t off)
     uint8_t        ret;
     int            plane;
 
+    gxm_k_touch(dev, gxm_vga_mem_offset(dev, addr), 4); /* KairoX86#315 */
     dev->vga_latch = *(uint32_t *) gxm_gmem(dev, gxm_vga_mem_offset(dev, addr));
 
     if (rd & VGAR_RM) {
@@ -429,6 +572,7 @@ gxm_vga_writeb_internal(gxm_video_t *dev, uint32_t off, uint8_t val)
     out   = gxm_rop(dev->raster_mode & 0xff, pmask, data, dev->vga_latch);
 
     planes &= (wr >> 24) & 0x0f;
+    gxm_k_touch(dev, gxm_vga_mem_offset(dev, addr), 4); /* KairoX86#315 */
     p = gxm_gmem(dev, gxm_vga_mem_offset(dev, addr));
     for (int i = 0; i < 4; i++) {
         if (planes & (1 << i))
@@ -658,6 +802,7 @@ gxm_gp_blt(gxm_video_t *dev)
     uint32_t       key      = 0;
     uint32_t       bb_off;
     static uint32_t src_line[GXM_BLT_LINE_MAX];
+    const int       k       = gxm_k_on(dev); /* KairoX86#315: the pixels drawn on the GPU */
 
     gxm_video_log("GP: BLT %08X ROP %02X raster %08X, (%i, %i) <- (%i, %i), %ix%i\n",
                   dev->blt_mode, rop, dev->raster_mode, dst_x, dst_y, src_x, src_y, width, height);
@@ -666,6 +811,8 @@ gxm_gp_blt(gxm_video_t *dev)
        data. */
     if ((dev->raster_mode & RM_TB) && ((rd == 2) || (rd == 3)))
         key = gxm_bb_read(dev, rd & 1, 0);
+    if (k)
+        gxm_k_begin(dev, rop, (dev->raster_mode & RM_TB) ? GXF_KEY : ((rd >= 2) ? GXF_DEST : 0), key, ones);
 
     /* A BLT buffer source is consumed a line after the other: a color bitmap
        a line of pixels, a monochrome bitmap or a text glyph a line of bytes
@@ -676,12 +823,28 @@ gxm_gp_blt(gxm_video_t *dev)
         const int dy = yrev ? (dst_y - line) : (dst_y + line);
         const int sy = yrev ? (src_y - line) : (src_y + line);
         uint32_t  line_bytes;
+        /* KairoX86#315: on the GPU a colour frame buffer source is read by the kernel, unless the source line overlaps
+           the line drawn (the CPU reads it whole first, below, the batch drawn there first) */
+        int       src_at_gpu = 0;
+
+        if (k && (rs == 1) && !mono && (width > 0)) {
+            const uint32_t s_lo = gxm_gp_fb_offset(dev, src_x, sy) & GXM_K_MASK;
+            const uint32_t d_lo = gxm_gp_fb_offset(dev, dst_x, dy) & GXM_K_MASK;
+            const uint32_t len  = (uint32_t) width * (uint32_t) bpp;
+
+            src_at_gpu = ((s_lo + len) <= (GXM_K_MASK + 1)) && ((d_lo + len) <= (GXM_K_MASK + 1)) &&
+                         (((s_lo + len) <= d_lo) || ((d_lo + len) <= s_lo));
+        }
+        if (k && (rs == 1) && !src_at_gpu) {
+            gxm_k_flush(dev);
+            kairo_seg_drain(dev->k.seg);
+        }
 
         /* A frame buffer source line is read whole, through the BLT buffers,
            before it is written: a copy that overlaps on the same line (the
            tray clock moved right as the tray grows) must not read pixels it
            has already written. */
-        if (rs == 1) {
+        if ((rs == 1) && !src_at_gpu) {
             for (int i = 0; (i < width) && (i < GXM_BLT_LINE_MAX); i++) {
                 if (mono) {
                     const int b = src_x + i;
@@ -699,11 +862,21 @@ gxm_gp_blt(gxm_video_t *dev)
             uint32_t  p;
             int       draw;
             int       bit = 1;
+            uint32_t  s_at = KAIRO_SEG_RUN_NONE; /* KairoX86#315: the source pixel the kernel reads */
 
             p = gxm_gp_pattern(dev, dx, dy, &draw);
 
             switch (rs) {
                 case 1: /* Frame buffer */
+                    if (src_at_gpu) {
+                        const uint32_t at = gxm_gp_fb_offset(dev, src_x + i, sy);
+
+                        if (gxm_k_in(dev, at))
+                            s_at = at;
+                        else
+                            s = gxm_gp_fb_read(dev, src_x + i, sy); /* gxm_gmem's dummy */
+                        break;
+                    }
                     if (i >= GXM_BLT_LINE_MAX)
                         break;
                     if (mono)
@@ -734,6 +907,14 @@ gxm_gp_blt(gxm_video_t *dev)
             if (!draw)
                 continue;
 
+            if (k) { /* KairoX86#315: the kernel reads the destination and compares a source it reads with the key */
+                const uint32_t at = gxm_gp_fb_offset(dev, dx, dy);
+
+                if (((s_at != KAIRO_SEG_RUN_NONE) || !(dev->raster_mode & RM_TB) || (s != key)) && gxm_k_in(dev, at))
+                    gxm_k_pixel(dev, at, p, s, s_at);
+                continue;
+            }
+
             if (dev->raster_mode & RM_TB) {
                 if (s == key)
                     continue;
@@ -749,6 +930,8 @@ gxm_gp_blt(gxm_video_t *dev)
             line_bytes = width * bpp;
         bb_off += line_bytes;
     }
+    if (k)
+        gxm_k_flush(dev); /* KairoX86#315 */
 
     /* The master registers not written again take the slave's values on
        (Table 4-21). */
@@ -779,15 +962,24 @@ gxm_gp_vector(gxm_video_t *dev)
     const int      mins   = (dev->vector_mode & VM_DMIN) ? 1 : -1;
     const int      ymaj   = !!(dev->vector_mode & VM_YMAJ);
 
+    const int      k      = gxm_k_on(dev); /* KairoX86#315: the pixels drawn on the GPU */
+
     gxm_video_log("GP: Vector %08X, (%i, %i) length %i\n", dev->vector_mode, x, y, length);
 
+    if (k)
+        gxm_k_begin(dev, rop, (dev->vector_mode & VM_DEST) ? GXF_DEST : 0, 0, ones);
     for (int i = 0; i < length; i++) {
         uint32_t d = ones;
         uint32_t p;
         int      draw;
 
         p = gxm_gp_pattern(dev, x, y, &draw);
-        if (draw) {
+        if (draw && k) {
+            const uint32_t at = gxm_gp_fb_offset(dev, x, y);
+
+            if (gxm_k_in(dev, at))
+                gxm_k_pixel(dev, at, p, ones, KAIRO_SEG_RUN_NONE);
+        } else if (draw) {
             if (dev->vector_mode & VM_DEST)
                 d = gxm_gp_fb_read(dev, x, y);
             gxm_gp_fb_write(dev, x, y, gxm_rop(rop, p, ones, d) & ones);
@@ -807,6 +999,8 @@ gxm_gp_vector(gxm_video_t *dev)
             x += majs;
     }
 
+    if (k)
+        gxm_k_flush(dev); /* KairoX86#315 */
     dev->dst_xy = (x & 0xffff) | ((uint32_t) (y & 0xffff) << 16);
     dev->wh     = (dev->wh & 0x0000ffff) | ((uint32_t) (err & 0xffff) << 16);
 }
@@ -1326,6 +1520,24 @@ gxm_render_line(gxm_video_t *dev, int y)
     uint32_t  addr   = dev->ma;
     int       x      = 0;
 
+    if (dev->k.seg != NULL) { /* KairoX86#315: what the line reads, the engine's batch drawn there first */
+        const int      n = pxdb ? ((dev->hdisp + 1) / 2) : dev->hdisp;
+        const uint32_t len = planar ? (uint32_t) ((dev->hdisp + (pxdb ? 15 : 7)) / (pxdb ? 16 : 8)) * 4
+                                    : (uint32_t) n * (bpp16 ? 2 : (ch4s ? 4 : 1));
+        uint32_t       src[2];
+        int            width;
+        int            yph;
+        int            x0;
+        int            x1;
+
+        gxm_k_touch(dev, addr, len);
+        if (gxm_cursor_on_line(dev, y))
+            gxm_k_touch(dev, (dev->dc[DC_CURS_ST_OFFSET] & 0x3ffffc) + ((uint32_t) (y - (int) (dev->dc[DC_CURSOR_Y] & 0x3ff)) << 3), 8);
+        if (gxm_video_window(dev, y, src, &width, &yph, &x0, &x1)) {
+            gxm_k_touch(dev, src[0], (uint32_t) width * 2);
+            gxm_k_touch(dev, src[1], (uint32_t) width * 2);
+        }
+    }
     if (gxm_render_line_gpu(dev, y))
         return; /* KairoX86#315: the GPU draws the line */
     if (kairo_gpu_on) /* the CPU draws it: what the GPU still has to draw there first */
@@ -1676,6 +1888,7 @@ gxm_video_close(void *priv)
     gxm_video_t *dev = (gxm_video_t *) priv;
 
     gxm_video = NULL;
+    gxm_k_close(dev); /* KairoX86#315 */
     free(dev);
 }
 
