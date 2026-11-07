@@ -57,7 +57,7 @@ set(KAIRO_FRONTEND "${CMAKE_CURRENT_LIST_DIR}/kairo/frontend.c" "${CMAKE_CURRENT
     "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_scanout.c"
     "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_voodoo.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_virge.c"
     "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_mach64.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_powervr.c"
-    "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_seg.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_seg_run.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_mach64_2d.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_p9100.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_et4000w32.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_cl54xx.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_chips69000.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_tgui.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_xga.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_s3.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_ibm8514.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_mga.c"
+    "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_seg.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_seg_run.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_mach64_2d.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_p9100.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_et4000w32.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_cl54xx.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_chips69000.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_tgui.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_xga.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_s3.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_ibm8514.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_mga.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_virge2d.c"
     "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_pages.c")
 set(QT OFF CACHE BOOL "" FORCE)
 set(OPENAL OFF CACHE BOOL "" FORCE)
@@ -139,7 +139,7 @@ set(KAIROX86_SHADER_OUT "${CMAKE_CURRENT_BINARY_DIR}/kairo_shaders")
 set(KAIROX86_SHADER_INCS)
 # The kernels' shared parts (#include, from the shaders' folder): every kernel is rebuilt when one changes
 file(GLOB KAIROX86_SHADER_PARTS "${CMAKE_CURRENT_LIST_DIR}/kairo/shaders/*.glsl")
-foreach(shader scanout.comp voodoo.comp virge.comp mach64.comp powervr.comp mach64_2d.comp p9100.comp et4000w32.comp cl54xx.comp chips69000.comp tgui.comp xga.comp s3.comp ibm8514.comp mga.comp)
+foreach(shader scanout.comp voodoo.comp virge.comp mach64.comp powervr.comp mach64_2d.comp p9100.comp et4000w32.comp cl54xx.comp chips69000.comp tgui.comp xga.comp s3.comp ibm8514.comp mga.comp virge2d.comp)
     set(source "${CMAKE_CURRENT_LIST_DIR}/kairo/shaders/${shader}")
     set(inc "${KAIROX86_SHADER_OUT}/${shader}.inc")
     add_custom_command(OUTPUT "${inc}"

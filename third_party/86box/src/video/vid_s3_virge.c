@@ -42,6 +42,8 @@
 #include <86box/vid_svga_render.h>
 #include <86box/kairo_gpu.h>       /* KairoX86#272 */
 #include <86box/kairo_gpu_virge.h>
+#include <86box/kairo_gpu_seg.h>
+#include <86box/kairo_gpu_virge2d.h>
 
 #ifdef MIN
     #undef MIN
@@ -308,6 +310,8 @@ typedef struct virge_t {
     ATOMIC_INT s3d_busy[S3D_RENDER_THREADS_MAX];
     /* KairoX86#272: its triangles' GPU state (kairo_gpu_virge.h), NULL in software */
     void *k_gpu;
+    /* KairoX86#272: its 2D engine's batch on the GPU (kairo_gpu_virge2d.h), NULL in software */
+    struct s3_virge_k2d *k2d;
 
     struct {
         uint32_t pri_ctrl;
@@ -1385,6 +1389,8 @@ s3_virge_render_sync(svga_t *svga)
     s3_virge_wait_3d_idle(virge);
 }
 
+static void s3_virge_k2d_touch(const virge_t *virge, uint32_t addr, uint32_t len);
+
 /* KairoX86#272: the processor's reads and writes of video memory (vid_svga.c's touch hook) */
 static void
 s3_virge_kairo_touch(svga_t *svga, uint32_t addr, uint32_t len)
@@ -1392,6 +1398,7 @@ s3_virge_kairo_touch(svga_t *svga, uint32_t addr, uint32_t len)
     const virge_t *virge = (virge_t *) svga->priv;
 
     kairo_virge_gpu_touch(virge->k_gpu, addr, len);
+    s3_virge_k2d_touch(virge, addr, len);
 }
 
 static uint8_t
@@ -3259,8 +3266,112 @@ s3_virge_mmio_write_l(uint32_t addr, uint32_t val, void *priv)
         }                                                                        \
     } while (0)
 
+/* KairoX86#272: the 2D engine's batch on the GPU, with Hardware acceleration on. The engine walks on its FIFO thread
+   while the machine's thread touches video memory: both hold lock, so one run is flushed at a time. */
+struct s3_virge_k2d {
+    kairo_seg_t     *seg;
+    kairo_seg_run_t *run[3];           /* 1 to 3-byte pixels */
+    mutex_t         *lock;
+    uint32_t         record[V2_WORDS]; /* the operation last put in the batch */
+    uint32_t         next[V2_WORDS];   /* the operation of the pixels being recorded */
+    uint64_t         generation;
+    int              issued;
+    int              in_order;
+};
+
+/* The run's operation in the batch: the record again only where it differs or the batch has been drawn */
+static void
+s3_virge_k2d_op(void *priv, bool in_order)
+{
+    struct s3_virge_k2d *g = (struct s3_virge_k2d *) priv;
+
+    kairo_seg_make_room(g->seg);
+    if (g->issued && (g->in_order == in_order) && (g->generation == kairo_seg_generation(g->seg)) &&
+        !memcmp(g->record, g->next, sizeof(g->record)))
+        return;
+    memcpy(kairo_seg_op(g->seg, in_order), g->next, sizeof(g->next));
+    memcpy(g->record, g->next, sizeof(g->record));
+    g->generation = kairo_seg_generation(g->seg);
+    g->in_order   = in_order;
+    g->issued     = 1;
+}
+
+static void
+s3_virge_k2d_flush(const virge_t *virge)
+{
+    for (int i = 0; i < 3; i++)
+        kairo_seg_run_flush(virge->k2d->run[i]);
+}
+
+/* The processor's or the display's access of len bytes at addr: the 2D batch's work there first (the card's lock
+   taken) */
+static void
+s3_virge_k2d_touch(const virge_t *virge, uint32_t addr, uint32_t len)
+{
+    thread_wait_mutex(virge->k2d->lock);
+    kairo_seg_touch(virge->k2d->seg, addr & virge->vram_mask, len);
+    thread_release_mutex(virge->k2d->lock);
+}
+
+/* The 2D batch drawn before the 3D engine draws (the card's lock taken) */
+static void
+s3_virge_k2d_drain(const virge_t *virge)
+{
+    if (virge->k2d == NULL)
+        return;
+    thread_wait_mutex(virge->k2d->lock);
+    s3_virge_k2d_flush(virge);
+    kairo_seg_drain(virge->k2d->seg);
+    thread_release_mutex(virge->k2d->lock);
+}
+
+/* One pixel of the 2D engine at dest_addr: the destination read, the ternary raster operation with the source and the
+   pattern, the write (READ, MIX, WRITE). With Hardware acceleration on, recorded for the GPU. */
+static void
+s3_virge_draw(virge_t *virge, uint8_t *vram, int bpp, uint32_t dest_addr, uint32_t source, uint32_t pattern)
+{
+    uint32_t dest = 0;
+    uint32_t out  = 0;
+
+    if (virge->k2d != NULL) {
+        struct s3_virge_k2d *g             = virge->k2d;
+        uint32_t             rec[V2_WORDS] = { 0 };
+
+        rec[V2_ROP]   = virge->s3d.rop & 0xff;
+        rec[V2_BYTES] = (uint32_t) bpp + 1;
+        /* A run is of one operation */
+        if (memcmp(rec, g->next, sizeof(rec))) {
+            s3_virge_k2d_flush(virge);
+            memcpy(g->next, rec, sizeof(rec));
+        }
+
+        const uint32_t words[V2_PIXEL_WORDS] = { source, pattern };
+
+        kairo_seg_run_pixel(g->run[bpp], dest_addr & virge->vram_mask, words, NULL);
+        return;
+    }
+    READ(dest_addr, dest);
+    MIX();
+    WRITE(dest_addr, out);
+}
+
+static void s3_virge_bitblt_walk(virge_t *virge, int count, uint32_t cpu_dat);
+
+/* KairoX86#272: the 2D engine's walk, the card's lock held */
 static void
 s3_virge_bitblt(virge_t *virge, int count, uint32_t cpu_dat)
+{
+    if (virge->k2d == NULL) {
+        s3_virge_bitblt_walk(virge, count, cpu_dat);
+        return;
+    }
+    thread_wait_mutex(virge->k2d->lock);
+    s3_virge_bitblt_walk(virge, count, cpu_dat);
+    thread_release_mutex(virge->k2d->lock);
+}
+
+static void
+s3_virge_bitblt_walk(virge_t *virge, int count, uint32_t cpu_dat)
 {
     /* KairoX86#272: the 2D engine works on memory the GPU may still draw on */
     if (virge->k_gpu != NULL)
@@ -3361,14 +3472,14 @@ s3_virge_bitblt(virge_t *virge, int count, uint32_t cpu_dat)
                 uint32_t dest_addr = virge->s3d.dest_base + (virge->s3d.dest_x * x_mul) +
                                      (virge->s3d.dest_y * virge->s3d.dest_str);
                 uint32_t source    = 0;
-                uint32_t dest      = 0;
                 uint32_t pattern;
-                uint32_t out    = 0;
                 int      update = 1;
 
                 switch (virge->s3d.cmd_set & (CMD_SET_MS | CMD_SET_IDS)) {
                     case 0:
                     case CMD_SET_MS:
+                        if (virge->k2d != NULL) /* KairoX86#272 */
+                            kairo_seg_touch(virge->k2d->seg, src_addr & virge->vram_mask, 4);
                         READ(src_addr, source);
                         if ((virge->s3d.cmd_set & CMD_SET_TP) && (source == src_fg_clr))
                             update = 0;
@@ -3411,11 +3522,8 @@ s3_virge_bitblt(virge_t *virge, int count, uint32_t cpu_dat)
                 CLIP(virge->s3d.dest_x, virge->s3d.dest_y);
 
                 if (update) {
-                    READ(dest_addr, dest);
                     pattern = pattern_data[(virge->s3d.dest_y & 7) * 8 + (virge->s3d.dest_x & 7)];
-                    MIX();
-
-                    WRITE(dest_addr, out);
+                    s3_virge_draw(virge, vram, bpp, dest_addr, source, pattern);
                 }
 
                 virge->s3d.src_x += x_inc;
@@ -3465,19 +3573,13 @@ s3_virge_bitblt(virge_t *virge, int count, uint32_t cpu_dat)
             while (count && virge->s3d.h) {
                 uint32_t dest_addr = virge->s3d.dest_base + (virge->s3d.dest_x * x_mul) + (virge->s3d.dest_y * virge->s3d.dest_str);
                 uint32_t source    = 0;
-                uint32_t dest      = 0;
                 uint32_t pattern   = virge->s3d.pat_fg_clr;
-                uint32_t out       = 0;
                 int      update    = 1;
 
                 CLIP(virge->s3d.dest_x, virge->s3d.dest_y);
 
                 if (update) {
-                    READ(dest_addr, dest);
-
-                    MIX();
-
-                    WRITE(dest_addr, out);
+                    s3_virge_draw(virge, vram, bpp, dest_addr, source, pattern);
                 }
 
                 virge->s3d.src_x += x_inc;
@@ -3530,9 +3632,7 @@ s3_virge_bitblt(virge_t *virge, int count, uint32_t cpu_dat)
                     uint32_t dest_addr = virge->s3d.dest_base + (x * x_mul) +
                              (virge->s3d.dest_y * virge->s3d.dest_str);
                     uint32_t source    = 0;
-                    uint32_t dest      = 0;
                     uint32_t pattern;
-                    uint32_t out    = 0;
                     int      update = 1;
 
                     if ((virge->s3d.h == virge->s3d.lycnt || !first_pixel) &&
@@ -3548,12 +3648,8 @@ s3_virge_bitblt(virge_t *virge, int count, uint32_t cpu_dat)
                     CLIP(x, virge->s3d.dest_y);
 
                     if (update) {
-                        READ(dest_addr, dest);
                         pattern = virge->s3d.pat_fg_clr;
-
-                        MIX();
-
-                        WRITE(dest_addr, out);
+                        s3_virge_draw(virge, vram, bpp, dest_addr, source, pattern);
                     }
 
                     if (x < new_x)
@@ -3586,20 +3682,14 @@ skip_line:
                 do {
                     uint32_t dest_addr = virge->s3d.dest_base + (x * x_mul) + (y * virge->s3d.dest_str);
                     uint32_t source    = 0;
-                    uint32_t dest      = 0;
                     uint32_t pattern;
-                    uint32_t out    = 0;
                     int      update = 1;
 
                     CLIP(x, y);
 
                     if (update) {
-                        READ(dest_addr, dest);
                         pattern = pattern_data[(y & 7) * 8 + (x & 7)];
-
-                        MIX();
-
-                        WRITE(dest_addr, out);
+                        s3_virge_draw(virge, vram, bpp, dest_addr, source, pattern);
                     }
 
                     x = (x + xdir) & 0x7ff;
@@ -5253,6 +5343,7 @@ queue_triangle(virge_t *virge)
                                    | (((virge->chip == S3_VIRGEDX) || (virge->chip >= S3_VIRGEGX2)) ? KAIRO_VIRGE_PERSP_375 : 0);
 
             s3_virge_gpu_mark_lines(virge, &virge->s3d_tri);
+            s3_virge_k2d_drain(virge); /* KairoX86#272: the 2D engine's work first */
             kairo_virge_gpu_queue(virge->k_gpu, record, flags, tex_start, tex_len);
             virge->tri_count++;
         }
@@ -6189,6 +6280,15 @@ s3_virge_init(const device_t *info)
     if (kairo_gpu_on) { /* KairoX86#272 */
         virge->k_gpu            = kairo_virge_gpu_open(virge->svga.vram, (virge->memory_size << 20) - 1);
         virge->svga.kairo_touch = s3_virge_kairo_touch;
+        virge->k2d              = calloc(1, sizeof(*virge->k2d));
+        if (virge->k2d == NULL)
+            fatal("ViRGE 2D on the GPU: no memory\n");
+        virge->k2d->seg  = kairo_virge2d_open(virge->svga.vram, (virge->memory_size << 20) - 1, virge->svga.changedvram,
+                                              &virge->svga.monitor->mon_changeframecount);
+        virge->k2d->lock = thread_create_mutex();
+        for (int i = 0; i < 3; i++)
+            virge->k2d->run[i] = kairo_seg_run_open(virge->k2d->seg, (virge->memory_size << 20) - 1, i + 1, V2_PIXEL_WORDS, 0,
+                                                    s3_virge_k2d_op, virge->k2d);
     }
 
     if (bios_fn != NULL) {
@@ -6414,6 +6514,13 @@ s3_virge_close(void *priv)
         thread_destroy_event(virge->wake_render_thread[lane]);
 
     kairo_virge_gpu_close(virge->k_gpu); /* KairoX86#272 */
+    if (virge->k2d != NULL) {
+        kairo_seg_close(virge->k2d->seg);
+        for (int i = 0; i < 3; i++)
+            kairo_seg_run_close(virge->k2d->run[i]);
+        thread_close_mutex(virge->k2d->lock);
+        free(virge->k2d);
+    }
     svga_close(&virge->svga);
 
     ddc_close(virge->ddc);
