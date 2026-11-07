@@ -42,6 +42,9 @@
 #include <86box/plat_fallthrough.h>
 #include <86box/plat_unused.h>
 #include <86box/bswap.h>
+#include <86box/kairo_gpu.h> /* KairoX86#250 */
+#include <86box/kairo_gpu_seg.h>
+#include <86box/kairo_gpu_cl54xx.h>
 
 #define BIOS_GD5401_PATH                "roms/video/cirruslogic/avga1.rom"
 #define BIOS_GD5401_ONBOARD_PATH        "roms/machines/drsm35286/qpaw01-6658237d5e3c2611427518.bin"
@@ -313,7 +316,20 @@ typedef struct gd54xx_t {
 
     void *i2c;
     void *ddc;
+
+    struct gd54xx_gpu_t *k_gpu; /* KairoX86#250: the BitBLT engine's batch on the GPU, NULL in software */
 } gd54xx_t;
+
+/* KairoX86#250: the engine's batch and the run of bytes its walk is drawing (kairo_seg_run) */
+typedef struct gd54xx_gpu_t {
+    kairo_seg_t     *seg;
+    kairo_seg_run_t *run;
+    uint32_t         record[CL_WORDS];
+    uint64_t         generation; /* the batch's drains when the record went in */
+    int              issued;
+    int              in_order;
+    int              normal; /* the run's write rule: gd54xx_normal_blit's, else gd54xx_blit's */
+} gd54xx_gpu_t;
 
 static video_timings_t timing_gd54xx_isa = { .type = VIDEO_ISA,
                                              .write_b = 3, .write_w = 3, .write_l = 6,
@@ -4005,15 +4021,168 @@ gd54xx_transparent_comp(gd54xx_t *gd54xx, uint32_t xx, uint8_t src)
     return ret;
 }
 
+/* KairoX86#250: the run's operation in the batch: the record again only where it differs or the batch has been drawn */
+static void
+gd54xx_k_op(void *priv, bool in_order)
+{
+    gd54xx_t     *gd54xx        = (gd54xx_t *) priv;
+    gd54xx_gpu_t *g             = gd54xx->k_gpu;
+    const int     sysdest       = !!(gd54xx->blt.mode & CIRRUS_BLTMODE_MEMSYSDEST);
+    uint32_t      rec[CL_WORDS] = { 0 };
+
+    rec[CL_ROP] = gd54xx->blt.rop;
+    if (g->normal)
+        rec[CL_FLAGS] = CLF_RULE_NORMAL | ((gd54xx->blt.mode & CIRRUS_BLTMODE_TRANSPARENTCOMP) ? CLF_TRANSP : 0);
+    else
+        rec[CL_FLAGS] = ((!sysdest && (gd54xx->blt.mode & CIRRUS_BLTMODE_TRANSPARENTCOMP)) ? CLF_TRANSP : 0) |
+                        ((!sysdest && (gd54xx->blt.modeext & CIRRUS_BLTMODEEXT_BACKGROUNDONLY)) ? CLF_BGONLY : 0);
+    rec[CL_FLAGS] |= ((gd54xx->blt.mode & CIRRUS_BLTMODE_COLOREXPAND) ? CLF_COLOREXP : 0) |
+                     ((gd54xx->blt.modeext & CIRRUS_BLTMODEEXT_COLOREXPINV) ? CLF_EXPINV : 0);
+    kairo_seg_make_room(g->seg);
+    if (g->issued && (g->in_order == in_order) && (g->generation == kairo_seg_generation(g->seg)) && !memcmp(g->record, rec, sizeof(rec)))
+        return;
+    memcpy(kairo_seg_op(g->seg, in_order), rec, sizeof(rec));
+    memcpy(g->record, rec, sizeof(rec));
+    g->generation = kairo_seg_generation(g->seg);
+    g->in_order   = in_order;
+    g->issued     = 1;
+}
+
+/* A colour-expansion bit, bit n (0 the leftmost) of the byte at addr: read now in software, its bit address on the GPU
+   (n 8 and on, past the byte, is 0) */
+static uint32_t
+gd54xx_k_ce(gd54xx_t *gd54xx, uint32_t addr, int n)
+{
+    if (n > 7)
+        return CL_IMM;
+    if (gd54xx->k_gpu == NULL)
+        return CL_IMM | ((gd54xx->svga.vram[addr & gd54xx->vram_mask] & (0x80 >> n)) ? 1 : 0);
+    return CL_CE | ((((addr & gd54xx->vram_mask) << 3) + (7 - n)) & CL_ADDR_MASK);
+}
+
+/* The fg and bg bytes colour expansion gives byte shift of a pixel (gd54xx_color_expand) */
+static uint32_t
+gd54xx_k_bytes(gd54xx_t *gd54xx, int shift)
+{
+    const uint32_t fg = (uint8_t) (gd54xx->blt.fg_col >> (shift << 3));
+    const uint32_t bg = (gd54xx->blt.mode & CIRRUS_BLTMODE_TRANSPARENTCOMP) ? fg : (uint8_t) (gd54xx->blt.bg_col >> (shift << 3));
+
+    return fg | (bg << 8);
+}
+
+/* A colour expansion's source and mask words from its bit */
+static void
+gd54xx_k_ce_words(uint32_t ce, uint32_t bytes, uint32_t *ws, uint32_t *wm)
+{
+    if (ce & CL_IMM) {
+        *ws = CL_IMM | ((ce & 1) ? (bytes & 0xff) : ((bytes >> 8) & 0xff));
+        *wm = ce;
+    } else {
+        *ws = ce;
+        *wm = 0;
+    }
+}
+
+/* One byte of a blit at d_at, from its source, mask and bytes words (86box/kairo_gpu_cl54xx.h), through gd54xx_rop and
+   the write rule: gd54xx_normal_blit's (normal), else gd54xx_blit's; with Hardware acceleration on recorded for the
+   GPU */
+static void
+gd54xx_draw_byte(gd54xx_t *gd54xx, uint32_t d_at, uint32_t ws, uint32_t wm, uint32_t bytes, int normal)
+{
+    svga_t  *svga = &gd54xx->svga;
+    uint8_t  src;
+    uint8_t  target;
+    uint32_t m;
+    int      skip = !!(wm & CL_SKIP);
+
+    d_at &= gd54xx->vram_mask;
+    if (gd54xx->k_gpu != NULL) {
+        /* gd54xx_blit leaves no skip to a destination in system memory */
+        if (!normal && (gd54xx->blt.mode & CIRRUS_BLTMODE_MEMSYSDEST))
+            wm &= ~CL_SKIP;
+        const uint32_t words[CL_BYTE_WORDS] = { ws, wm, bytes };
+        const uint32_t reads[2]             = { (ws & CL_IMM) ? KAIRO_SEG_RUN_NONE : (ws & CL_CE) ? ((ws & CL_ADDR_MASK) >> 3) : ws,
+                                                KAIRO_SEG_RUN_NONE };
+
+        gd54xx->k_gpu->normal = normal;
+        kairo_seg_run_byte(gd54xx->k_gpu->run, d_at, words, reads);
+        return;
+    }
+
+    /* Software: the descriptors as the kernel reads them */
+    if (ws & CL_IMM)
+        src = ws & 0xff;
+    else
+        src = svga->vram[ws & gd54xx->vram_mask];
+    m = (wm & CL_IMM) ? (wm & 1) : 0;
+    if (wm & CL_TCOMP)
+        m = !((src ^ (bytes >> 16)) & ~(bytes >> 24) & 0xff);
+
+    target = svga->vram[d_at];
+    gd54xx_rop(gd54xx, &target, &target, &src);
+    if (!normal) {
+        gd54xx_blit(gd54xx, m, &svga->vram[d_at], target, skip);
+        return;
+    }
+    if ((gd54xx->blt.mode & CIRRUS_BLTMODE_COLOREXPAND) && (gd54xx->blt.modeext & CIRRUS_BLTMODEEXT_COLOREXPINV))
+        m = !m;
+    if ((wm & CL_NCOMP) && (src != ((bytes >> 16) & 0xff)))
+        m = 0;
+    if (!skip && !((gd54xx->blt.mode & CIRRUS_BLTMODE_TRANSPARENTCOMP) && !m))
+        svga->vram[d_at] = target;
+}
+
+/* A pattern copy's byte xx of a pixel: its colour-expansion bit (ce), else its source byte at s_at */
+static void
+gd54xx_pattern_byte(gd54xx_t *gd54xx, uint32_t ce, uint32_t s_at, uint32_t d_at, int xx, int skip)
+{
+    uint32_t ws, wm, bytes = 0;
+
+    if (gd54xx->blt.mode & CIRRUS_BLTMODE_COLOREXPAND) {
+        bytes = gd54xx_k_bytes(gd54xx, xx);
+        gd54xx_k_ce_words(ce, bytes, &ws, &wm);
+    } else {
+        ws = s_at & gd54xx->vram_mask;
+        wm = CL_IMM | 1;
+        /* gd54xx_transparent_comp */
+        if ((gd54xx->blt.pixel_width <= 2) && gd54xx_has_transp(&gd54xx->svga, 0)) {
+            wm = CL_TCOMP;
+            bytes |= (uint32_t) ((uint8_t *) &(gd54xx->blt.trans_col))[xx] << 16;
+            if (gd54xx_has_transp(&gd54xx->svga, 1))
+                bytes |= (uint32_t) ((uint8_t *) &(gd54xx->blt.trans_mask))[xx] << 24;
+        }
+    }
+    gd54xx_draw_byte(gd54xx, d_at, ws, wm | (skip ? CL_SKIP : 0), bytes, 0);
+}
+
+/* A normal blit's byte: its colour-expansion bit from the byte at ce_addr, else its source byte at s_at */
+static void
+gd54xx_normal_byte(gd54xx_t *gd54xx, uint32_t ce_addr, uint32_t s_at, uint32_t d_at, int skip)
+{
+    uint32_t ws, wm, bytes = 0;
+
+    if (gd54xx->blt.mode & CIRRUS_BLTMODE_COLOREXPAND) {
+        bytes = gd54xx_k_bytes(gd54xx, gd54xx->blt.x_count % gd54xx->blt.pixel_width);
+        gd54xx_k_ce_words(gd54xx_k_ce(gd54xx, ce_addr, gd54xx->blt.x_count / gd54xx->blt.pixel_width), bytes, &ws, &wm);
+    } else {
+        ws = s_at & gd54xx->vram_mask;
+        wm = CL_IMM | 1;
+        /* 8 and 16 bpp transparent comparison, against the mask's low byte */
+        if ((gd54xx->blt.mode & CIRRUS_BLTMODE_TRANSPARENTCOMP) &&
+            ((gd54xx->blt.mode & CIRRUS_BLTMODE_PIXELWIDTHMASK) <= CIRRUS_BLTMODE_PIXELWIDTH16)) {
+            wm |= CL_NCOMP;
+            bytes |= (gd54xx->blt.trans_mask & 0xff) << 16;
+        }
+    }
+    gd54xx_draw_byte(gd54xx, d_at, ws, wm | (skip ? CL_SKIP : 0), bytes, 1);
+}
+
 static void
 gd54xx_pattern_copy(gd54xx_t *gd54xx)
 {
-    uint8_t  target;
-    uint8_t  src;
-    uint8_t *dst;
     int      pattern_y;
     int      pattern_pitch;
-    uint32_t bitmask = 0;
+    uint32_t ce = CL_IMM; /* the pixel's colour-expansion bit (gd54xx_k_ce) */
     uint32_t pixel;
     uint32_t srca;
     uint32_t srca2;
@@ -4065,44 +4234,18 @@ gd54xx_pattern_copy(gd54xx_t *gd54xx)
         gd54xx->blt.width_xy = gd54xx->blt.width * gd54xx->blt.pixel_width;
 
         while (y <= gd54xx->blt.height) {
-            if (gd54xx->blt.mode & CIRRUS_BLTMODE_COLOREXPAND) {
-                if (gd54xx->blt.modeext & CIRRUS_BLTMODEEXT_SOLIDFILL)
-                    bitmask = 1;
-                else
-                    bitmask = svga->vram[srca2 & gd54xx->vram_mask] & (0x80 >> pixel);
-            }
+            if (gd54xx->blt.mode & CIRRUS_BLTMODE_COLOREXPAND)
+                ce = (gd54xx->blt.modeext & CIRRUS_BLTMODEEXT_SOLIDFILL) ? (CL_IMM | 1) : gd54xx_k_ce(gd54xx, srca2, pixel);
             while (xx < gd54xx->blt.pixel_width) {
                 if (gd54xx->blt.modeext & CIRRUS_BLTMODEEXT_CLIP_RECTANGLE) {
                     if (((gd54xx->blt.dst_x_pos + xx) >= clip_l) && ((gd54xx->blt.dst_x_pos + xx) <= clip_r) &&
                         (gd54xx->blt.dst_y_pos >= clip_t) && (gd54xx->blt.dst_y_pos <= clip_b)) {
-                        if (gd54xx->blt.mode & CIRRUS_BLTMODE_COLOREXPAND)
-                            src = gd54xx_color_expand(gd54xx, bitmask, xx);
-                        else {
-                            src     = svga->vram[(srca2 + (x % (gd54xx->blt.pixel_width << 3)) + xx) & gd54xx->vram_mask];
-                            bitmask = gd54xx_transparent_comp(gd54xx, xx, src);
-                        }
-                        dst    = &(svga->vram[(dsta + gd54xx->blt.dst_x_pos + xx) & gd54xx->vram_mask]);
-                        target = *dst;
-                        gd54xx_rop(gd54xx, &target, &target, &src);
-                        if (gd54xx->blt.pixel_width == 3)
-                            gd54xx_blit(gd54xx, bitmask, dst, target, ((x + xx) < gd54xx->blt.pattern_x));
-                        else
-                            gd54xx_blit(gd54xx, bitmask, dst, target, (x < gd54xx->blt.pattern_x));
+                        gd54xx_pattern_byte(gd54xx, ce, srca2 + (x % (gd54xx->blt.pixel_width << 3)) + xx, dsta + gd54xx->blt.dst_x_pos + xx, xx,
+                                            (gd54xx->blt.pixel_width == 3) ? ((x + xx) < gd54xx->blt.pattern_x) : (x < gd54xx->blt.pattern_x));
                     }
                 } else {
-                    if (gd54xx->blt.mode & CIRRUS_BLTMODE_COLOREXPAND)
-                        src = gd54xx_color_expand(gd54xx, bitmask, xx);
-                    else {
-                        src     = svga->vram[(srca2 + (x % (gd54xx->blt.pixel_width << 3)) + xx) & gd54xx->vram_mask];
-                        bitmask = gd54xx_transparent_comp(gd54xx, xx, src);
-                    }
-                    dst    = &(svga->vram[(dsta + gd54xx->blt.dst_x_pos + xx) & gd54xx->vram_mask]);
-                    target = *dst;
-                    gd54xx_rop(gd54xx, &target, &target, &src);
-                    if (gd54xx->blt.pixel_width == 3)
-                        gd54xx_blit(gd54xx, bitmask, dst, target, ((x + xx) < gd54xx->blt.pattern_x));
-                    else
-                        gd54xx_blit(gd54xx, bitmask, dst, target, (x < gd54xx->blt.pattern_x));
+                    gd54xx_pattern_byte(gd54xx, ce, srca2 + (x % (gd54xx->blt.pixel_width << 3)) + xx, dsta + gd54xx->blt.dst_x_pos + xx, xx,
+                                        (gd54xx->blt.pixel_width == 3) ? ((x + xx) < gd54xx->blt.pattern_x) : (x < gd54xx->blt.pattern_x));
                 }
                 xx++;
                 if (xx == gd54xx->blt.pixel_width) {
@@ -4139,26 +4282,11 @@ gd54xx_pattern_copy(gd54xx_t *gd54xx)
             srca2 = srca + (pattern_y * pattern_pitch);
             pixel = 0;
             for (uint16_t x = 0; x <= gd54xx->blt.width; x += gd54xx->blt.pixel_width) {
-                if (gd54xx->blt.mode & CIRRUS_BLTMODE_COLOREXPAND) {
-                    if (gd54xx->blt.modeext & CIRRUS_BLTMODEEXT_SOLIDFILL)
-                        bitmask = 1;
-                    else
-                        bitmask = svga->vram[srca2 & gd54xx->vram_mask] & (0x80 >> pixel);
-                }
+                if (gd54xx->blt.mode & CIRRUS_BLTMODE_COLOREXPAND)
+                    ce = (gd54xx->blt.modeext & CIRRUS_BLTMODEEXT_SOLIDFILL) ? (CL_IMM | 1) : gd54xx_k_ce(gd54xx, srca2, pixel);
                 for (int xx = 0; xx < gd54xx->blt.pixel_width; xx++) {
-                    if (gd54xx->blt.mode & CIRRUS_BLTMODE_COLOREXPAND)
-                        src = gd54xx_color_expand(gd54xx, bitmask, xx);
-                    else {
-                        src     = svga->vram[(srca2 + (x % (gd54xx->blt.pixel_width << 3)) + xx) & gd54xx->vram_mask];
-                        bitmask = gd54xx_transparent_comp(gd54xx, xx, src);
-                    }
-                    dst    = &(svga->vram[(dsta + x + xx) & gd54xx->vram_mask]);
-                    target = *dst;
-                    gd54xx_rop(gd54xx, &target, &target, &src);
-                    if (gd54xx->blt.pixel_width == 3)
-                        gd54xx_blit(gd54xx, bitmask, dst, target, ((x + xx) < gd54xx->blt.pattern_x));
-                    else
-                        gd54xx_blit(gd54xx, bitmask, dst, target, (x < gd54xx->blt.pattern_x));
+                    gd54xx_pattern_byte(gd54xx, ce, srca2 + (x % (gd54xx->blt.pixel_width << 3)) + xx, dsta + x + xx, xx,
+                                        (gd54xx->blt.pixel_width == 3) ? ((x + xx) < gd54xx->blt.pattern_x) : (x < gd54xx->blt.pattern_x));
                 }
                 pixel = (pixel + 1) & 7;
                 svga->changedvram[((dsta + x) & gd54xx->vram_mask) >> 12] = changeframecount;
@@ -4181,9 +4309,7 @@ gd54xx_reset_blit(gd54xx_t *gd54xx)
 static void
 gd54xx_mem_sys_src(gd54xx_t *gd54xx, uint32_t cpu_dat, uint32_t count)
 {
-    uint8_t *dst = NULL;
     uint8_t  exp;
-    uint8_t  target;
     uint16_t clip_l = gd54xx->blt.clip_start_x * gd54xx->blt.pixel_width;
     uint16_t clip_r = (gd54xx->blt.clip_end_x * gd54xx->blt.pixel_width) + gd54xx->blt.pixel_width - 1;
     uint16_t clip_t = gd54xx->blt.clip_start_y;
@@ -4257,15 +4383,10 @@ gd54xx_mem_sys_src(gd54xx_t *gd54xx, uint32_t cpu_dat, uint32_t count)
                             exp = cpu_dat & 0xff;
                             bitmask = gd54xx_transparent_comp(gd54xx, gd54xx->blt.xx_count, exp);
                         }
-                        dst = &(svga->vram[(gd54xx->blt.dst_addr_xy + gd54xx->blt.dst_x_pos) & gd54xx->vram_mask]);
-                        target = *dst;
-                        gd54xx_rop(gd54xx, &target, &target, &exp);
-                        if ((gd54xx->blt.pixel_width == 3) && (gd54xx->blt.mode & CIRRUS_BLTMODE_COLOREXPAND))
-                            gd54xx_blit(gd54xx, bitmask, dst, target,
-                                        ((gd54xx->blt.x_count + gd54xx->blt.xx_count) < gd54xx->blt.pattern_x));
-                        else {
-                            gd54xx_blit(gd54xx, bitmask, dst, target, (gd54xx->blt.x_count < gd54xx->blt.pattern_x));
-                        }
+                        gd54xx_draw_byte(gd54xx, (gd54xx->blt.dst_addr_xy + gd54xx->blt.dst_x_pos), CL_IMM | exp, CL_IMM | (bitmask ? 1 : 0) |
+                                         ((((gd54xx->blt.pixel_width == 3) && (gd54xx->blt.mode & CIRRUS_BLTMODE_COLOREXPAND)) ?
+                                           ((gd54xx->blt.x_count + gd54xx->blt.xx_count) < gd54xx->blt.pattern_x) :
+                                           (gd54xx->blt.x_count < gd54xx->blt.pattern_x)) ? CL_SKIP : 0), 0, 0);
                         svga->changedvram[((gd54xx->blt.dst_addr_xy + gd54xx->blt.dst_x_pos) & gd54xx->vram_mask) >> 12] = changeframecount;
                     }
                 } else {
@@ -4277,14 +4398,10 @@ gd54xx_mem_sys_src(gd54xx_t *gd54xx, uint32_t cpu_dat, uint32_t count)
                         bitmask = gd54xx_transparent_comp(gd54xx, gd54xx->blt.xx_count, exp);
                     }
 
-                    dst = &(svga->vram[(gd54xx->blt.dst_addr_xy + gd54xx->blt.dst_x_pos) & gd54xx->vram_mask]);
-                    target = *dst;
-                    gd54xx_rop(gd54xx, &target, &target, &exp);
-                    if ((gd54xx->blt.pixel_width == 3) && (gd54xx->blt.mode & CIRRUS_BLTMODE_COLOREXPAND))
-                        gd54xx_blit(gd54xx, bitmask, dst, target,
-                                    ((gd54xx->blt.x_count + gd54xx->blt.xx_count) < gd54xx->blt.pattern_x));
-                    else
-                        gd54xx_blit(gd54xx, bitmask, dst, target, (gd54xx->blt.x_count < gd54xx->blt.pattern_x));
+                    gd54xx_draw_byte(gd54xx, (gd54xx->blt.dst_addr_xy + gd54xx->blt.dst_x_pos), CL_IMM | exp, CL_IMM | (bitmask ? 1 : 0) |
+                                     ((((gd54xx->blt.pixel_width == 3) && (gd54xx->blt.mode & CIRRUS_BLTMODE_COLOREXPAND)) ?
+                                       ((gd54xx->blt.x_count + gd54xx->blt.xx_count) < gd54xx->blt.pattern_x) :
+                                       (gd54xx->blt.x_count < gd54xx->blt.pattern_x)) ? CL_SKIP : 0), 0, 0);
 
                     svga->changedvram[((gd54xx->blt.dst_addr_xy + gd54xx->blt.dst_x_pos) & gd54xx->vram_mask) >> 12] = changeframecount;
                 }
@@ -4345,14 +4462,10 @@ gd54xx_mem_sys_src(gd54xx_t *gd54xx, uint32_t cpu_dat, uint32_t count)
                     bitmask = gd54xx_transparent_comp(gd54xx, gd54xx->blt.xx_count, exp);
                 }
 
-                dst    = &(svga->vram[gd54xx->blt.dst_addr_backup & gd54xx->vram_mask]);
-                target = *dst;
-                gd54xx_rop(gd54xx, &target, &target, &exp);
-                if ((gd54xx->blt.pixel_width == 3) && (gd54xx->blt.mode & CIRRUS_BLTMODE_COLOREXPAND))
-                    gd54xx_blit(gd54xx, bitmask, dst, target,
-                                ((gd54xx->blt.x_count + gd54xx->blt.xx_count) < gd54xx->blt.pattern_x));
-                else
-                    gd54xx_blit(gd54xx, bitmask, dst, target, (gd54xx->blt.x_count < gd54xx->blt.pattern_x));
+                gd54xx_draw_byte(gd54xx, gd54xx->blt.dst_addr_backup, CL_IMM | exp, CL_IMM | (bitmask ? 1 : 0) |
+                                 ((((gd54xx->blt.pixel_width == 3) && (gd54xx->blt.mode & CIRRUS_BLTMODE_COLOREXPAND)) ?
+                                   ((gd54xx->blt.x_count + gd54xx->blt.xx_count) < gd54xx->blt.pattern_x) :
+                                   (gd54xx->blt.x_count < gd54xx->blt.pattern_x)) ? CL_SKIP : 0), 0, 0);
 
                 gd54xx->blt.dst_addr_backup += gd54xx->blt.dir;
 
@@ -4396,8 +4509,6 @@ gd54xx_mem_sys_src(gd54xx_t *gd54xx, uint32_t cpu_dat, uint32_t count)
 static void
 gd54xx_normal_blit(uint32_t count, gd54xx_t *gd54xx, svga_t *svga)
 {
-    uint8_t  src   = 0;
-    uint8_t  dst;
     uint16_t width = gd54xx->blt.width;
     uint16_t clip_l = gd54xx->blt.clip_start_x * gd54xx->blt.pixel_width;
     uint16_t clip_r = (gd54xx->blt.clip_end_x * gd54xx->blt.pixel_width) + gd54xx->blt.pixel_width - 1;
@@ -4406,8 +4517,6 @@ gd54xx_normal_blit(uint32_t count, gd54xx_t *gd54xx, svga_t *svga)
     uint16_t x_width = 0;
     int      x_max_xy_count = 0;
     int      x_max = 0;
-    int      shift = 0;
-    uint32_t mask = 0;
     uint32_t src_addr = gd54xx->blt.src_addr;
     uint32_t dst_addr = gd54xx->blt.dst_addr;
 
@@ -4438,70 +4547,18 @@ gd54xx_normal_blit(uint32_t count, gd54xx_t *gd54xx, svga_t *svga)
             gd54xx->blt.x_count = (gd54xx->blt.mode & CIRRUS_BLTMODE_COLOREXPAND) ? x_max : 8;
 
         while (count--) {
-            src  = 0;
-            mask = 0;
-
             if (gd54xx->blt.modeext & CIRRUS_BLTMODEEXT_CLIP_RECTANGLE) {
                 //pclog("XY Clipping Blit: pix=%d, DSTX=%d, DSTY=%d, SRCX=%d, SRCY=%d, cl=%d, cr=%d, xcount=%d, xx=%d, width=%d, height=%d, modeext=%02x.\n", gd54xx->blt.pixel_width, gd54xx->blt.dst_x_pos, gd54xx->blt.dst_y_pos, gd54xx->blt.src_x_pos, gd54xx->blt.src_y_pos, clip_l, clip_r, gd54xx->blt.x_count, xx, width, gd54xx->blt.height_internal, gd54xx->blt.modeext);
                 if ((gd54xx->blt.dst_x_pos >= clip_l) && (gd54xx->blt.dst_x_pos <= clip_r) &&
                     (gd54xx->blt.dst_y_pos >= clip_t) && (gd54xx->blt.dst_y_pos <= clip_b)) {
-                    if (gd54xx->blt.mode & CIRRUS_BLTMODE_COLOREXPAND) {
-                        mask  = svga->vram[src_addr & gd54xx->vram_mask] & (0x80 >> ((gd54xx->blt.x_count) / gd54xx->blt.pixel_width));
-                        shift = ((gd54xx->blt.x_count) % gd54xx->blt.pixel_width);
-                        src = gd54xx_color_expand(gd54xx, mask, shift);
-                    } else {
-                        src = svga->vram[(gd54xx->blt.src_addr_xy + gd54xx->blt.src_x_pos) & gd54xx->vram_mask];
-                        mask = 1;
-                    }
-
-                    dst = svga->vram[(gd54xx->blt.dst_addr_xy + gd54xx->blt.dst_x_pos) & gd54xx->vram_mask];
                     svga->changedvram[((gd54xx->blt.dst_addr_xy + gd54xx->blt.dst_x_pos) & gd54xx->vram_mask) >> 12] = changeframecount;
-                    gd54xx_rop(gd54xx, &dst, &dst, (const uint8_t *) &src);
-
-                    if ((gd54xx->blt.mode & CIRRUS_BLTMODE_COLOREXPAND) && (gd54xx->blt.modeext & CIRRUS_BLTMODEEXT_COLOREXPINV))
-                        mask = !mask;
-
-                    /* This handles 8bpp and 16bpp non-color-expanding transparent comparisons. */
-                    if ((gd54xx->blt.mode & CIRRUS_BLTMODE_TRANSPARENTCOMP) &&
-                        !(gd54xx->blt.mode & CIRRUS_BLTMODE_COLOREXPAND) &&
-                        ((gd54xx->blt.mode & CIRRUS_BLTMODE_PIXELWIDTHMASK) <= CIRRUS_BLTMODE_PIXELWIDTH16) &&
-                        (src != ((gd54xx->blt.trans_mask >> (shift << 3)) & 0xff)))
-                        mask = 0;
-
-                    if ((((gd54xx->blt.width) - width) >= gd54xx->blt.pattern_x) &&
-                        !((gd54xx->blt.mode & CIRRUS_BLTMODE_TRANSPARENTCOMP) && !mask))
-                        svga->vram[(gd54xx->blt.dst_addr_xy + gd54xx->blt.dst_x_pos) & gd54xx->vram_mask] = dst;
+                    gd54xx_normal_byte(gd54xx, src_addr, gd54xx->blt.src_addr_xy + gd54xx->blt.src_x_pos, gd54xx->blt.dst_addr_xy + gd54xx->blt.dst_x_pos,
+                                       !(((gd54xx->blt.width) - width) >= gd54xx->blt.pattern_x));
                 }
             } else {
-                if (gd54xx->blt.mode & CIRRUS_BLTMODE_COLOREXPAND) {
-                    mask  = svga->vram[src_addr & gd54xx->vram_mask] & (0x80 >> ((gd54xx->blt.x_count) / gd54xx->blt.pixel_width));
-                    shift = (gd54xx->blt.x_count % gd54xx->blt.pixel_width);
-                    src = gd54xx_color_expand(gd54xx, mask, shift);
-                } else {
-                    src = svga->vram[(gd54xx->blt.src_addr_xy + gd54xx->blt.src_x_pos) & gd54xx->vram_mask];
-                    mask = 1;
-                }
-
-                dst = svga->vram[(gd54xx->blt.dst_addr_xy + gd54xx->blt.dst_x_pos) & gd54xx->vram_mask];
                 svga->changedvram[((gd54xx->blt.dst_addr_xy + gd54xx->blt.dst_x_pos) & gd54xx->vram_mask) >> 12] = changeframecount;
-                gd54xx_rop(gd54xx, &dst, &dst, (const uint8_t *) &src);
-
-                if ((gd54xx->blt.mode & CIRRUS_BLTMODE_COLOREXPAND) && (gd54xx->blt.modeext & CIRRUS_BLTMODEEXT_COLOREXPINV))
-                    mask = !mask;
-
-                /* This handles 8bpp and 16bpp non-color-expanding transparent comparisons. */
-                if ((gd54xx->blt.mode & CIRRUS_BLTMODE_TRANSPARENTCOMP) &&
-                    !(gd54xx->blt.mode & CIRRUS_BLTMODE_COLOREXPAND) &&
-                    ((gd54xx->blt.mode & CIRRUS_BLTMODE_PIXELWIDTHMASK) <= CIRRUS_BLTMODE_PIXELWIDTH16) &&
-                    (src != ((gd54xx->blt.trans_mask >> (shift << 3)) & 0xff)))
-                    mask = 0;
-
-                if ((((gd54xx->blt.width) - width) >= gd54xx->blt.pattern_x) &&
-                    !((gd54xx->blt.mode & CIRRUS_BLTMODE_TRANSPARENTCOMP) && !mask)) {
-                    svga->vram[(gd54xx->blt.dst_addr_xy + gd54xx->blt.dst_x_pos) & gd54xx->vram_mask] = dst;
-                    //pclog("NoClipNormal: PATX=%d, ROP=%02x, DSTData=%02x, DX=%d, DY=%d, CX=%d, CY=%d, dir=%d, mode=%02x, modeext=%02x, fgcol=%08x, shift=%d.\n", gd54xx->blt.pattern_x, gd54xx->blt.rop, dst, gd54xx->blt.dst_x_pos, gd54xx->blt.dst_y_pos, gd54xx->blt.src_x_pos, gd54xx->blt.src_y_pos, gd54xx->blt.dir, gd54xx->blt.mode, gd54xx->blt.modeext, gd54xx->blt.fg_col, shift);
-                } else
-                    ;//pclog("NoClipNormalNoWrite: PATX=%d, ROP=%02x, DSTData=%02x, DX=%d, DY=%d, CX=%d, CY=%d, dir=%d, mode=%02x, modeext=%02x, fg=%08x, shift=%d.\n", gd54xx->blt.pattern_x, gd54xx->blt.rop, dst, gd54xx->blt.dst_x_pos, gd54xx->blt.dst_y_pos, gd54xx->blt.src_x_pos, gd54xx->blt.src_y_pos, gd54xx->blt.dir, gd54xx->blt.mode, gd54xx->blt.modeext, gd54xx->blt.fg_col, shift);
+                gd54xx_normal_byte(gd54xx, src_addr, gd54xx->blt.src_addr_xy + gd54xx->blt.src_x_pos, gd54xx->blt.dst_addr_xy + gd54xx->blt.dst_x_pos,
+                                   !(((gd54xx->blt.width) - width) >= gd54xx->blt.pattern_x));
             }
 
             gd54xx->blt.src_x_pos += gd54xx->blt.dir;
@@ -4591,38 +4648,15 @@ gd54xx_normal_blit(uint32_t count, gd54xx_t *gd54xx, svga_t *svga)
         }
     } else {
         while (count) {
-            src  = 0;
-            mask = 0;
+            /* The source byte, before the walk steps past it */
+            const uint32_t s_at = src_addr;
 
-            if (gd54xx->blt.mode & CIRRUS_BLTMODE_COLOREXPAND) {
-                mask  = svga->vram[src_addr & gd54xx->vram_mask] & (0x80 >> (gd54xx->blt.x_count / gd54xx->blt.pixel_width));
-                shift = (gd54xx->blt.x_count % gd54xx->blt.pixel_width);
-                src   = gd54xx_color_expand(gd54xx, mask, shift);
-            } else {
-                src = svga->vram[src_addr & gd54xx->vram_mask];
+            if (!(gd54xx->blt.mode & CIRRUS_BLTMODE_COLOREXPAND))
                 src_addr += gd54xx->blt.dir;
-                mask = 1;
-            }
             count--;
 
-            dst = svga->vram[dst_addr & gd54xx->vram_mask];
             svga->changedvram[(dst_addr & gd54xx->vram_mask) >> 12] = changeframecount;
-
-            gd54xx_rop(gd54xx, &dst, &dst, (const uint8_t *) &src);
-
-            if ((gd54xx->blt.mode & CIRRUS_BLTMODE_COLOREXPAND) && (gd54xx->blt.modeext & CIRRUS_BLTMODEEXT_COLOREXPINV))
-                mask = !mask;
-
-            /* This handles 8bpp and 16bpp non-color-expanding transparent comparisons. */
-            if ((gd54xx->blt.mode & CIRRUS_BLTMODE_TRANSPARENTCOMP) &&
-                !(gd54xx->blt.mode & CIRRUS_BLTMODE_COLOREXPAND) &&
-                ((gd54xx->blt.mode & CIRRUS_BLTMODE_PIXELWIDTHMASK) <= CIRRUS_BLTMODE_PIXELWIDTH16) &&
-                (src != ((gd54xx->blt.trans_mask >> (shift << 3)) & 0xff)))
-                mask = 0;
-
-            if (((gd54xx->blt.width - width) >= gd54xx->blt.pattern_x) &&
-                !((gd54xx->blt.mode & CIRRUS_BLTMODE_TRANSPARENTCOMP) && !mask))
-                svga->vram[dst_addr & gd54xx->vram_mask] = dst;
+            gd54xx_normal_byte(gd54xx, src_addr, s_at, dst_addr, !((gd54xx->blt.width - width) >= gd54xx->blt.pattern_x));
 
             dst_addr += gd54xx->blt.dir;
             gd54xx->blt.x_count++;
@@ -4674,6 +4708,8 @@ gd54xx_normal_blit(uint32_t count, gd54xx_t *gd54xx, svga_t *svga)
             uint8_t *vram = svga->vram;
 
             gd54xx->blt.cmd_list_backup += 0x10;
+            if (gd54xx->k_gpu != NULL) /* KairoX86#250 */
+                kairo_seg_touch(gd54xx->k_gpu->seg, gd54xx->blt.cmd_list_backup & gd54xx->vram_mask, 16);
             gd54xx->blt.cmd_list_dword[0] = *(uint32_t *)&vram[gd54xx->blt.cmd_list_backup & gd54xx->vram_mask];
             gd54xx->blt.cmd_list_dword[1] = *(uint32_t *)&vram[(gd54xx->blt.cmd_list_backup + 4) & gd54xx->vram_mask];
             gd54xx->blt.cmd_list_dword[2] = *(uint32_t *)&vram[(gd54xx->blt.cmd_list_backup + 8) & gd54xx->vram_mask];
@@ -4711,6 +4747,8 @@ gd54xx_mem_sys_dest(uint32_t count, gd54xx_t *gd54xx, svga_t *svga)
         gd54xx->blt.msd_buf_pos = 0;
 
         while (gd54xx->blt.msd_buf_pos < 32) {
+            if (gd54xx->k_gpu != NULL) /* KairoX86#250 */
+                kairo_seg_touch(gd54xx->k_gpu->seg, gd54xx->blt.src_addr_backup & gd54xx->vram_mask, 1);
             gd54xx->blt.msd_buf[gd54xx->blt.msd_buf_pos & 0x1f] = svga->vram[gd54xx->blt.src_addr_backup &
                                                                   gd54xx->vram_mask];
             gd54xx->blt.src_addr_backup += gd54xx->blt.dir;
@@ -4746,8 +4784,20 @@ gd54xx_mem_sys_dest(uint32_t count, gd54xx_t *gd54xx, svga_t *svga)
     }
 }
 
+static void gd54xx_start_blit_walk(uint32_t cpu_dat, uint32_t count, gd54xx_t *gd54xx, svga_t *svga);
+
+/* KairoX86#250: the walk, and with Hardware acceleration on the run it ended in recorded (the next blit's state is
+   another operation) */
 static void
 gd54xx_start_blit(uint32_t cpu_dat, uint32_t count, gd54xx_t *gd54xx, svga_t *svga)
+{
+    gd54xx_start_blit_walk(cpu_dat, count, gd54xx, svga);
+    if (gd54xx->k_gpu != NULL)
+        kairo_seg_run_flush(gd54xx->k_gpu->run);
+}
+
+static void
+gd54xx_start_blit_walk(uint32_t cpu_dat, uint32_t count, gd54xx_t *gd54xx, svga_t *svga)
 {
     if ((gd54xx->blt.mode & CIRRUS_BLTMODE_BACKWARDS) &&
         !(gd54xx->blt.mode & (CIRRUS_BLTMODE_PATTERNCOPY | CIRRUS_BLTMODE_COLOREXPAND)) &&
@@ -5076,6 +5126,15 @@ gd54xx_reset(void *priv)
         gd54xx->unlocked = 0;
 }
 
+/* KairoX86#250: the SVGA core's memory handlers and display (svga->kairo_touch) */
+static void
+gd54xx_svga_touch(svga_t *svga, uint32_t addr, uint32_t len)
+{
+    const gd54xx_t *gd54xx = (const gd54xx_t *) svga->priv;
+
+    kairo_seg_touch(gd54xx->k_gpu->seg, addr & gd54xx->vram_mask, len);
+}
+
 static void *
 gd54xx_init(const device_t *info)
 {
@@ -5323,6 +5382,16 @@ gd54xx_init(const device_t *info)
     }
     svga->vblank_start = gd54xx_vblank_start;
     svga->ven_write    = gd54xx_write_modes45;
+
+    /* KairoX86#250: with Hardware acceleration on, the BitBLT engine's bytes drawn on the GPU */
+    if (kairo_gpu_on) {
+        gd54xx->k_gpu = calloc(1, sizeof(gd54xx_gpu_t));
+        if (gd54xx->k_gpu == NULL)
+            fatal("GD54xx on the GPU: no memory\n");
+        gd54xx->k_gpu->seg = kairo_cl54xx_open(svga->vram, gd54xx->vram_mask, svga->changedvram, &svga->monitor->mon_changeframecount);
+        gd54xx->k_gpu->run = kairo_seg_run_open(gd54xx->k_gpu->seg, gd54xx->vram_mask, CL_BYTE_WORDS, 1, gd54xx_k_op, gd54xx);
+        svga->kairo_touch  = gd54xx_svga_touch;
+    }
     if ((vram == 1) || (vram >= 256 && vram <= 1024))
         svga->decode_mask = gd54xx->vram_mask;
 
@@ -5554,6 +5623,11 @@ gd54xx_close(void *priv)
 {
     gd54xx_t *gd54xx = (gd54xx_t *) priv;
 
+    if (gd54xx->k_gpu != NULL) {
+        kairo_seg_close(gd54xx->k_gpu->seg); /* KairoX86#250 */
+        kairo_seg_run_close(gd54xx->k_gpu->run);
+        free(gd54xx->k_gpu);
+    }
     svga_close(&gd54xx->svga);
 
     if (gd54xx->i2c) {

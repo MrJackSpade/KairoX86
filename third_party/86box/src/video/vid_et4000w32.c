@@ -149,18 +149,14 @@ typedef struct et4000w32p_t {
     struct et4000w32_gpu_t *k_gpu; /* KairoX86#254: the accelerator's batch on the GPU, NULL in software */
 } et4000w32p_t;
 
-/* KairoX86#254: the run of destination bytes the walk is drawing, recorded when it ends */
-#define ET_RUN_MAX 4096
+/* KairoX86#254: the accelerator's batch, and the run of bytes its walk is drawing (kairo_seg_run) */
 typedef struct et4000w32_gpu_t {
-    kairo_seg_t *seg;
-    uint32_t     record[ET_WORDS];
-    uint64_t     generation; /* the batch's drains when the record went in */
-    int          issued;
-    int          in_order;
-    uint32_t     start; /* the run's first byte */
-    int          dir;
-    int          count;
-    uint32_t     words[ET_RUN_MAX * ET_BYTE_WORDS];
+    kairo_seg_t     *seg;
+    kairo_seg_run_t *run;
+    uint32_t         record[ET_WORDS];
+    uint64_t         generation; /* the batch's drains when the record went in */
+    int              issued;
+    int              in_order;
 } et4000w32_gpu_t;
 
 static int et4000w32_vbus[4] = { 1, 2, 4, 4 };
@@ -2188,11 +2184,13 @@ et4000w32_decy(et4000w32p_t *et4000)
         }                                          \
     }
 
-/* KairoX86#254: an operation in the batch: the record again only where it differs or the batch has been drawn */
+/* KairoX86#254: the run's operation in the batch (kairo_seg_run): the record again only where it differs or the batch
+   has been drawn */
 static void
-et4000w32_k_op(et4000w32p_t *et4000, int in_order)
+et4000w32_k_op(void *priv, bool in_order)
 {
-    et4000w32_gpu_t *g = et4000->k_gpu;
+    et4000w32p_t    *et4000 = (et4000w32p_t *) priv;
+    et4000w32_gpu_t *g      = et4000->k_gpu;
     uint32_t         rec[ET_WORDS] = { 0 };
 
     rec[ET_ROP_FG] = et4000->acl.internal.rop_fg;
@@ -2205,65 +2203,6 @@ et4000w32_k_op(et4000w32p_t *et4000, int in_order)
     g->generation = kairo_seg_generation(g->seg);
     g->in_order   = in_order;
     g->issued     = 1;
-}
-
-/* The bytes [lo, hi) of video memory the run's n bytes read of one kind (0 pattern, 1 source, 2 mix), none: lo = hi */
-static void
-et4000w32_k_reads(const et4000w32_gpu_t *g, int n, int kind, uint32_t *lo, uint32_t *hi)
-{
-    *lo = UINT32_MAX;
-    *hi = 0;
-    for (int i = 0; i < n; i++) {
-        uint32_t w = g->words[i * ET_BYTE_WORDS + kind];
-
-        if ((kind != 0) && (w & ET_IMMEDIATE))
-            continue;
-        if (kind == 2)
-            w >>= 3;
-        *lo = MIN(*lo, w);
-        *hi = MAX(*hi, w + 1);
-    }
-    if (*lo > *hi)
-        *lo = *hi = 0;
-}
-
-/* The run so far into the batch: drawn first what it reads or draws over; in order where it reads what it draws */
-static void
-et4000w32_k_flush(et4000w32p_t *et4000)
-{
-    et4000w32_gpu_t *g = et4000->k_gpu;
-    const int        n = g->count;
-
-    if (n == 0)
-        return;
-    g->count = 0;
-
-    const uint32_t d_lo     = (g->dir > 0) ? g->start : (g->start - (n - 1));
-    const uint32_t d_hi     = d_lo + n;
-    int            in_order = 0;
-
-    kairo_seg_draws(g->seg, d_lo, n);
-    for (int kind = 0; kind < 3; kind++) {
-        uint32_t lo, hi;
-
-        et4000w32_k_reads(g, n, kind, &lo, &hi);
-        if (lo == hi)
-            continue;
-        if (kairo_seg_reads_pending(g->seg, lo, hi - lo))
-            kairo_seg_drain(g->seg);
-        if ((lo < d_hi) && (d_lo < hi))
-            in_order = 1;
-        kairo_seg_reads(g->seg, lo, hi - lo);
-    }
-    et4000w32_k_op(et4000, in_order);
-    kairo_seg_add(g->seg, kairo_seg_stream(g->seg, g->words, n * ET_BYTE_WORDS), 0, n, g->start * 8, 8, g->dir);
-}
-
-/* Before every drain of the batch: the run being walked */
-static void
-et4000w32_k_flush_cb(void *priv)
-{
-    et4000w32_k_flush((et4000w32p_t *) priv);
 }
 
 /* One byte of an operation at the walk's place: its pattern and source (source >= 0: the host's byte) and its mix
@@ -2289,29 +2228,17 @@ et4000w32_draw_byte(et4000w32p_t *et4000, int source, int mix)
         et4000w32_gpu_t *g = et4000->k_gpu;
 
         if (!(et4000->acl.internal.ctrl_routing & 0x40)) {
-            if (g->count != 0) {
-                int dir = g->dir;
+            const uint32_t m_at                     = et4000->acl.mix_addr & ((mask << 3) | 7);
+            const uint32_t words[ET_BYTE_WORDS]     = { p_at, (source >= 0) ? (ET_IMMEDIATE | (uint32_t) source) : s_at,
+                                                        (mix >= 0) ? (ET_IMMEDIATE | (mix ? 1u : 0u)) : m_at };
+            const uint32_t reads[ET_BYTE_WORDS]     = { p_at, (source >= 0) ? KAIRO_SEG_RUN_NONE : s_at,
+                                                        (mix >= 0) ? KAIRO_SEG_RUN_NONE : (m_at >> 3) };
 
-                if (g->count == 1)
-                    dir = (d_at == g->start + 1) ? 1 : ((d_at + 1) == g->start) ? -1 : 0;
-                if ((dir != 0) && (g->count < ET_RUN_MAX) && ((int64_t) d_at == (int64_t) g->start + (int64_t) g->count * dir))
-                    g->dir = dir;
-                else
-                    et4000w32_k_flush(et4000);
-            }
-            if (g->count == 0) {
-                g->start = d_at;
-                g->dir   = 1;
-            }
-            uint32_t *w = &g->words[g->count * ET_BYTE_WORDS];
-            w[0] = p_at;
-            w[1] = (source >= 0) ? (ET_IMMEDIATE | (uint32_t) source) : s_at;
-            w[2] = (mix >= 0) ? (ET_IMMEDIATE | (mix ? 1u : 0u)) : (et4000->acl.mix_addr & ((mask << 3) | 7));
-            g->count++;
+            kairo_seg_run_byte(g->run, d_at, words, reads);
             return;
         }
         /* The processor takes the result: the batch drawn first */
-        et4000w32_k_flush(et4000);
+        kairo_seg_run_flush(g->run);
         kairo_seg_drain(g->seg);
     }
 
@@ -2642,7 +2569,7 @@ et4000w32_blit(int count, int cpu_input, uint32_t src_dat, uint32_t mix_dat, et4
 {
     et4000w32_blit_walk(count, cpu_input, src_dat, mix_dat, et4000);
     if (et4000->k_gpu != NULL)
-        et4000w32_k_flush(et4000);
+        kairo_seg_run_flush(et4000->k_gpu->run);
 }
 
 static void
@@ -2650,7 +2577,7 @@ et4000w32p_blit(int count, uint32_t mix, uint32_t sdat, int cpu_input, et4000w32
 {
     et4000w32p_blit_walk(count, mix, sdat, cpu_input, et4000);
     if (et4000->k_gpu != NULL)
-        et4000w32_k_flush(et4000);
+        kairo_seg_run_flush(et4000->k_gpu->run);
 }
 
 static void
@@ -2926,7 +2853,7 @@ et4000w32p_init(const device_t *info)
             fatal("ET4000/W32 on the GPU: no memory\n");
         et4000->k_gpu->seg = kairo_et4000w32_open(et4000->svga.vram, et4000->vram_mask, et4000->svga.changedvram,
                                                   &et4000->svga.monitor->mon_changeframecount);
-        kairo_seg_set_flush(et4000->k_gpu->seg, et4000w32_k_flush_cb, et4000);
+        et4000->k_gpu->run = kairo_seg_run_open(et4000->k_gpu->seg, et4000->vram_mask, ET_BYTE_WORDS, 3, et4000w32_k_op, et4000);
         et4000->svga.kairo_touch = et4000w32p_svga_touch;
     }
 
@@ -3133,6 +3060,7 @@ et4000w32p_close(void *priv)
 
     if (et4000->k_gpu != NULL) {
         kairo_seg_close(et4000->k_gpu->seg); /* KairoX86#254 */
+        kairo_seg_run_close(et4000->k_gpu->run);
         free(et4000->k_gpu);
     }
     svga_close(&et4000->svga);

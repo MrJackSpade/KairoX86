@@ -1,0 +1,92 @@
+#version 450
+#extension GL_EXT_control_flow_attributes : require
+/*
+ * The Cirrus Logic GD54xx BitBLT engine on the GPU (KairoX86#250): the per-byte draw of 86Box's pattern copy, system
+ * memory source and normal blits (vid_cl54xx.c: gd54xx_rop, gd54xx_blit and gd54xx_normal_blit's write), on the
+ * drawing engines' shared batches (seg.glsl) as runs of bytes (kairo_seg_run). The walk stays the CPU's; each byte's
+ * source, mask and bytes are its stream words (86box/kairo_gpu_cl54xx.h).
+ *
+ * Copyright 2026 MrJackSpade. GPL-2.0-or-later.
+ */
+#include "seg.glsl"
+
+const uint CL_ROP = 0u, CL_FLAGS = 1u, CL_WORDS = 4u;
+const uint CLF_RULE_NORMAL = 1u, CLF_TRANSP = 2u, CLF_BGONLY = 4u, CLF_COLOREXP = 8u, CLF_EXPINV = 16u;
+const uint CL_IMM = 0x80000000u, CL_CE = 0x40000000u, CL_TCOMP = 0x20000000u, CL_NCOMP = 0x10000000u,
+           CL_SKIP = 0x08000000u, CL_ADDR_MASK = 0x07ffffffu;
+
+/* gd54xx_rop: the codes it knows; any other leaves the destination */
+uint rop(uint code, uint d, uint s)
+{
+    switch (code) {
+        case 0x00u: return 0u;
+        case 0x05u: return s & d;
+        case 0x06u: return d;
+        case 0x09u: return s & ~d & 0xffu;
+        case 0x0bu: return ~d & 0xffu;
+        case 0x0du: return s;
+        case 0x0eu: return 0xffu;
+        case 0x50u: return ~s & d & 0xffu;
+        case 0x59u: return s ^ d;
+        case 0x6du: return s | d;
+        case 0x90u: return ~(s | d) & 0xffu;
+        case 0x95u: return ~(s ^ d) & 0xffu;
+        case 0xadu: return (s | ~d) & 0xffu;
+        case 0xd0u: return ~s & 0xffu;
+        case 0xd6u: return (~s | d) & 0xffu;
+        case 0xdau: return ~(s & d) & 0xffu;
+        default: return d;
+    }
+}
+
+uint ce_bit(uint ba) { return (rd8((ba & CL_ADDR_MASK) >> 3) >> (ba & 7u)) & 1u; }
+
+void card_pixels(uint seg, uint op, uint row, uint first, int i0, int i1)
+{
+    const uint o     = op * CL_WORDS;
+    const uint flags = ops[o + CL_FLAGS];
+    const uint code  = ops[o + CL_ROP];
+    const int  dir   = int(segs[seg * KG_WORDS + KG_DIR]);
+    const uint d0    = segs[seg * KG_WORDS + KG_BIT] >> 3;
+    [[dont_unroll]] for (int n = i0; n < i1; n++) {
+        const uint w     = row + uint(n) * 3u;
+        const uint ws    = stream[w];
+        const uint wm    = stream[w + 1u];
+        const uint bytes = stream[w + 2u];
+        uint       src;
+        if ((ws & CL_IMM) != 0u)
+            src = ws & 0xffu;
+        else if ((ws & CL_CE) != 0u)
+            src = (ce_bit(ws) != 0u) ? (bytes & 0xffu) : ((bytes >> 8) & 0xffu);
+        else
+            src = rd8(ws);
+        uint m;
+        if ((wm & CL_IMM) != 0u)
+            m = wm & 1u;
+        else
+            m = ce_bit(ws);
+        if ((wm & CL_TCOMP) != 0u)
+            m = (((src ^ (bytes >> 16)) & ~(bytes >> 24) & 0xffu) == 0u) ? 1u : 0u;
+        const bool skip = (wm & CL_SKIP) != 0u;
+        const bool ce   = (flags & CLF_COLOREXP) != 0u;
+        const bool inv  = (flags & CLF_EXPINV) != 0u;
+        bool       write;
+        if ((flags & CLF_RULE_NORMAL) != 0u) {
+            if (ce && inv)
+                m ^= 1u;
+            if (((wm & CL_NCOMP) != 0u) && (src != ((bytes >> 16) & 0xffu)))
+                m = 0u;
+            write = !skip && !(((flags & CLF_TRANSP) != 0u) && (m == 0u));
+        } else if ((flags & CLF_TRANSP) != 0u) {
+            if (ce && inv)
+                m ^= 1u;
+            write = (m != 0u) && !skip;
+        } else if (ce && ((flags & CLF_BGONLY) != 0u))
+            write = (m != 0u) || !skip;
+        else
+            write = !skip;
+        const uint a = d0 + uint(int(first) + n * dir);
+        if (write)
+            wr8(a, rop(code, rd8(a), src));
+    }
+}
