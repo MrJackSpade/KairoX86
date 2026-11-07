@@ -173,6 +173,10 @@ enum {
        palette[(c >> 8) & F8h], green from palette[(c >> 3) & FCh], blue from palette[(c << 3) & F8h], no alpha (the
        3dfx Voodoo's display table, vid_voodoo_display.c voodoo_calc_clutData) */
     KAIRO_SCAN_16CLUT,
+    /* KairoX86#241: the CGA's composite output decoded (vid_cga_comp.c Composite_Process): the words are the line's
+       composite signal, count + 10 values (signed) from 5 before its first pixel; a: 1 for the luma-only decode;
+       palette: the sharpness, then the I and Q weights of red, green and blue (signed) */
+    KAIRO_SCAN_COMPOSITE,
 };
 
 /* Each pixel drawn twice across */

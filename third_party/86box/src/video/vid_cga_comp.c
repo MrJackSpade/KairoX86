@@ -26,6 +26,8 @@
 #include <86box/mem.h>
 #include <86box/vid_cga.h>
 #include <86box/vid_cga_comp.h>
+#include <86box/video.h>     /* KairoX86#241: buffer32 */
+#include <86box/kairo_gpu.h> /* KairoX86#241 */
 #include <86box/thread.h>
 
 int CGA_Composite_Table[1024];
@@ -208,6 +210,48 @@ byte_clamp(int v)
 static int temp[SCALER_MAXWIDTH + 10] = { 0 };
 static int atemp[SCALER_MAXWIDTH + 2] = { 0 };
 static int btemp[SCALER_MAXWIDTH + 2] = { 0 };
+
+/* KairoX86#241: whether a line of cgamode decodes its luma only (Composite_Process's own test) */
+static bool
+composite_mono(uint8_t cgamode)
+{
+    const int is_high_res_text = ((cgamode & (CGA_MODE_FLAG_HIGHRES | CGA_MODE_FLAG_GRAPHICS)) == CGA_MODE_FLAG_HIGHRES);
+    const int border_ex        = current_cgacol & 0x0f;
+    const int motorola_hsync_0 = current_cgacol & 0x80;
+
+    return ((cgamode & CGA_MODE_FLAG_BW) != 0) || (is_high_res_text && (border_ex == 0x00) && !motorola_hsync_0);
+}
+
+bool
+Composite_Process_gpu(uint8_t cgamode, uint8_t border, uint32_t blocks, uint32_t *TempLine)
+{
+    const int w = (int) blocks * 4;
+
+    if (!kairo_gpu_on || cga_lightpen_enabled || (w <= 0) || (w > SCALER_MAXWIDTH))
+        return false;
+    const uint32_t params[7] = { (uint32_t) video_sharpness, (uint32_t) (int) video_ri, (uint32_t) (int) video_rq,
+                                 (uint32_t) (int) video_gi, (uint32_t) (int) video_gq, (uint32_t) (int) video_bi,
+                                 (uint32_t) (int) video_bq };
+    const uint32_t *rgbi   = TempLine;
+    const int      *b      = &CGA_Composite_Table[border * 68];
+    uint32_t       *o      = kairo_gpu_scan(buffer32, buffer32->kairo_gpu, (uint32_t) (TempLine - buffer32->dat),
+                                            KAIRO_SCAN_COMPOSITE, (uint32_t) w, (uint32_t) w + 10, params, 7,
+                                            composite_mono(cgamode) ? 1 : 0, 0, 0);
+
+    /* The signal, as Composite_Process builds it */
+    for (uint8_t x = 0; x < 4; ++x)
+        *o++ = (uint32_t) b[(x + 3) & 3];
+    *o++ = (uint32_t) CGA_Composite_Table[(border << 6) | ((*rgbi & 0x0f) << 2) | 3];
+    for (int x = 0; x < w - 1; ++x) {
+        *o++ = (uint32_t) CGA_Composite_Table[((rgbi[0] & 0x0f) << 6) | ((rgbi[1] & 0x0f) << 2) | (x & 3)];
+        ++rgbi;
+    }
+    *o++ = (uint32_t) CGA_Composite_Table[((*rgbi & 0x0f) << 6) | (border << 2) | 3];
+    for (uint8_t x = 0; x < 5; ++x)
+        *o++ = (uint32_t) b[x & 3];
+    kairo_gpu_scan_commit();
+    return true;
+}
 
 uint32_t *
 Composite_Process(uint8_t cgamode, uint8_t border, uint32_t blocks /*, bool doublewidth*/, uint32_t *TempLine)

@@ -581,7 +581,8 @@ quadcolor_render_process(quadcolor_t *quadcolor, int line)
     if (quadcolor->composite) {
         border = ((quadcolor->cgamode & highres_graphics_flag) == highres_graphics_flag) ? 0 : (quadcolor->cgacol & 15);
 
-        Composite_Process(quadcolor->cgamode, border, x >> 2, buffer32->line[line]);
+        if (!Composite_Process_gpu(quadcolor->cgamode, border, x >> 2, buffer32->line[line])) /* KairoX86#241: the GPU decodes it */
+            Composite_Process(quadcolor->cgamode, border, x >> 2, buffer32->line[line]);
     } else
         video_process_8(x, line);
 }

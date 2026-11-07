@@ -784,7 +784,8 @@ v6355_render_process(v6355_t *v6355, int line)
 
             border = ((v6355->cgamode & 0x12) == 0x12) ? 0 : (v6355->cgacol & 15);
 
-            Composite_Process(v6355->cgamode, border, (width + 16) >> 2, buffer32->line[line]);
+            if (!Composite_Process_gpu(v6355->cgamode, border, (width + 16) >> 2, buffer32->line[line])) /* KairoX86#241: the GPU decodes it */
+                Composite_Process(v6355->cgamode, border, (width + 16) >> 2, buffer32->line[line]);
             break;
         case V6355_TRUECOLOR:
             /* V6355_TRUECOLOR is a fictitious display that behaves like RGB except it

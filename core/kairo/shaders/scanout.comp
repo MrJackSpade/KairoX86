@@ -48,6 +48,7 @@ const uint SCAN_NIBBLES = 10u;
 const uint SCAN_NIBBLES8 = 11u;
 const uint SCAN_15MIX = 12u;
 const uint SCAN_16CLUT = 13u;
+const uint SCAN_COMPOSITE = 14u;
 const uint SCAN_WIDE = 1u;
 const uint SCAN_WIDE4 = 2u;
 
@@ -61,6 +62,40 @@ layout(push_constant) uniform Unused { uint unused; } push;
 
 uint colour(uint palette, uint index) {
     return palettes[(palette - 1u) * 256u + index];
+}
+
+// KairoX86#241: the composite decode (vid_cga_comp.c Composite_Process), a pixel at a time: its signal T, chroma A
+// and B, and the signal less its chroma I, all around the pixel
+int comp_t(uint src, int j) { return int(words[src + uint(j)]); }
+int comp_a(uint src, int j) {
+    return comp_t(src, j - 4) - ((comp_t(src, j - 2) - comp_t(src, j) + comp_t(src, j + 2)) << 1) + comp_t(src, j + 4);
+}
+int comp_b(uint src, int j) {
+    return (comp_t(src, j - 3) - comp_t(src, j - 1) + comp_t(src, j + 1) - comp_t(src, j + 3)) << 1;
+}
+int comp_i(uint src, int j) { return (comp_t(src, j) << 3) - comp_a(src, j); }
+uint comp_clamp(int v) { return uint(clamp(v >> 13, 0, 255)); }
+uint composite(uint src, uint palette, uint s, bool mono) {
+    const int j  = int(s) + 5;
+    const int sh = int(colour(palette, 0u));
+    if (mono) {
+        const int c = (comp_t(src, j) + comp_t(src, j)) << 3;
+        const int d = (comp_t(src, j - 1) + comp_t(src, j + 1)) << 3;
+        return comp_clamp(((c + d) << 8) + sh * (c - d)) * 0x10101u;
+    }
+    const int c = comp_i(src, j) + comp_i(src, j);
+    const int d = comp_i(src, j - 1) + comp_i(src, j + 1);
+    const int y = ((c + d) << 8) + sh * (c - d);
+    const int a = comp_a(src, j);
+    const int b = comp_b(src, j);
+    // The four phases: (a, b), (-b, a), (-a, -b), (b, -a)
+    const uint ph = s & 3u;
+    const int  I  = (ph == 0u) ? a : (ph == 1u) ? -b : (ph == 2u) ? -a : b;
+    const int  Q  = (ph == 0u) ? b : (ph == 1u) ? a : (ph == 2u) ? -b : -a;
+    const int  rr = y + int(colour(palette, 1u)) * I + int(colour(palette, 2u)) * Q;
+    const int  gg = y + int(colour(palette, 3u)) * I + int(colour(palette, 4u)) * Q;
+    const int  bb = y + int(colour(palette, 5u)) * I + int(colour(palette, 6u)) * Q;
+    return (comp_clamp(rr) << 16) | (comp_clamp(gg) << 8) | comp_clamp(bb);
 }
 
 void main() {
@@ -77,7 +112,9 @@ void main() {
     for (uint i = skip + gl_LocalInvocationID.x; i < count; i += gl_WorkGroupSize.x) {
         const uint s = i >> repeat;
         uint v;
-        if (kind == SCAN_8) {
+        if (kind == SCAN_COMPOSITE) {
+            v = composite(src, palette, s, a == 1u);
+        } else if (kind == SCAN_8) {
             const uint word = words[src + (s >> 2)];
             v = colour(palette, (word >> (8u * (s & 3u))) & a);
         } else if (kind == SCAN_15 || kind == SCAN_16 || kind == SCAN_15MIX) {

@@ -322,10 +322,9 @@ compaq_cga_poll(void *priv)
             else
                 border = dev->cgacol & 0x0f;
 
-            if (vflags)
-                Composite_Process(dev->cgamode & 0x7f, border, x >> 2, buffer32->line[dev->displine]);
-            else
-                Composite_Process(dev->cgamode, border, x >> 2, buffer32->line[dev->displine]);
+            const uint8_t mode = vflags ? (dev->cgamode & 0x7f) : dev->cgamode;
+            if (!Composite_Process_gpu(mode, border, x >> 2, buffer32->line[dev->displine])) /* KairoX86#241 */
+                Composite_Process(mode, border, x >> 2, buffer32->line[dev->displine]);
         } else
             video_process_8(x, dev->displine);
 

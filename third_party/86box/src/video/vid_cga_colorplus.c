@@ -295,9 +295,10 @@ colorplus_poll(void *priv)
 
         x = (colorplus->cga.crtc[CGA_CRTC_HDISP] << 4) + 16;
 
-        if (colorplus->cga.composite)
-            Composite_Process(colorplus->cga.cgamode, 0, x >> 2, buffer32->line[colorplus->cga.displine]);
-        else
+        if (colorplus->cga.composite) {
+            if (!Composite_Process_gpu(colorplus->cga.cgamode, 0, x >> 2, buffer32->line[colorplus->cga.displine])) /* KairoX86#241: the GPU decodes it */
+                Composite_Process(colorplus->cga.cgamode, 0, x >> 2, buffer32->line[colorplus->cga.displine]);
+        } else
             video_process_8(x, colorplus->cga.displine);
 
         video_lightpen_check_trigger_strobe(0, colorplus->cga.displine, 0, colorplus->cga.firstline - 4, (1. / (CGACONST / (cpuclock * (double) (1ULL << 32)))), colorplus->cga.monitor_used);

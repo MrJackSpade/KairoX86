@@ -100,6 +100,7 @@
 - **`kairox86-gpu-compaq` group:** the Compaq CGA's 350-line text on the GPU as text cells (KairoX86#243). Checked by `core/test/gpu/cgaext.c`.
 - **`kairox86-gpu-jega` group:** the JEGA's Japanese text on the GPU as text cells through a 33-colour line palette, a double-byte character two cells (KairoX86#262). Checked by `core/test/gpu/jega.c`.
 - **`kairox86-gpu-genius-text` group:** the Genius VHR's text on the GPU when it is the line's only layer (KairoX86#255), when its transparent drawing comes out as plain text; text over graphics stays the CPU's.
+- **`kairox86-gpu-composite` group:** CGA composite output decoded on the GPU (KairoX86#241; `KAIRO_SCAN_COMPOSITE`): the CPU builds each line's composite signal from `CGA_Composite_Table` as `Composite_Process` does, the GPU separates its chroma and decodes each pixel in integers as the CPU does. `Composite_Process_gpu` serves the drivers that touch a row before drawing on it again (CGA, ColorPlus, Compaq, Quadcolor, V6355); the PCjr, PCjx and Tandy keep `Composite_Process`. Checked frame by frame against the CPU with composite output on.
 
 ## 86Box's translations
 

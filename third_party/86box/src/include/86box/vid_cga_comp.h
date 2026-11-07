@@ -31,5 +31,9 @@ void      update_cga16_color(uint8_t cgamode, uint8_t cgacol);
 void      cga_comp_init(int revision);
 void      cga_comp_reload(int new_brightness, int new_saturation, int new_sharpness, int new_hue, int new_contrast);
 uint32_t *Composite_Process(uint8_t cgamode, uint8_t border, uint32_t blocks /*, bool doublewidth*/, uint32_t *TempLine);
+/* KairoX86#241: Composite_Process with Hardware acceleration on: the line's signal worked out on the CPU and its decode
+   queued for the GPU at TempLine, a line of buffer32; for drivers that touch a row before drawing on it again.
+   Returns false (the caller decodes on the CPU) with the GPU off or the light pen on, which reads the picture back. */
+bool Composite_Process_gpu(uint8_t cgamode, uint8_t border, uint32_t blocks, uint32_t *TempLine);
 
 #endif /*VIDEO_CGA_COMP_H*/

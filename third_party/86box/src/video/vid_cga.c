@@ -625,7 +625,8 @@ cga_render_process(cga_t *cga, int line)
         if (cga->revision == CGA_COMPOSITE_PCJR)
             border = 0;
 
-        Composite_Process(cga->cgamode, border, x >> 2, buffer32->line[line]);
+        if (!Composite_Process_gpu(cga->cgamode, border, x >> 2, buffer32->line[line])) /* KairoX86#241: the GPU decodes it */
+            Composite_Process(cga->cgamode, border, x >> 2, buffer32->line[line]);
     } else
         video_process_8(x, line);
 }
