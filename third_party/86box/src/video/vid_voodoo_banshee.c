@@ -43,6 +43,7 @@
 #include <86box/vid_svga.h>
 #include <86box/vid_svga_render.h>
 #include <86box/vid_voodoo_common.h>
+#include <86box/vid_voodoo_banshee_blitter.h> /* KairoX86#278 */
 #include <86box/vid_voodoo_display.h>
 #include <86box/vid_voodoo_fb.h>
 #include <86box/vid_voodoo_fifo.h>
@@ -3530,6 +3531,7 @@ banshee_init_common(const device_t *info, const char *fn, const int has_sgram,
     banshee->voodoo->texture_mask = banshee->svga.vram_mask;
     if (kairo_gpu_on) /* KairoX86#278 */
         banshee->voodoo->k_gpu = kairo_voodoo_gpu_open(banshee->voodoo);
+    banshee_k2d_open(banshee->voodoo); /* KairoX86#278: its 2D engine's */
     banshee->voodoo->cmd_status   = (1 << 28);
     banshee->voodoo->cmd_status_2 = (1 << 28);
     voodoo_generate_filter_v1(banshee->voodoo);

@@ -299,6 +299,9 @@ void
 kairo_voodoo_gpu_touch(voodoo_t *voodoo, uint32_t addr, uint32_t len)
 {
     voodoo_gpu_t *g = voodoo->k_gpu;
+    /* The Banshee's 2D engine's batch too: at most one of the two has work, each drawing the other's first */
+    if (voodoo->k2d_touch != NULL)
+        voodoo->k2d_touch(voodoo, addr, len);
     if (kairo_gpu_pages_hit(&g->pages, addr, len))
         kairo_voodoo_gpu_drain(voodoo);
 }

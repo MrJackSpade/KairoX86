@@ -406,6 +406,11 @@ typedef struct voodoo_t {
     ATOMIC_INT k_fifo_state;
     /* KairoX86#278: its triangles' GPU state (kairo_gpu_voodoo.h), NULL in software */
     void *k_gpu;
+    /* KairoX86#278: the Banshee's 2D engine's batch on the GPU (vid_voodoo_banshee_blitter.c), NULL in software and on
+       the Voodoo Graphics and Voodoo2: what draws on len bytes at addr drawn first; the whole batch drawn */
+    void *k2d;
+    void (*k2d_touch)(struct voodoo_t *voodoo, uint32_t addr, uint32_t len);
+    void (*k2d_drain)(struct voodoo_t *voodoo);
     event_t  *render_not_full_event[4];
     event_t  *wake_render_thread[4];
 

@@ -1944,6 +1944,8 @@ voodoo_queue_triangle(voodoo_t *voodoo, voodoo_params_t *params)
         voodoo_use_texture(voodoo, params, 0);
         if (voodoo->dual_tmus)
             voodoo_use_texture(voodoo, params, 1);
+        if (voodoo->k2d_drain != NULL) /* the 2D engine's work first */
+            voodoo->k2d_drain(voodoo);
         kairo_voodoo_gpu_queue(voodoo, params);
         if (stipple_rotating)
             voodoo->params.stipple = stipple_next;

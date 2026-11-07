@@ -37,6 +37,7 @@
 #include <86box/video.h>
 #include <86box/vid_svga.h>
 #include <86box/vid_voodoo_common.h>
+#include <86box/vid_voodoo_banshee_blitter.h> /* KairoX86#278 */
 #include <86box/vid_voodoo_blitter.h>
 #include <86box/vid_voodoo_display.h>
 #include <86box/vid_voodoo_dither.h>
@@ -1754,6 +1755,7 @@ voodoo_card_close(voodoo_t *voodoo)
     }
 
     kairo_voodoo_gpu_close(voodoo); /* KairoX86#278 */
+    banshee_k2d_close(voodoo);      /* the Banshee's 2D engine's batch */
     voodoo_free_texture_caches(voodoo);
 #ifndef NO_CODEGEN
     voodoo_codegen_close(voodoo);

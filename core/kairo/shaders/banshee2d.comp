@@ -1,0 +1,70 @@
+#version 450
+#extension GL_EXT_control_flow_attributes : require
+/*
+ * The 3dfx Voodoo Banshee and Voodoo3's 2D engine on the GPU (KairoX86#278): 86Box's per-pixel draw of the blitter
+ * (vid_voodoo_banshee_blitter.c: the destination read, MIX with its colour keys, the write) for its rectangle fills,
+ * blits, stretches, host blits, lines and polygons, as runs of 1 to 4-byte pixels (kairo_seg_run) on the drawing
+ * engines' shared batches (seg.glsl). The walk stays the CPU's; each pixel's source, pattern and source key are its
+ * stream words (86box/kairo_gpu_banshee2d.h). A 3-byte pixel keeps the byte after it.
+ *
+ * Copyright 2026 MrJackSpade. GPL-2.0-or-later.
+ */
+#include "seg.glsl"
+
+const uint B2_ROPS = 0u, B2_DKEY = 1u, B2_DKEY_MIN = 2u, B2_DKEY_MAX = 3u, B2_BYTES = 4u, B2_WORDS = 8u;
+const uint B2K_SRC_KEY = 1u;
+const uint KEY_8 = 1u, KEY_16 = 2u, KEY_32 = 3u;
+
+/* colorkey (the destination's): whether d lies in [lo, hi] in each of its channels, in the key's format */
+bool keyed(uint d, uint lo, uint hi, uint format)
+{
+    switch (format) {
+        case KEY_8:
+            return ((d & 0xffu) >= (lo & 0xffu)) && ((d & 0xffu) <= (hi & 0xffu));
+        case KEY_16: {
+            const uint r = (d >> 11) & 0x1fu, g = (d >> 5) & 0x3fu, b = d & 0x1fu;
+            return (r >= ((lo >> 11) & 0x1fu)) && (r <= ((hi >> 11) & 0x1fu)) && (g >= ((lo >> 5) & 0x3fu)) &&
+                   (g <= ((hi >> 5) & 0x3fu)) && (b >= (lo & 0x1fu)) && (b <= (hi & 0x1fu));
+        }
+        case KEY_32: {
+            const uint r = (d >> 16) & 0xffu, g = (d >> 8) & 0xffu, b = d & 0xffu;
+            return (r >= ((lo >> 16) & 0xffu)) && (r <= ((hi >> 16) & 0xffu)) && (g >= ((lo >> 8) & 0xffu)) &&
+                   (g <= ((hi >> 8) & 0xffu)) && (b >= (lo & 0xffu)) && (b <= (hi & 0xffu));
+        }
+        default:
+            return false;
+    }
+}
+
+void card_pixels(uint seg, uint op, uint row, uint first, int i0, int i1)
+{
+    const uint o    = op * B2_WORDS;
+    const uint pb   = ops[o + B2_BYTES];
+    const uint dkey = ops[o + B2_DKEY];
+    const int  dir  = int(segs[seg * KG_WORDS + KG_DIR]);
+    const uint d0   = segs[seg * KG_WORDS + KG_BIT] >> 3;
+    [[dont_unroll]] for (int n = i0; n < i1; n++) {
+        const uint w = row + uint(n) * 3u;
+        const uint s = stream[w], p = stream[w + 1u], flags = stream[w + 2u];
+        const uint a = d0 + uint((int(first) + n * dir) * int(pb));
+        uint       d = 0u;
+        for (uint i = 0u; i < pb; i++)
+            d |= rd8(a + i) << (8u * i);
+        /* MIX: the raster operation the source and destination keys choose */
+        uint nr = ((flags & B2K_SRC_KEY) != 0u) ? 2u : 0u;
+        if ((dkey != 0u) && keyed(d, ops[o + B2_DKEY_MIN], ops[o + B2_DKEY_MAX], dkey))
+            nr |= 1u;
+        const uint rop = (ops[o + B2_ROPS] >> (8u * nr)) & 0xffu;
+        uint       r   = 0u;
+        if ((rop & 0x01u) != 0u) r |= ~p & ~s & ~d;
+        if ((rop & 0x02u) != 0u) r |= ~p & ~s & d;
+        if ((rop & 0x04u) != 0u) r |= ~p & s & ~d;
+        if ((rop & 0x08u) != 0u) r |= ~p & s & d;
+        if ((rop & 0x10u) != 0u) r |= p & ~s & ~d;
+        if ((rop & 0x20u) != 0u) r |= p & ~s & d;
+        if ((rop & 0x40u) != 0u) r |= p & s & ~d;
+        if ((rop & 0x80u) != 0u) r |= p & s & d;
+        for (uint i = 0u; i < pb; i++)
+            wr8(a + i, r >> (8u * i));
+    }
+}
