@@ -63,6 +63,7 @@
 #include "cpu.h"
 #include <86box/video.h>
 #include <86box/vid_cga.h>
+#include <86box/kairo_gpu.h> /* KairoX86#316 */
 #include <86box/plat_unused.h>
 
 #define F82C425_XSIZE 640
@@ -461,6 +462,86 @@ f82c425_cgaline4(f82c425_t *f82c425)
     }
 }
 
+/* KairoX86#316: colour c's place in a line's palette (n of them so far, up to 16), -1 when it is full */
+static int
+f82c425_k_colour(uint32_t *palette, uint32_t *n, uint32_t c)
+{
+    for (uint32_t i = 0; i < *n; i++)
+        if (palette[i] == c)
+            return (int) i;
+    if (*n == 16)
+        return -1;
+    palette[*n] = c;
+    return (int) (*n)++;
+}
+
+/* KairoX86#316: the panel's line (f82c425_text_row's or f82c425_cgaline6/4's, read as they read it) to the GPU's
+   scanout queue in the colours they draw; returns whether the GPU draws it. Text only with characters 8 dots high
+   (the CPU draws as many dots across as the character is high), not with the light pen (it reads the picture
+   back), nor (it never happens) with more than 16 colours on a line. */
+static bool
+f82c425_render_gpu(f82c425_t *f82c425)
+{
+    if (!kairo_gpu_on || cga_lightpen_enabled)
+        return false;
+    bitmap_t      *bitmap  = buffer32;
+    const uint32_t out     = (uint32_t) (bitmap->line[f82c425->displine] - bitmap->dat);
+    const uint16_t memaddr = (f82c425->cga.crtc[CGA_CRTC_START_ADDR_LOW] | (f82c425->cga.crtc[CGA_CRTC_START_ADDR_HIGH] << 8)) & 0x3fff;
+
+    const uint8_t mode = f82c425->cga.cgamode & 0x13; /* the poll's own dispatch: other modes draw nothing */
+    if ((mode == 0x12) || (mode == 0x02)) {
+        uint16_t       addr       = ((f82c425->displine) & 1) * 0x2000 + (f82c425->displine >> 1) * 80 + ((memaddr & ~1) << 1);
+        const bool     six        = mode == 0x12;
+        const uint32_t colours[4] = { colormap[0], six ? colormap[3] : colormap[1], colormap[2], colormap[3] };
+        uint8_t       *bytes      = (uint8_t *) kairo_gpu_scan(bitmap, bitmap->kairo_gpu, out, KAIRO_SCAN_BITS, 640, 20, colours, six ? 2 : 4,
+                                                               six ? 1 : 2, 0, six ? 0 : KAIRO_SCAN_WIDE);
+        for (int x = 0; x < 80; x++)
+            bytes[x] = (six || (f82c425->cga.cgamode & 0x08)) ? f82c425->vram[(addr + x) & 0x3FFF] : 0;
+        kairo_gpu_scan_commit();
+        return true;
+    }
+
+    const int columns = f82c425->cga.crtc[CGA_CRTC_HDISP];
+    if ((mode != 0x00) && (mode != 0x01))
+        return false;
+    if (((f82c425->cga.crtc[CGA_CRTC_MAX_SCANLINE_ADDR] + 1) != 8) || (columns <= 0) || (columns > 128))
+        return false;
+    const uint8_t  scanline   = (f82c425->displine) & 7;
+    const uint16_t addr       = ((memaddr & ~1) + (f82c425->displine >> 3) * columns) * 2;
+    uint16_t       ma         = memaddr + (f82c425->displine >> 3) * columns;
+    const uint16_t cursoraddr = (f82c425->cga.crtc[0x0f] | (f82c425->cga.crtc[0x0e] << 8)) & 0x3fff;
+    const bool     wide       = mode == 0x00;
+    int            cursorline;
+    uint32_t       palette[16];
+    uint32_t       n = 0;
+    uint32_t       cells[128];
+
+    if ((f82c425->cga.crtc[CGA_CRTC_CURSOR_START] & 0x60) == 0x20)
+        cursorline = 0;
+    else
+        cursorline = ((f82c425->cga.crtc[CGA_CRTC_CURSOR_START] & 0x0F) <= scanline) && ((f82c425->cga.crtc[CGA_CRTC_CURSOR_END] & 0x0F) >= scanline);
+    for (int x = 0; x < columns; x++) {
+        const uint8_t chr        = f82c425->vram[(addr + 2 * x) & 0x3FFF];
+        const uint8_t attr       = f82c425->vram[(addr + 2 * x + 1) & 0x3FFF];
+        const int     drawcursor = ((ma == cursoraddr) && cursorline && (f82c425->cga.cgamode & CGA_MODE_FLAG_VIDEO_ENABLE) && (f82c425->cga.cgablink & 0x10));
+        const int     blink      = ((f82c425->cga.cgablink & 0x10) && (f82c425->cga.cgamode & CGA_MODE_FLAG_BLINK) && (attr & 0x80) && !drawcursor);
+        const uint8_t a          = drawcursor ? (uint8_t) (~attr & 0xff) : attr;
+        const uint32_t off       = smartmap[a][0];
+        const uint32_t on        = blink ? smartmap[a][0] : smartmap[a][1];
+        const int      f         = f82c425_k_colour(palette, &n, on);
+        const int      b         = f82c425_k_colour(palette, &n, off);
+        if ((f < 0) || (b < 0))
+            return false;
+        cells[x] = fontdat[chr][scanline] | ((uint32_t) f << 8) | ((uint32_t) b << 16);
+        ++ma;
+    }
+    uint32_t *line = kairo_gpu_scan(bitmap, bitmap->kairo_gpu, out, KAIRO_SCAN_TEXT, (uint32_t) columns * (wide ? 16 : 8), (uint32_t) columns,
+                                    palette, n, 8, 0, wide ? KAIRO_SCAN_WIDE : 0);
+    memcpy(line, cells, (size_t) columns * sizeof(uint32_t));
+    kairo_gpu_scan_commit();
+    return true;
+}
+
 static void
 f82c425_poll(void *priv)
 {
@@ -502,20 +583,25 @@ f82c425_poll(void *priv)
                 video_wait_for_buffer();
             }
 
-            switch (f82c425->cga.cgamode & 0x13) {
-                case 0x12:
-                    f82c425_cgaline6(f82c425);
-                    break;
-                case 0x02:
-                    f82c425_cgaline4(f82c425);
-                    break;
-                case 0x00:
-                case 0x01:
-                    f82c425_text_row(f82c425);
-                    break;
+            /* KairoX86#316: the GPU draws the line, else the CPU, after what the GPU still has to draw there */
+            if (!f82c425_render_gpu(f82c425)) {
+                if (kairo_gpu_on)
+                    kairo_gpu_scan_touch(buffer32, (uint32_t) (buffer32->line[f82c425->displine] - buffer32->dat), (uint32_t) buffer32->w);
+                switch (f82c425->cga.cgamode & 0x13) {
+                    case 0x12:
+                        f82c425_cgaline6(f82c425);
+                        break;
+                    case 0x02:
+                        f82c425_cgaline4(f82c425);
+                        break;
+                    case 0x00:
+                    case 0x01:
+                        f82c425_text_row(f82c425);
+                        break;
 
-                default:
-                    break;
+                    default:
+                        break;
+                }
             }
         }
         f82c425->displine++;

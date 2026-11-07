@@ -23,6 +23,7 @@
 #include <86box/mem.h>
 #include <86box/timer.h>
 #include <86box/video.h>
+#include <86box/kairo_gpu.h> /* KairoX86#317 */
 #include <86box/vid_cga.h>
 #include <86box/vid_cga_comp.h>
 #include <86box/vid_ibm5140.h>
@@ -334,7 +335,25 @@ lcd_present(ibm5140_video_t *video)
     const uint32_t *const level_color             = video->level_color;
     uint8_t              *level                   = video->level;
     video_wait_for_buffer_monitor(video->monitor);
-    for (unsigned y = 0; y < LCD_HEIGHT; y++) {
+    /* KairoX86#317: with Hardware acceleration on (and the monitor's picture shared with the GPU), each dot's next
+       level, the panel's response, worked out here as ever, and the row to the GPU's scanout queue as a level a byte
+       through the levels' colours */
+    bitmap_t *bitmap = monitor->target_buffer;
+    if (kairo_gpu_on && (bitmap->kairo_gpu != NULL)) {
+        for (unsigned y = 0; y < LCD_HEIGHT; y++) {
+            uint8_t *levels = (uint8_t *) kairo_gpu_scan(bitmap, bitmap->kairo_gpu, (uint32_t) (bitmap->line[y] - bitmap->dat), KAIRO_SCAN_8,
+                                                         LCD_WIDTH, LCD_WIDTH / 4, level_color, LCD_LEVELS, 0xff, 0, 0);
+            for (unsigned column = 0; column < LCD_WIDTH / 8; column++) {
+                const uint8_t data = enabled ? lcd_byte(video, column, y) : 0;
+                for (unsigned bit = 0; bit < 8; bit++) {
+                    const uint8_t next     = next_level[(data & (0x80 >> bit)) != 0][*level];
+                    *level++               = next;
+                    levels[column * 8 + bit] = next;
+                }
+            }
+            kairo_gpu_scan_commit();
+        }
+    } else for (unsigned y = 0; y < LCD_HEIGHT; y++) {
         uint32_t *line = monitor->target_buffer->line[y];
         for (unsigned column = 0; column < LCD_WIDTH / 8; column++) {
             const uint8_t data = enabled ? lcd_byte(video, column, y) : 0;

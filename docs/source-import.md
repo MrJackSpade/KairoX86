@@ -109,6 +109,9 @@
 - **`kairox86-gpu-t1000` group:** the Toshiba T1000/T1200 internal panel on the GPU (KairoX86#313). Checked by `cga86.S`.
 - **`kairox86-gpu-t3100e` group:** the Toshiba T3100e plasma on the GPU (KairoX86#314). Checked by `cga86.S`.
 - **`kairox86-gpu-plasma` group:** the Compaq Portable III plasma on the GPU (KairoX86#312), each cell as the CPU's last drawing of it leaves it. Checked by `cga86.S`.
+- **`kairox86-gpu-f82` group:** the C&T 82C425 LCD (the Victor V86P's) on the GPU (KairoX86#316); characters of other heights than 8 dots stay the CPU's. Checked by `cga86.S`.
+- **`kairox86-gpu-ibm5140` group:** the IBM PC Convertible's LCD on the GPU (KairoX86#317): the panel's response levels worked out as ever, a level a byte through their colours. Checked by `cga86.S`.
+- **`kairox86-gpu-pc3270` group:** the IBM 3270 PC's display adapter on the GPU (KairoX86#311), 9-dot text and graphics; not while its diagnostic readback samples the pixels. Checked by `cga86.S`.
 
 ## 86Box's translations
 

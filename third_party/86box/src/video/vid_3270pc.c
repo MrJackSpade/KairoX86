@@ -47,6 +47,7 @@
 #include <86box/rom.h>
 #include <86box/device.h>
 #include <86box/video.h>
+#include <86box/kairo_gpu.h> /* KairoX86#311 */
 #include <86box/plat_unused.h>
 
 #define PC3270_ROM_PATH  "roms/video/ibm3270pc/6323581.bin"
@@ -1028,6 +1029,148 @@ pc3270_recalctimings(pc3270_t *dev)
         dev->render = (dev->mode3d8 & 0x10) ? pc3270_render_cga_1bpp : pc3270_render_cga_2bpp;
 }
 
+/* KairoX86#311: the line dev->render draws (read as it reads it) to the GPU's scanout queue in its colours; returns
+   whether the GPU draws it. The blank lines (the CGA modes' below 200, a display turned off) are the CPU's. */
+static bool
+pc3270_render_gpu(pc3270_t *dev)
+{
+    bitmap_t      *bitmap = buffer32;
+    const uint32_t out    = (uint32_t) (bitmap->line[dev->displine] - bitmap->dat);
+    const int      width  = dev->cols * 9;
+
+    if ((width <= 0) || (width > 2048))
+        return false;
+    if (dev->render == pc3270_render_text) {
+        int            scanline  = dev->displine % dev->charheight;
+        int            row       = dev->displine / dev->charheight;
+        int            underline = dev->ir[7] & 0x0f;
+        int            curstop   = (dev->ir[6] >> 4) & 0x0f;
+        int            cursbot   = dev->ir[6] & 0x0f;
+        uint16_t       pcoffset  = (uint16_t) (((dev->reg189 & 0x0f) << 8) | dev->reg18a);
+        int            blinkon   = dev->blink & 0x10;
+        int            cursblink = (dev->ir[7] & 0x20) ? (blinkon != 0) : 1;
+        uint32_t      *cells     = kairo_gpu_scan(bitmap, bitmap->kairo_gpu, out, KAIRO_SCAN_TEXT, (uint32_t) width, (uint32_t) dev->cols,
+                                                  dev->pal, 8, 9, 0, 0);
+        for (int x = 0; x < dev->cols; x++) {
+            uint16_t       ma   = (uint16_t) ((dev->scraddr + (row * dev->cols) + x) & 0x3fff);
+            const uint8_t *cell = &dev->tram[(ma & 0x7ff) * 4];
+            uint8_t        chr  = cell[0];
+            uint8_t        attr = cell[1];
+            uint16_t       glyph;
+            int            fg; /* indexes into dev->pal */
+            int            bg;
+            int            ul    = 0;
+            int            blink = 0;
+
+            if (chr != 0xff) {
+                int sel = (attr >> 6) & 3;
+                if (dev->colour) {
+                    fg = pc3270_attr_to_cga[(attr >> 3) & 7];
+                    bg = pc3270_attr_to_cga[attr & 7];
+                } else {
+                    fg = (attr & 0x20) ? 7 : 2;
+                    bg = 0;
+                }
+                blink = (sel == 1) && !blinkon;
+                if (sel == 2) {
+                    int t = fg;
+                    fg    = bg;
+                    bg    = t;
+                }
+                ul    = (sel == 3);
+                glyph = chr;
+            } else {
+                uint16_t ci = (uint16_t) (((ma + pcoffset) & 0x7ff) * 2);
+                uint8_t  ec = dev->cram[ci];
+                uint8_t  ea = dev->cram[ci + 1];
+                if (dev->colour) {
+                    fg = ea & 0x07;
+                    bg = (ea >> 4) & 0x07;
+                } else if ((ea & 0x77) == 0x70) {
+                    fg = 0;
+                    bg = 7;
+                } else {
+                    fg = (ea & 0x08) ? 7 : 2;
+                    bg = 0;
+                    ul = ((ea & 0x07) == 0x01);
+                }
+                blink = (ea & 0x80) && !blinkon;
+                glyph = 0x100 | ec;
+            }
+            if (blink)
+                fg = bg;
+            const uint16_t rowbits = dev->font[glyph][scanline] & 0x1ff;
+            uint32_t       c       = (uint32_t) (rowbits >> 1) | ((rowbits & 1) ? (1u << 24) : 0) | ((uint32_t) fg << 8) | ((uint32_t) bg << 16);
+            if (ul && (scanline == underline)) /* every dot the foreground */
+                c = 0xff | (1u << 24) | ((uint32_t) fg << 8) | ((uint32_t) fg << 16);
+            if ((ma == dev->cursaddr) && dev->cursen && cursblink && (scanline >= curstop) && (scanline <= cursbot)) {
+                /* the cursor OR'd into the output: the foreground, or white on a cell whose colours are one */
+                const int cur = (dev->pal[fg] == dev->pal[bg]) ? 7 : fg;
+                c             = 0xff | (1u << 24) | ((uint32_t) cur << 8) | ((uint32_t) cur << 16);
+            }
+            cells[x] = c;
+        }
+        kairo_gpu_scan_commit();
+        return true;
+    }
+    if ((dev->render == pc3270_render_apa_1bpp) || (dev->render == pc3270_render_apa_2bpp)) {
+        const bool     one    = dev->render == pc3270_render_apa_1bpp;
+        const int      stride = pc3270_apa_stride(dev);
+        const uint32_t addr   = (uint32_t) (dev->displine * stride);
+        const int      bytes_n = (width + 7) / 8;
+        uint8_t        pal[4];
+        uint32_t       colours[4];
+        if (one) {
+            colours[0] = dev->pal[0];
+            colours[1] = dev->pal[7];
+        } else {
+            pc3270_gfx_palette(dev, pal);
+            for (int v = 0; v < 4; v++)
+                colours[v] = dev->pal[pal[v]];
+        }
+        uint8_t *bytes = (uint8_t *) kairo_gpu_scan(bitmap, bitmap->kairo_gpu, out, KAIRO_SCAN_BITS, (uint32_t) bytes_n * 8, ((uint32_t) bytes_n + 3) / 4,
+                                                    colours, one ? 2 : 4, one ? 1 : 2, 0, one ? 0 : KAIRO_SCAN_WIDE);
+        for (int b = 0; b < bytes_n; b++)
+            bytes[b] = dev->apa[(addr + (uint32_t) b) & (PC3270_APA_SIZE - 1)];
+        kairo_gpu_scan_commit();
+        return true;
+    }
+    if (((dev->render == pc3270_render_cga_1bpp) || (dev->render == pc3270_render_cga_2bpp)) && (dev->displine < 200)) {
+        /* 640 dots from the interleaved buffer, then palette 0 to the raster's end: 4 bits a dot, value 4 that colour */
+        const bool     one  = dev->render == pc3270_render_cga_1bpp;
+        const uint32_t addr = (uint32_t) (((dev->displine & 1) ? 0x2000 : 0x0000) + ((dev->displine >> 1) * 80));
+        uint8_t        pal[4];
+        uint32_t       colours[5];
+        if (one) {
+            colours[0] = dev->pal[0];
+            colours[1] = dev->pal[7];
+        } else {
+            pc3270_gfx_palette(dev, pal);
+            for (int v = 0; v < 4; v++)
+                colours[v] = dev->pal[pal[v]];
+        }
+        colours[4]     = dev->pal[0];
+        uint8_t *nibs  = (uint8_t *) kairo_gpu_scan(bitmap, bitmap->kairo_gpu, out, KAIRO_SCAN_BITS, (uint32_t) width, ((uint32_t) width / 2 + 4) / 4,
+                                                    colours, 5, 4, 0, 0);
+        for (int x = 0; x < width; x += 2) {
+            uint8_t pair = 0;
+            for (int k = 0; k < 2; k++) {
+                const int xx = x + k;
+                uint8_t   v  = 4;
+                if (xx < 640) {
+                    const uint8_t data = dev->apa[(addr + (uint32_t) (xx >> 3)) & (PC3270_APA_SIZE - 1)];
+                    v = one ? ((data & (0x80 >> (xx & 7))) ? 1 : 0) : ((data >> (6 - (((xx >> 1) & 3) * 2))) & 3);
+                }
+                pair = (uint8_t) ((pair << 4) | v);
+            }
+            nibs[x / 2] = pair;
+        }
+        kairo_gpu_scan_commit();
+        return true;
+    }
+    return false;
+}
+
 static void
 pc3270_poll(void *priv)
 {
@@ -1047,7 +1190,13 @@ pc3270_poll(void *priv)
             }
             dev->lastline = dev->displine;
 
-            dev->render(dev);
+            /* KairoX86#311: the GPU draws the line, else the CPU (after what the GPU still has to draw there); not while
+               the diagnostic readback samples the CPU's pixels */
+            if (!(kairo_gpu_on && !(dev->reg189 & 0x20) && pc3270_render_gpu(dev))) {
+                if (kairo_gpu_on)
+                    kairo_gpu_scan_touch(buffer32, (uint32_t) (buffer32->line[dev->displine] - buffer32->dat), (uint32_t) buffer32->w);
+                dev->render(dev);
+            }
 
             /* The diagnostic readback latches whatever actually reached the
                raster, so it has to sample the rendered scanline -- the APA
