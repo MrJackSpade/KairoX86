@@ -1,6 +1,6 @@
 /*
  * KairoX86's Trident TGUI graphics engine test (KairoX86#283, for #274): on a TGUI 9440, 9660 or 9680 (PCI 1023h:
- * 9440h, 9660h), VESA 640 x 480 x 8 through its linear aperture (BAR 0, CRTC 21h bit 5), the engine through its ports (2120h-21FFh), a
+ * 9440h, 9660h; or a VLB 9440, its aperture placed at 12 MB through CRTC 21h), VESA 640 x 480 x 8 through its linear aperture (BAR 0, CRTC 21h bit 5), the engine through its ports (2120h-21FFh), a
  * series of passes, each over a clear and held four ticks of the BIOS clock: screen copies through raster operations
  * both ways, overlapping, transparent; colour, mono and solid pattern fills; Bresenham lines in every octant, short
  * vectors and (9660 and later) fast lines; sources from the host (colour and mono, through the linear frame buffer).
@@ -132,20 +132,30 @@ void test_main(void) {
                 break;
             }
         }
-    if (!found)
-        return;
-    bus--; /* the outer loop stepped past it */
-    is_9660 = (id == 0x96601023u);
-    /* The linear aperture at E000:0000:0000 (BAR 0): the BIOS leaves it as its sizing left it */
-    outl(0xcf8, pci_addr(bus, dev, 0x10));
-    outl(0xcfc, 0xe0000000u);
-    outl(0xcf8, pci_addr(bus, dev, 0x10));
-    const u32 base = inl(0xcfc) & 0xfff00000u;
-    if (base != 0xe0000000u)
-        return;
-    /* Its memory and I/O decoded */
-    outl(0xcf8, pci_addr(bus, dev, 0x04));
-    outw(0xcfc, (u16) (inw(0xcfc) | 0x0003));
+    u32 base;
+    if (found) {
+        bus--; /* the outer loop stepped past it */
+        is_9660 = (id == 0x96601023u);
+        /* The linear aperture at E000:0000:0000 (BAR 0): the BIOS leaves it as its sizing left it */
+        outl(0xcf8, pci_addr(bus, dev, 0x10));
+        outl(0xcfc, 0xe0000000u);
+        outl(0xcf8, pci_addr(bus, dev, 0x10));
+        base = inl(0xcfc) & 0xfff00000u;
+        if (base != 0xe0000000u)
+            return;
+        /* Its memory and I/O decoded */
+        outl(0xcf8, pci_addr(bus, dev, 0x04));
+        outw(0xcfc, (u16) (inw(0xcfc) | 0x0003));
+    } else {
+        /* A VLB 9440 (SR0Bh, read in new mode, E3h): its aperture is where CRTC 21h puts it, set below to 12 MB
+           (bits 3-0 address bits 23-20), above the 486 board's memory */
+        if (!is_vga())
+            return;
+        outb(0x3c4, 0x0b);
+        if (inb(0x3c5) != 0xe3)
+            return;
+        base = 0xc00000u;
+    }
     /* VESA 640 x 480 x 8, its frame buffer the card's linear aperture (BAR 0, CRTC 21h bit 5): the BIOS lists none */
     u16 mode = 0;
     const int count = vbe_modes();
@@ -163,7 +173,10 @@ void test_main(void) {
     outb(0x3c4, 0x0e);
     outb(0x3c5, (u8) (inb(0x3c5) | 0x80));
     outb(0x3d4, 0x21);
-    outb(0x3d5, (u8) (inb(0x3d5) | 0x20));
+    if (found)
+        outb(0x3d5, (u8) (inb(0x3d5) | 0x20));
+    else
+        outb(0x3d5, 0x20 | (u8) ((base >> 20) & 0x0f)); /* linear on, 1 MB, at base */
     fb = (volatile u8 *) base;
     /* The engine's ports on (extended registers: SR0Bh read for new mode, CRTC 36h) */
     outb(0x3c4, 0x0b);
