@@ -1101,7 +1101,9 @@ pit_skip_apply(pit_t *dev, uint32_t halves)
     for (uint8_t i = 0; i < NUM_COUNTERS; i++) {
         ctr_t *ctr = &dev->counters[i];
 
-        if (dev->skip_kind[i] == PIT_PLAIN_DEC)
+        /* No falling edge among them leaves the count as it is: a count of 65536 (0x10000) masked would be
+           0, and stop the counter (KairoX86#304) */
+        if ((dev->skip_kind[i] == PIT_PLAIN_DEC) && falls)
             ctr->count = (ctr->count - falls) & 0xffff;
         else if (dev->skip_kind[i] == PIT_PLAIN_DEC2)
             ctr->count -= 2 * falls;
