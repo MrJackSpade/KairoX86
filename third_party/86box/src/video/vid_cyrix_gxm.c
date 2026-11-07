@@ -42,6 +42,7 @@
 #include <86box/mem.h>
 #include <86box/timer.h>
 #include <86box/video.h>
+#include <86box/kairo_gpu.h> /* KairoX86#315 */
 #include <86box/plat_unused.h>
 #include <86box/cyrix_gxm.h>
 
@@ -1000,26 +1001,37 @@ gxm_display_on(gxm_video_t *dev)
            (dev->dc[DC_TIMING_CFG] & TC_TGEN);
 }
 
+/* KairoX86#315: whether the hardware cursor draws on line y (gxm_render_cursor's own test) */
+static bool
+gxm_cursor_on_line(const gxm_video_t *dev, int y)
+{
+    const int cy = dev->dc[DC_CURSOR_Y] & 0x3ff;
+    const int yo = (dev->dc[DC_CURSOR_Y] >> 11) & 0x1f;
+    const int row = y - cy;
+
+    if (!(dev->dc[DC_GENERAL_CFG] & GC_CURE))
+        return false;
+
+    /* SoftVGA sets BLNK in text modes for the VGA cursor blink: on for 8 of
+       every 16 frames, or 16 of 32 with BKRT. */
+    if ((dev->dc[DC_TIMING_CFG] & TC_BLNK) && (dev->blink & ((dev->dc[DC_TIMING_CFG] & TC_BKRT) ? 16 : 8)))
+        return false;
+
+    return (row >= 0) && ((row + yo) < 32);
+}
+
 static void
 gxm_render_cursor(gxm_video_t *dev, uint32_t *line, int y)
 {
     const int cx = dev->dc[DC_CURSOR_X] & 0x7ff;
     const int cy = dev->dc[DC_CURSOR_Y] & 0x3ff;
     const int xo = (dev->dc[DC_CURSOR_X] >> 11) & 0x1f;
-    const int yo = (dev->dc[DC_CURSOR_Y] >> 11) & 0x1f;
     int       row;
 
-    if (!(dev->dc[DC_GENERAL_CFG] & GC_CURE))
-        return;
-
-    /* SoftVGA sets BLNK in text modes for the VGA cursor blink: on for 8 of
-       every 16 frames, or 16 of 32 with BKRT. */
-    if ((dev->dc[DC_TIMING_CFG] & TC_BLNK) && (dev->blink & ((dev->dc[DC_TIMING_CFG] & TC_BKRT) ? 16 : 8)))
+    if (!gxm_cursor_on_line(dev, y))
         return;
 
     row = y - cy;
-    if ((row < 0) || ((row + yo) >= 32))
-        return;
 
     /* Two dwords a line: AND mask in the upper word, XOR mask in the lower,
        the leftmost 16 pixels the first dword, the leftmost pixel the MSB. The
@@ -1128,22 +1140,18 @@ gxm_csc(int y, int u, int v)
 
 /* The CS5530's mix of a line: the video window over the graphics, then the
    gamma RAM for whichever stream does not bypass it. */
-static void
-gxm_output_line(gxm_video_t *dev, uint32_t *line, int y)
+/* KairoX86#315: the video window on line y: its source lines, width, vertical phase and columns (gxm_output_line's);
+   returns whether it shows on the line (x0 to x1 empty when not) */
+static bool
+gxm_video_window(const gxm_video_t *dev, int y, uint32_t *src, int *width_out, int *yph_out, int *x0_out, int *x1_out)
 {
     const uint32_t cfg   = dev->vid[VID_CONFIG];
-    const uint32_t key   = dev->vid[VID_KEY];
-    const uint32_t kmask = dev->vid[VID_MASK];
-    /* The bits the display controller sends of a graphics pixel, for the key
-       compare: 6 a color from the palette, 5 or 6 in 16 BPP. */
-    const int      bpp16 = !(dev->dc[DC_OUTPUT_CFG] & OC_8BPP) && !(dev->dc[DC_TIMING_CFG] & TC_PLNR);
-    const uint32_t sig   = bpp16 ? ((dev->dc[DC_OUTPUT_CFG] & OC_16FMT) ? 0xf8f8f8 : 0xf8fcf8) : 0xfcfcfc;
-    uint32_t       src[2] = { 0, 0 };
     int            width = 0;
     int            yph   = 0;
     int            x0    = 0;
     int            x1    = 0;
 
+    src[0] = src[1] = 0;
     if ((cfg & VC_ENABLE) && (dev->dc[DC_GENERAL_CFG] & GC_VIDE)) {
         /* The window is in sync-relative positions (Table 3-73). */
         const int      hsyncend = (((dev->dc[DC_H_TIMING_3] >> 19) & 0xff) + 1) << 3;
@@ -1175,7 +1183,30 @@ gxm_output_line(gxm_video_t *dev, uint32_t *line, int y)
             x1    = (int) ((dev->vid_win[VID_X] >> 16) & 0x7ff) - hadj;
         }
     }
+    *width_out = width;
+    *yph_out   = yph;
+    *x0_out    = x0;
+    *x1_out    = x1;
+    return x1 > x0;
+}
 
+static void
+gxm_output_line(gxm_video_t *dev, uint32_t *line, int y)
+{
+    const uint32_t cfg   = dev->vid[VID_CONFIG];
+    const uint32_t key   = dev->vid[VID_KEY];
+    const uint32_t kmask = dev->vid[VID_MASK];
+    /* The bits the display controller sends of a graphics pixel, for the key
+       compare: 6 a color from the palette, 5 or 6 in 16 BPP. */
+    const int      bpp16 = !(dev->dc[DC_OUTPUT_CFG] & OC_8BPP) && !(dev->dc[DC_TIMING_CFG] & TC_PLNR);
+    const uint32_t sig   = bpp16 ? ((dev->dc[DC_OUTPUT_CFG] & OC_16FMT) ? 0xf8f8f8 : 0xf8fcf8) : 0xfcfcfc;
+    uint32_t       src[2];
+    int            width;
+    int            yph;
+    int            x0;
+    int            x1;
+
+    gxm_video_window(dev, y, src, &width, &yph, &x0, &x1);
     for (int x = 0; x < dev->hdisp; x++) {
         int      c[3];
         int      n[3];
@@ -1209,6 +1240,71 @@ gxm_output_line(gxm_video_t *dev, uint32_t *line, int y)
     }
 }
 
+/* KairoX86#315: line y (gxm_render_line's, read as it reads the frame buffer) to the GPU's scanout queue, its colours
+   through the gamma RAM as gxm_output_line takes them; returns whether the GPU draws it. Not with the display off, the
+   cursor or the video window on the line, nor the 5-5-5 16-bit format (its channels in other places than the 5-6-5
+   table, KAIRO_SCAN_16CLUT, takes). */
+static bool
+gxm_render_line_gpu(gxm_video_t *dev, int y)
+{
+    uint32_t  src[2];
+    int       width;
+    int       yph;
+    int       x0;
+    int       x1;
+
+    if (!kairo_gpu_on || !gxm_display_on(dev) || gxm_cursor_on_line(dev, y) || gxm_video_window(dev, y, src, &width, &yph, &x0, &x1) ||
+        (dev->hdisp <= 0) || (dev->hdisp > 2048))
+        return false;
+    const int      pxdb   = !!(dev->dc[DC_TIMING_CFG] & TC_PXDB);
+    const int      bpp16  = !(dev->dc[DC_OUTPUT_CFG] & OC_8BPP);
+    const int      ch4s   = !!(dev->dc[DC_GENERAL_CFG] & GC_CH4S);
+    const int      planar = !!(dev->dc[DC_TIMING_CFG] & TC_PLNR);
+    const int      blnk   = !!(dev->dc[DC_TIMING_CFG] & TC_BLNK);
+    const int      hidden = blnk && (dev->blink & ((dev->dc[DC_TIMING_CFG] & TC_BKRT) ? 32 : 16));
+    const int      pmask  = (blnk && !hidden) ? 0x7f : 0xff;
+    const int      pblink = hidden ? 0x80 : 0x00;
+    bitmap_t      *bitmap = buffer32;
+    const uint32_t out    = (uint32_t) (bitmap->line[y] - bitmap->dat);
+    const uint32_t flags  = pxdb ? KAIRO_SCAN_WIDE : 0;
+    uint32_t       addr   = dev->ma;
+    uint32_t       colours[256];
+
+    if (planar) { /* eight 4-bit pixels a dword, its bytes the planes */
+        const uint32_t cells = ((uint32_t) dev->hdisp + (pxdb ? 15 : 7)) / (pxdb ? 16 : 8);
+        for (int v = 0; v < 16; v++)
+            colours[v] = gxm_gamma(dev, dev->pal_rgb[pblink | v]);
+        uint32_t *planes = kairo_gpu_scan(bitmap, bitmap->kairo_gpu, out, KAIRO_SCAN_PLANES, (uint32_t) dev->hdisp, cells, colours, 16, 0, 0, flags);
+        for (uint32_t c = 0; c < cells; c++, addr += 4)
+            planes[c] = *(uint32_t *) gxm_gmem(dev, addr);
+    } else if (bpp16) { /* 5-6-5: each channel through its own column of the table */
+        if (dev->dc[DC_OUTPUT_CFG] & OC_16FMT)
+            return false;
+        for (int i = 0; i < 256; i++) {
+            const uint32_t r5 = (uint32_t) i >> 3;
+            const uint32_t g6 = (uint32_t) i >> 2;
+            colours[i] = gxm_gamma(dev, (((r5 << 3) | (r5 >> 2)) << 16) | (((g6 << 2) | (g6 >> 4)) << 8) | ((r5 << 3) | (r5 >> 2)));
+        }
+        const uint32_t n     = pxdb ? ((uint32_t) dev->hdisp + 1) / 2 : (uint32_t) dev->hdisp;
+        uint16_t      *words = (uint16_t *) kairo_gpu_scan(bitmap, bitmap->kairo_gpu, out, KAIRO_SCAN_16CLUT, (uint32_t) dev->hdisp, (n + 1) / 2,
+                                                           colours, 256, 0, 0, flags);
+        for (uint32_t i = 0; i < n; i++, addr += 2)
+            words[i] = *(uint16_t *) gxm_gmem(dev, addr);
+    } else { /* a byte a pixel through the palette and its blink mask; chain 4 every fourth dword */
+        const uint32_t n     = pxdb ? ((uint32_t) dev->hdisp + 1) / 2 : (uint32_t) dev->hdisp;
+        for (int v = 0; v < 256; v++)
+            colours[v] = gxm_gamma(dev, dev->pal_rgb[v]);
+        uint8_t *bytes = (uint8_t *) kairo_gpu_scan(bitmap, bitmap->kairo_gpu, out, KAIRO_SCAN_8, (uint32_t) dev->hdisp, (n + 3) / 4, colours, 256,
+                                                    (uint32_t) pmask, 0, flags);
+        for (uint32_t i = 0; i < n; i++) {
+            bytes[i] = *gxm_gmem(dev, addr);
+            addr += (ch4s && ((addr & 3) == 3)) ? 13 : 1;
+        }
+    }
+    kairo_gpu_scan_commit();
+    return true;
+}
+
 static void
 gxm_render_line(gxm_video_t *dev, int y)
 {
@@ -1230,6 +1326,10 @@ gxm_render_line(gxm_video_t *dev, int y)
     uint32_t  addr   = dev->ma;
     int       x      = 0;
 
+    if (gxm_render_line_gpu(dev, y))
+        return; /* KairoX86#315: the GPU draws the line */
+    if (kairo_gpu_on) /* the CPU draws it: what the GPU still has to draw there first */
+        kairo_gpu_scan_touch(buffer32, (uint32_t) (line - buffer32->dat), (uint32_t) buffer32->w);
     if (!gxm_display_on(dev)) {
         for (x = 0; x < dev->hdisp; x++)
             line[x] = 0x00000000;

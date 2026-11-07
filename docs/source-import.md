@@ -113,6 +113,7 @@
 - **`kairox86-gpu-ibm5140` group:** the IBM PC Convertible's LCD on the GPU (KairoX86#317): the panel's response levels worked out as ever, a level a byte through their colours. Checked by `cga86.S`.
 - **`kairox86-gpu-pc3270` group:** the IBM 3270 PC's display adapter on the GPU (KairoX86#311), 9-dot text and graphics; not while its diagnostic readback samples the pixels. Checked by `cga86.S`.
 - **`kairox86-gpu-tandy2k` group:** the Tandy 2000's video on the GPU (KairoX86#322), its 640 x 400 planes and its text. Checked by `core/test/gpu/t2k86.S` (its own hardware, no IBM BIOS calls; the colour option on).
+- **`kairox86-gpu-gxm` group:** the Cyrix MediaGX's display on the GPU (KairoX86#315), 8-bit, planar and 5-6-5 lines through the gamma RAM; cursor and video-window lines and the 5-5-5 format stay the CPU's (the CPU's pictures checked unchanged). Checked by `vga.c`, `vbe.c`, `raster.c` and `cursor.c` on the ECS P5GX-M.
 
 ## 86Box's translations
 
