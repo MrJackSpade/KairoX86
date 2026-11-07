@@ -82,12 +82,12 @@ SCRIPT = {'ibmps2_m80_type3': '3100:+0x3b,3106:-0x3b',
           'nupro592': '600:+0x3b,606:-0x3b',
           # its CMOS unset: F1 runs Setup, left without saving (Esc, Y, Enter)
           'asus386': '200:+0x3b,206:-0x3b,400:+0x01,406:-0x01,500:+0x15,506:-0x15,520:+0x1c,526:-0x1c'}
-# Boards' own graphics chips (gfxcard = internal), each named as its chip's device is, on its board
 # Boards whose drive is not the 8086 machines' 360 KB one: the IBM 5550's DSQD (720 KB 5.25") drives. Its IPL takes no PC
 # boot sector yet (KairoX86#324), so its tests do not reach their end
 BOARD_FDD = {'ibm5550': '525_2qd'}
 # Boards' own video settings: the Tandy 2000 with its colour graphics option, so its graphics are tested too
 BOARD_VIDEO = {'tandy2000': '\n[Tandy 2000 (Video)]\ngraphics = 2\n'}
+# Boards' own graphics chips (gfxcard = internal), each named as its chip's device is, on its board
 ONBOARD = {'chips_69000_onboard': 'nupro592', **{f'{m}_video': m for m in BOARDS_8086}, 'p5gxm_video': 'p5gxm'}
 # The add-on cards: each one's [Video] line, its own section and the card beside it, an S3 Trio64 (the Voodoos drawn
 # by the C rasteriser on the software side, KairoX86#289; the PowerVR PCX2, KairoX86#269), or the IBM VGA beside the
