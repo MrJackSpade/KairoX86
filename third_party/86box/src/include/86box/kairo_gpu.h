@@ -53,6 +53,27 @@ void               *kairo_gpu_alloc(size_t size);
 void                kairo_gpu_free(void *data);
 kairo_gpu_buffer_t *kairo_gpu_buffer_of(const void *data);
 
+/* KairoX86#239: for a card's own Vulkan backend (the Rage 128's), the core's Vulkan, which it works with instead of its
+   own: vkGetInstanceProcAddr, the instance, physical device, device, the queue's family and the queue (as the
+   handles, VkInstance and so on), and what the device has turned on (64-bit integers, 16-bit storage access,
+   VK_EXT_external_memory_host). Every submit to the queue holds kairo_gpu_queue_lock. kairo_gpu_buffer_handle gives
+   a buffer's VkBuffer (as a 64-bit handle). */
+typedef struct kairo_gpu_vulkan {
+    void    *get_instance_proc_addr;
+    void    *instance;
+    void    *physical;
+    void    *device;
+    uint32_t queue_family;
+    void    *queue;
+    int      int64;
+    int      storage16;
+    int      host_memory;
+} kairo_gpu_vulkan_t;
+const kairo_gpu_vulkan_t *kairo_gpu_vulkan(void);
+void                      kairo_gpu_queue_lock(void);
+void                      kairo_gpu_queue_unlock(void);
+uint64_t                  kairo_gpu_buffer_handle(const kairo_gpu_buffer_t *buffer);
+
 /* The 4 KB pages of card memory a recorded GPU batch draws on (core/kairo/gpu_pages.c): marked as work is
    recorded, checked where the processor touches card memory, cleared once the batch is drawn. hit and
    any are read without the batch's lock: a page marked as the processor touches it races just as the

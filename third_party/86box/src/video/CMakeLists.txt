@@ -261,10 +261,10 @@ if(NOT MSVC)
 endif()
 
 # ATI Rage 128: optional GPU raster backend (vid_ati_rage128_gpu.c) needs
-# Vulkan HEADERS only -- the library is dlopen'd at runtime (after the
-# MoltenVK/loader environment is staged), so the binary carries no Vulkan
-# link and runs unchanged on hosts without it. Without headers the
-# backend compiles to stubs and the CPU renderer is untouched.
+# Vulkan HEADERS only -- KairoX86#239: it works on the core's Vulkan
+# (kairo_gpu_vulkan), which loads the library, so the binary carries no
+# Vulkan link. Without headers the backend compiles to stubs and the CPU
+# renderer is untouched.
 find_package(Vulkan QUIET)
 # Gate on the header, not on Vulkan_FOUND: find_package() also demands the
 # import library, which this backend never links. A static MinGW build narrows
@@ -276,7 +276,7 @@ find_path(R128_VULKAN_INCLUDE_DIR vulkan/vulkan.h HINTS ${Vulkan_INCLUDE_DIR})
 if(R128_VULKAN_INCLUDE_DIR)
     target_compile_definitions(vid PRIVATE R128_GPU_HAVE_VULKAN)
     target_include_directories(vid PRIVATE ${R128_VULKAN_INCLUDE_DIR})
-    message(STATUS "Rage 128 GPU raster backend: Vulkan headers found (${R128_VULKAN_INCLUDE_DIR}), enabled (runtime dlopen)")
+    message(STATUS "Rage 128 GPU raster backend: Vulkan headers found (${R128_VULKAN_INCLUDE_DIR}), enabled (the core's Vulkan)")
 else()
     message(STATUS "Rage 128 GPU raster backend: Vulkan headers not found, stubbed out")
 endif()

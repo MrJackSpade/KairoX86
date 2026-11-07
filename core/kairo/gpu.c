@@ -41,7 +41,9 @@ bool kairo_gpu_on;
     F(vkGetPhysicalDeviceQueueFamilyProperties)   \
     F(vkGetPhysicalDeviceMemoryProperties)        \
     F(vkCreateDevice)                             \
-    F(vkGetDeviceProcAddr)
+    F(vkGetDeviceProcAddr)                        \
+    F(vkGetPhysicalDeviceFeatures2)               \
+    F(vkEnumerateDeviceExtensionProperties)
 
 #define KAIRO_VK_DEVICE_FUNCTIONS(F)       \
     F(vkDestroyDevice)                     \
@@ -100,7 +102,30 @@ static struct {
     VkCommandBuffer  command;
     VkFence          done;
     char             name[VK_MAX_PHYSICAL_DEVICE_NAME_SIZE];
+    kairo_gpu_vulkan_t vulkan; /* KairoX86#239: the handles a card's own Vulkan backend works with */
 } gpu;
+
+/* KairoX86#239: every submit to the queue, the core's and a card backend's, holds this (Vulkan's queue is
+   externally synchronised) */
+static pthread_mutex_t queue_lock = PTHREAD_MUTEX_INITIALIZER;
+
+const kairo_gpu_vulkan_t *
+kairo_gpu_vulkan(void)
+{
+    return &gpu.vulkan;
+}
+
+void
+kairo_gpu_queue_lock(void)
+{
+    pthread_mutex_lock(&queue_lock);
+}
+
+void
+kairo_gpu_queue_unlock(void)
+{
+    pthread_mutex_unlock(&queue_lock);
+}
 
 /* One kernel runs at a time: they share the command buffer and the fence (callers are the card's
    threads: the CPU's, a renderer's, the blit's). */
@@ -240,12 +265,37 @@ kairo_gpu_open(void)
     if (gpu.memory_type == UINT32_MAX)
         fatal("The PC stopped: its GPU has no memory the processor can share and cache\n");
 
+    /* KairoX86#239: what a card's own Vulkan backend needs on this device (the Rage 128's: 64-bit integers, 16-bit
+       storage access, host memory imported), turned on where the GPU has it; the card asks for it at its start */
+    VkPhysicalDevice16BitStorageFeatures storage16 = { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES };
+    VkPhysicalDeviceFeatures2            has       = { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, .pNext = &storage16 };
+    vkGetPhysicalDeviceFeatures2(gpu.physical, &has);
+    gpu.vulkan.int64     = has.features.shaderInt64;
+    gpu.vulkan.storage16 = storage16.storageBuffer16BitAccess;
+    uint32_t extensions = 0;
+    vk_check(vkEnumerateDeviceExtensionProperties(gpu.physical, NULL, &extensions, NULL), "vkEnumerateDeviceExtensionProperties");
+    VkExtensionProperties *extension = calloc(extensions ? extensions : 1, sizeof(VkExtensionProperties));
+    if (extension == NULL)
+        fatal("The PC stopped: no memory for the GPU's extensions\n");
+    vk_check(vkEnumerateDeviceExtensionProperties(gpu.physical, NULL, &extensions, extension), "vkEnumerateDeviceExtensionProperties");
+    for (uint32_t i = 0; i < extensions; i++)
+        if (!strcmp(extension[i].extensionName, VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME))
+            gpu.vulkan.host_memory = 1;
+    free(extension);
+    VkPhysicalDevice16BitStorageFeatures storage16_on = { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES,
+                                                          .storageBuffer16BitAccess = storage16.storageBuffer16BitAccess };
+    VkPhysicalDeviceFeatures2            on           = { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, .pNext = &storage16_on };
+    on.features.shaderInt64 = has.features.shaderInt64;
+    const char *const host_memory = VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME;
+
     const float                   priority   = 1.0f;
     const VkDeviceQueueCreateInfo queue_info = { .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
                                                  .queueFamilyIndex = gpu.queue_family, .queueCount = 1,
                                                  .pQueuePriorities = &priority };
-    const VkDeviceCreateInfo device_info = { .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO, .queueCreateInfoCount = 1,
-                                             .pQueueCreateInfos = &queue_info };
+    const VkDeviceCreateInfo device_info = { .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO, .pNext = &on, .queueCreateInfoCount = 1,
+                                             .pQueueCreateInfos = &queue_info,
+                                             .enabledExtensionCount = gpu.vulkan.host_memory ? 1u : 0u,
+                                             .ppEnabledExtensionNames = gpu.vulkan.host_memory ? &host_memory : NULL };
     vk_check(vkCreateDevice(gpu.physical, &device_info, NULL, &gpu.device), "vkCreateDevice");
 #define KAIRO_VK_LOAD_DEVICE(name)                                                      \
     name = (PFN_##name) vkGetDeviceProcAddr(gpu.device, #name);                         \
@@ -253,6 +303,12 @@ kairo_gpu_open(void)
         fatal("The PC stopped: this device's Vulkan has no %s\n", #name);
     KAIRO_VK_DEVICE_FUNCTIONS(KAIRO_VK_LOAD_DEVICE)
     vkGetDeviceQueue(gpu.device, gpu.queue_family, 0, &gpu.queue);
+    gpu.vulkan.get_instance_proc_addr = (void *) vkGetInstanceProcAddr;
+    gpu.vulkan.instance               = gpu.instance;
+    gpu.vulkan.physical               = gpu.physical;
+    gpu.vulkan.device                 = gpu.device;
+    gpu.vulkan.queue_family           = gpu.queue_family;
+    gpu.vulkan.queue                  = gpu.queue;
 
     const VkCommandPoolCreateInfo pool_info = { .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
                                                 .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
@@ -301,7 +357,9 @@ kairo_gpu_buffer(size_t size)
     if ((buffer == NULL) || (impl == NULL))
         fatal("The PC stopped: no memory for a GPU buffer\n");
     const VkBufferCreateInfo info = { .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = size,
-                                      .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                      /* copies too: a card's own backend (KairoX86#239) mirrors from and to it */
+                                      .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT
+                                               | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                       .sharingMode = VK_SHARING_MODE_EXCLUSIVE };
     vk_check(vkCreateBuffer(gpu.device, &info, NULL, &impl->buffer), "vkCreateBuffer");
     VkMemoryRequirements needs;
@@ -317,6 +375,12 @@ kairo_gpu_buffer(size_t size)
     buffer->size = size;
     buffer->impl = impl;
     return buffer;
+}
+
+uint64_t
+kairo_gpu_buffer_handle(const kairo_gpu_buffer_t *buffer)
+{
+    return (uint64_t) ((const buffer_impl_t *) buffer->impl)->buffer;
 }
 
 void
@@ -484,7 +548,10 @@ kairo_gpu_run(kairo_gpu_kernel_t *kernel, kairo_gpu_buffer_t *const *buffers, co
     const VkSubmitInfo submit = { .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO, .commandBufferCount = 1,
                                   .pCommandBuffers = &gpu.command };
     vk_check(vkResetFences(gpu.device, 1, &gpu.done), kernel->name);
-    vk_check(vkQueueSubmit(gpu.queue, 1, &submit, gpu.done), kernel->name);
+    kairo_gpu_queue_lock();
+    const VkResult submitted = vkQueueSubmit(gpu.queue, 1, &submit, gpu.done);
+    kairo_gpu_queue_unlock();
+    vk_check(submitted, kernel->name);
     vk_check(vkWaitForFences(gpu.device, 1, &gpu.done, VK_TRUE, UINT64_MAX), kernel->name);
     pthread_mutex_unlock(&run_lock);
 }

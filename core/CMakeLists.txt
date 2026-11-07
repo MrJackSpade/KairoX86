@@ -121,6 +121,9 @@ if(K9X_DIAG)
     set(CMAKE_C_VISIBILITY_PRESET default)
     set(CMAKE_CXX_VISIBILITY_PRESET default)
 endif()
+# KairoX86#239: the Rage 128's own GPU backend (vid_ati_rage128_gpu.c), on the core's Vulkan, built against the
+# pinned headers (its CMake looks for vulkan/vulkan.h through this variable)
+set(R128_VULKAN_INCLUDE_DIR "${KAIROX86_THIRD_PARTY}/vulkan-headers/include" CACHE PATH "" FORCE)
 add_subdirectory("${KAIROX86_THIRD_PARTY}/86box" 86box)
 
 set_target_properties(86Box PROPERTIES OUTPUT_NAME kairox86_86box C_VISIBILITY_PRESET hidden CXX_VISIBILITY_PRESET hidden)

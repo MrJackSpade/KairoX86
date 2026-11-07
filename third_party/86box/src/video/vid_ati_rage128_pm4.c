@@ -918,8 +918,12 @@ rage128_pm4_reg_in_fetch_block(uint32_t reg, uint32_t nregs)
 int (*rage128_harness_drain_hook)(rage128_t *dev);
 _Atomic(void (*)(rage128_t *dev)) rage128_harness_idle_hook;
 
-void
-rage128_pm4_drain_wait(rage128_t *dev)
+/* KairoX86#303: reset is 1 for the waits before a reset, which drop a packet the executor can never finish (its abort
+   below), and 0 for the GPU backend's waits, which are the emulator's bookkeeping: they leave such a packet waiting
+   for the guest's next dwords, as the software path does (in PIO mode the guest writes a packet a pair at a time, and
+   cannot write the rest while its thread is held here). */
+static void
+rage128_pm4_drain(rage128_t *dev, int reset)
 {
     if (!dev->cce_thread || rage128_on_cce_thread)
         return;
@@ -1002,12 +1006,18 @@ rage128_pm4_drain_wait(rage128_t *dev)
            abort would cut short. It is loaded last: the pop clears it
            before the read index moves, so a set flag seen after an empty
            FIFO cannot belong to such a walk. */
-        if (iter >= 8
+        if ((iter >= 8 || !reset)
             && atomic_load(&dev->cce_executing)
             && atomic_load(&dev->cce_fifo_rd) == atomic_load(&dev->cce_fifo_wr)
             && (!rage128_pm4_ring_bm(dev) /* PIO mode: no ring to wait on */
                 || dev->pm4_rptr == (dev->pm4_wptr & rage128_pm4_ring_mask(dev)))
             && atomic_load(&dev->cce_starved)) {
+            if (!reset) {
+                /* KairoX86#303: run out until the guest writes more. The executor drew its deferred batch before it
+                   started waiting (rage128_cce_get), so there is nothing to flush here. */
+                atomic_store(&dev->cce_drain_req, 0);
+                return;
+            }
             atomic_store(&dev->cce_abort, 1);
             thread_set_event(dev->cce_wake_event);
             while (atomic_load(&dev->cce_executing))
@@ -1021,6 +1031,40 @@ rage128_pm4_drain_wait(rage128_t *dev)
     /* Engine idle: draw any deferred 3D batch. */
     rage128_raster_flush(dev);
     atomic_store(&dev->cce_drain_req, 0);
+}
+
+void
+rage128_pm4_drain_wait(rage128_t *dev)
+{
+    rage128_pm4_drain(dev, 1);
+}
+
+/* KairoX86#303: the GPU backend's wait (see rage128_pm4_drain) */
+void
+rage128_pm4_quiesce(rage128_t *dev)
+{
+    rage128_pm4_drain(dev, 0);
+}
+
+/* KairoX86#302: before the display draws a line (svga->render_sync), the executor runs everything it has been given:
+   its FIFO is empty and it is idle (its deferred 3D batch drawn), or waiting for the rest of a packet the guest has
+   not written yet (the batch drawn before it waits), or hung. Unlike rage128_pm4_drain_wait, it fetches nothing from
+   the ring and never aborts a packet: a line can come between two of a packet's dwords. So the picture follows the
+   guest's order of work, not the host's thread. CPU thread. */
+void
+rage128_pm4_settle(rage128_t *dev)
+{
+    if (!dev->cce_thread || rage128_on_cce_thread)
+        return;
+    while (!is_quit) { /* KairoX86#301: or the machine is over (an engine thread's fatal error) */
+        thread_reset_event(dev->cce_idle_event);
+        if (atomic_load(&dev->cce_hung)
+            || ((atomic_load(&dev->cce_fifo_rd) == atomic_load(&dev->cce_fifo_wr))
+                && (!atomic_load(&dev->cce_executing) || atomic_load(&dev->cce_starved))))
+            return;
+        thread_set_event(dev->cce_wake_event);
+        thread_wait_event(dev->cce_idle_event, 1);
+    }
 }
 
 /* The display moved something a WAIT_UNTIL stall waits on: vsync latched

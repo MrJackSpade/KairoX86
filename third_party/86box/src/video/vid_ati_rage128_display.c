@@ -1902,7 +1902,9 @@ rage128_vsync_callback(svga_t *svga)
                            << (svga->interlace ? 1 : 0)),
                     dev->scanout_tile_pitch);
             }
-            if (snap) {
+            if (rage128_gpu_scan_always(dev))
+                dev->scanout_idle_frames = 0; /* KairoX86#239 */
+            else if (snap) {
                 haz                      = 0;
                 dev->scanout_idle_frames = 0;
             } else if (rage128_gpu_scan_hazard(dev, hbase, hbytes))

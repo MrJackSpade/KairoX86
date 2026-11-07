@@ -2049,6 +2049,10 @@ extern void rage128_pm4_reset(rage128_t *dev);
 extern void rage128_pm4_thread_init(rage128_t *dev);
 extern void rage128_pm4_thread_close(rage128_t *dev);
 extern void rage128_pm4_drain_wait(rage128_t *dev);
+/* KairoX86#303: the GPU backend's wait for the executor, which leaves a packet the guest is still writing waiting */
+extern void rage128_pm4_quiesce(rage128_t *dev);
+/* KairoX86#302: the display's wait for the executor's work (svga->render_sync) */
+extern void rage128_pm4_settle(rage128_t *dev);
 extern int  rage128_pm4_bus_master_ok(rage128_t *dev);
 extern void rage128_pm4_kick(rage128_t *dev);
 extern void rage128_pm4_gui_reset(rage128_t *dev);
@@ -2549,6 +2553,8 @@ extern int  rage128_gpu_snap_pick(rage128_t *dev, uint32_t want_src,
    writing inside the frame's scan range right now? */
 extern int rage128_gpu_scan_hazard(rage128_t *dev, uint32_t lo,
                                    uint32_t len);
+/* KairoX86#239: the scanout waits for GPU work on every line, frame check or not (synchronous) */
+extern int rage128_gpu_scan_always(rage128_t *dev);
 /* GUI_STAT GUI_ACTIVE: a segment is pending (it is sent here) or in
    flight on the GPU. CPU thread, CCE idle. */
 extern int rage128_gpu_engine_busy(rage128_t *dev);

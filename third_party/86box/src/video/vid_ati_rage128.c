@@ -2460,6 +2460,13 @@ rage128_reset(void *priv)
     rage128_vga_decode_update(dev);
 }
 
+/* KairoX86#302: a line is drawn once the CCE has run the work it has been given */
+static void
+rage128_render_sync(svga_t *svga)
+{
+    rage128_pm4_settle((rage128_t *) svga->priv);
+}
+
 /* Create one chip. With cfg NULL it is a single-chip board whose straps
    come from the device flags and instance number; a multi-chip board
    passes each chip's straps in cfg (vid_ati_rage128_maxx.c). */
@@ -2518,6 +2525,7 @@ rage128_chip_init(const device_t *info, const rage128_chip_cfg_t *cfg)
     svga->vsync_callback = rage128_vsync_callback;
     svga->vblank_start   = rage128_vblank_start;
     svga->conv_16to32    = rage128_conv_16to32; /* 15/16 bpp scanout through the gamma table */
+    svga->render_sync    = rage128_render_sync; /* KairoX86#302 */
     timer_add(&dev->vline_timer, rage128_vline_timer, dev, 0);
     svga->hwcursor.cur_xsize = 64;
     svga->hwcursor.cur_ysize = 64;

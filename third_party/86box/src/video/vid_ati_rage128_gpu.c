@@ -8,13 +8,13 @@
  *
  *          ATI Rage 128 Pro -- optional GPU raster backend.
  *
- *          The CPU interpreter and span JIT are the default renderer and
- *          the runtime fallback. This backend is off by default. The
- *          "gpu_raster" device config option turns it on per VM, and the
- *          R128_GPU environment variable overrides that. It turns itself
- *          off, and logs why, whenever the host Vulkan stack cannot
- *          support it. Every hook in the device checks dev->gpu for NULL
- *          first, so with the backend off only the CPU renderer runs.
+ *          KairoX86#239: the machine's Hardware acceleration setting turns
+ *          it on, on the core's Vulkan (kairo_gpu_vulkan); with it off the
+ *          CPU interpreter and span JIT render. A backend that cannot start
+ *          stops the machine with the reason. It runs synchronously: the
+ *          display shows the memory as drawn. Every hook in the device
+ *          checks dev->gpu for NULL first, so with the backend off only the
+ *          CPU renderer runs.
  *
  *          Segments: triangle setup still runs on the CPU, inside
  *          rage128_3d_tri. For a draw state the kernels support, the
@@ -82,23 +82,14 @@
 #include <86box/vid_svga.h>
 #include <86box/ui.h>
 #include <86box/vid_ati_rage128.h>
+#include <86box/kairo_gpu.h> /* KairoX86#239 */
 
-/* Backend selection. The per-VM config option is the user-facing
-   off / on switch. Verify mode is reachable only through R128_GPU,
-   which wins whenever it is set; any nonzero config value, 2 included,
-   means on. Config reads need the device context, so callers must stay
-   inside device init. */
+/* Backend selection: KairoX86#239, the machine's Hardware acceleration setting. */
 int
 rage128_gpu_mode(void)
 {
-    const char *env = getenv("R128_GPU");
-
-    if (env && env[0]) {
-        if (!strcmp(env, "0"))
-            return R128_GPU_OFF;
-        return !strcmp(env, "verify") ? R128_GPU_VERIFY : R128_GPU_ON;
-    }
-    return device_get_config_int("gpu_raster") ? R128_GPU_ON : R128_GPU_OFF;
+    /* KairoX86#239: the machine's Hardware acceleration setting; the backend works on the core's Vulkan */
+    return kairo_gpu_on ? R128_GPU_ON : R128_GPU_OFF;
 }
 
 #ifdef R128_GPU_HAVE_VULKAN
@@ -272,10 +263,8 @@ gpu_tel_close(void)
 
 /* Host primitives 86Box has no wrapper for. The Windows arm exists
    because MSYS2/UCRT, the only supported Windows toolchain, has none of
-   dlopen, setenv, sysconf or posix_memalign. */
+   sysconf or posix_memalign. */
 #    ifdef _WIN32
-#        define r128_dl_open(p)      ((void *) LoadLibraryA(p))
-#        define r128_dl_sym(h, n)    ((void *) (uintptr_t) GetProcAddress((HMODULE) (h), (n)))
 #        define r128_aligned_free(p) _aligned_free(p)
 
 static int
@@ -294,8 +283,6 @@ r128_cpu_count(void)
     return (long) si.dwNumberOfProcessors;
 }
 #    else
-#        define r128_dl_open(p)                    dlopen((p), RTLD_NOW | RTLD_LOCAL)
-#        define r128_dl_sym(h, n)                  dlsym((h), (n))
 #        define r128_aligned_free(p)               free(p)
 #        define r128_aligned_alloc(out, align, sz) posix_memalign((out), (align), (sz))
 
@@ -306,39 +293,7 @@ r128_cpu_count(void)
 }
 #    endif
 
-/* setenv(3) semantics, including the overwrite flag _putenv_s lacks. */
-static void
-r128_setenv(const char *key, const char *val, int overwrite)
-{
-    if (!overwrite && getenv(key))
-        return;
-#    ifdef _WIN32
-    _putenv_s(key, val);
-#    else
-    setenv(key, val, 1);
-#    endif
-}
-
-static void
-r128_unsetenv(const char *key)
-{
-#    ifdef _WIN32
-    _putenv_s(key, "");
-#    else
-    unsetenv(key);
-#    endif
-}
-
-/* The Vulkan library is opened at init with dlopen, after the MoltenVK
-   settings and the VK_ICD_FILENAMES environment are staged. A linked
-   loader initializes at process start and reads its driver-search
-   environment before the device can set it; with a linked loader,
-   instance creation failed. Opening it late also keeps 86Box free of a
-   hard Vulkan link: a host without Vulkan just gets the disabled log
-   line. */
-#    define R128_VK_GLOBAL_FNS(X) \
-        X(vkCreateInstance)
-
+/* KairoX86#239: the entry points, resolved through the core's vkGetInstanceProcAddr against its instance */
 #    define R128_VK_INSTANCE_FNS(X)                 \
         X(vkEnumeratePhysicalDevices)               \
         X(vkGetPhysicalDeviceProperties2)           \
@@ -399,87 +354,11 @@ r128_unsetenv(const char *key)
         X(vkDestroyInstance)
 
 static struct {
-    void                     *lib;
     PFN_vkGetInstanceProcAddr gipa;
 #    define R128_VK_DECL(name) PFN_##name name;
-    R128_VK_GLOBAL_FNS(R128_VK_DECL)
     R128_VK_INSTANCE_FNS(R128_VK_DECL)
 #    undef R128_VK_DECL
 } r128_vk;
-
-/* Load the first candidate that exists and resolve the pre-instance
-   entry points. 1 = ready for vkCreateInstance. */
-static int
-r128_vk_load_from(const char *const *cands, size_t n)
-{
-    if (r128_vk.lib)
-        return 1;
-    for (size_t i = 0; i < n; i++)
-        if ((r128_vk.lib = r128_dl_open(cands[i]))) {
-            /* name the winning candidate: fallback here is silent and
-               candidates can differ by whole library versions */
-            gpu_log("RAGE128 GPU: loaded Vulkan library %s\n", cands[i]);
-            break;
-        }
-    if (!r128_vk.lib)
-        return 0;
-    r128_vk.gipa = (PFN_vkGetInstanceProcAddr) r128_dl_sym(r128_vk.lib,
-                                                           "vkGetInstanceProcAddr");
-    if (!r128_vk.gipa)
-        return 0;
-#    define R128_VK_LOAD_G(name)                               \
-        r128_vk.name = (PFN_##name) r128_vk.gipa(NULL, #name); \
-        if (!r128_vk.name)                                     \
-            return 0;
-    R128_VK_GLOBAL_FNS(R128_VK_LOAD_G)
-#    undef R128_VK_LOAD_G
-    return 1;
-}
-
-/* macOS only: MoltenVK opened directly as the driver, with no loader,
-   so no ICD manifest or VK_ICD_FILENAMES staging is involved. The
-   bundled copy comes first, which makes the packaged app
-   self-contained; the rest cover a development tree running against a
-   system or Homebrew install. Every other platform has an installable
-   loader, so there is no driver to open directly. */
-static int
-r128_vk_load_direct(void)
-{
-#    ifdef __APPLE__
-    static const char *const cands[] = {
-        "@executable_path/../Frameworks/libMoltenVK.dylib",
-        "libMoltenVK.dylib",
-        "/opt/homebrew/lib/libMoltenVK.dylib",
-        "/usr/local/lib/libMoltenVK.dylib",
-    };
-
-    return r128_vk_load_from(cands, sizeof(cands) / sizeof(cands[0]));
-#    else
-    return 0;
-#    endif
-}
-
-/* The installable Vulkan loader, which does need a driver manifest to
-   find an ICD. The only path on Windows and Linux; the fallback on
-   macOS. */
-static int
-r128_vk_load_loader(void)
-{
-    static const char *const cands[] = {
-#    if defined(_WIN32)
-        "vulkan-1.dll",
-#    elif defined(__APPLE__)
-        "libvulkan.1.dylib",
-        "/opt/homebrew/lib/libvulkan.1.dylib",
-        "/usr/local/lib/libvulkan.1.dylib",
-#    else
-        "libvulkan.so.1",
-        "libvulkan.so",
-#    endif
-    };
-
-    return r128_vk_load_from(cands, sizeof(cands) / sizeof(cands[0]));
-}
 
 /* Resolve everything else against the created instance. */
 static int
@@ -495,7 +374,6 @@ r128_vk_load_instance(VkInstance inst)
 }
 
 /* every vk call in this file goes through the table */
-#    define vkCreateInstance                         r128_vk.vkCreateInstance
 #    define vkEnumeratePhysicalDevices               r128_vk.vkEnumeratePhysicalDevices
 #    define vkGetPhysicalDeviceProperties2           r128_vk.vkGetPhysicalDeviceProperties2
 #    define vkGetPhysicalDeviceFeatures2             r128_vk.vkGetPhysicalDeviceFeatures2
@@ -5014,7 +4892,10 @@ gpu_dispatch(r128_gpu_t *g, gpu_slot_t *sl, uint32_t vram_mask,
     vkEndCommandBuffer(sl->cb);
     si.commandBufferCount = 1;
     si.pCommandBuffers    = &sl->cb;
-    if (vkQueueSubmit(g->queue, 1, &si, sl->fence) != VK_SUCCESS)
+    kairo_gpu_queue_lock(); /* KairoX86#239 */
+    const VkResult submitted = vkQueueSubmit(g->queue, 1, &si, sl->fence);
+    kairo_gpu_queue_unlock();
+    if (submitted != VK_SUCCESS)
         fatal("RAGE128 GPU: queue submit failed\n");
     pthread_mutex_unlock(&g->queue_mtx);
     if (g->prof)
@@ -6923,7 +6804,9 @@ rage128_gpu_present_copy(rage128_t *dev, uint32_t src, uint32_t len)
         si.commandBufferCount = 1;
         si.pCommandBuffers    = &sn->cb;
         pthread_mutex_lock(&g->queue_mtx);
+        kairo_gpu_queue_lock(); /* KairoX86#239 */
         vr = vkQueueSubmit(g->queue, 1, &si, sn->fence);
+        kairo_gpu_queue_unlock();
         pthread_mutex_unlock(&g->queue_mtx);
         if (vr != VK_SUCCESS)
             fatal("RAGE128 GPU: present copy submit failed (%d)\n", vr);
@@ -7175,7 +7058,7 @@ rage128_gpu_cpu_barrier(rage128_t *dev, uint32_t addr, uint32_t len, int writes)
         uint64_t t0 = prof_now();
         uint64_t t1 = t0;
 
-        rage128_pm4_drain_wait(dev);
+        rage128_pm4_quiesce(dev); /* KairoX86#303 */
         if (g->prof) {
             t1 = prof_now();
             g->pr_cpu_quiesce_ns += t1 - t0;
@@ -7342,7 +7225,7 @@ rage128_gpu_scan_barrier(rage128_t *dev, uint32_t addr, uint32_t len)
            path, since the quiesce can stall the guest. */
         uint64_t t0 = prof_now();
 
-        rage128_pm4_drain_wait(dev);
+        rage128_pm4_quiesce(dev); /* KairoX86#303 */
         gpu_reap(g);
         if (gpu_pending_hit(g, addr, b, 0))
             gpu_flush_cause(dev, GF_SCAN);
@@ -7406,6 +7289,16 @@ rage128_gpu_scan_hazard(rage128_t *dev, uint32_t lo, uint32_t len)
     return gpu_range_hit(g, lo, (uint32_t) hi, 0);
 }
 
+/* KairoX86#239: synchronous, the display shows the memory as drawn, as the CPU path's does: a line scanned after
+   a draw into it waits for that draw, whenever in the frame the draw came. */
+int
+rage128_gpu_scan_always(rage128_t *dev)
+{
+    const r128_gpu_t *g = (const r128_gpu_t *) dev->gpu;
+
+    return g && (!g->async || g->verify);
+}
+
 /* GUI_STAT.GUI_ACTIVE (RRG: GUI_STAT, p. 3-244 / PDF 262) with the GPU
    backend on: the engine reads as busy while a segment is pending or a
    submitted slot's fence has not signaled. A pending segment is
@@ -7424,7 +7317,7 @@ rage128_gpu_engine_busy(rage128_t *dev)
     if (!g)
         return 0;
     if (atomic_load_explicit(&g->pending, memory_order_acquire)) {
-        rage128_pm4_drain_wait(dev);
+        rage128_pm4_quiesce(dev); /* KairoX86#303 */
         gpu_flush_cause(dev, GF_IDLE);
         g->idle_busy  = 1;
         g->idle_polls = 0;
@@ -8589,7 +8482,7 @@ rage128_gpu_present(rage128_t *dev)
     if (!rage128_on_cce_thread) {
         if (g->async && !g->verify)
             return;
-        rage128_pm4_drain_wait(dev);
+        rage128_pm4_quiesce(dev); /* KairoX86#303 */
     }
     gpu_flush_cause(dev, GF_PRESENT);
 }
@@ -8804,7 +8697,9 @@ rage128_gpu_ov0_compose(rage128_t *dev, const r128_ov0_frame_t *f)
         si.commandBufferCount = 1;
         si.pCommandBuffers    = &g->ov0_cb;
         pthread_mutex_lock(&g->queue_mtx);
+        kairo_gpu_queue_lock(); /* KairoX86#239 */
         vr = vkQueueSubmit(g->queue, 1, &si, g->ov0_fence);
+        kairo_gpu_queue_unlock();
         pthread_mutex_unlock(&g->queue_mtx);
         if (vr != VK_SUCCESS)
             fatal("RAGE128 GPU: OV0 submit failed (%d)\n", vr);
@@ -9251,81 +9146,12 @@ rage128_gpu_czstage_grow(rage128_t *dev, struct rage128_span_stage *st,
     return 1;
 }
 
-/* Open the Vulkan entry points: MoltenVK directly when it is bundled,
-   else the host loader. 0 = no library, nothing to clean up. */
+/* Open the Vulkan entry points (KairoX86#239: the core's). */
 static int
 gpu_vk_open(void)
 {
-    int direct = 0;
-
-    /* MoltenVK reads this when its dylib loads, and both the direct open
-       and the loader load it after this point. Fast math must be off for
-       the kernels to match the interpreter bit for bit on Metal. Without
-       MoltenVK the variable has no effect, and the NoContraction
-       decorations in the SPIR-V are what keep the driver from fusing a
-       multiply and an add. */
-    r128_setenv("MVK_CONFIG_FAST_MATH_ENABLED", "0", 0);
-
-    /* Open MoltenVK directly as the driver when possible: that needs no
-       loader and no driver manifest, so the VK_ICD_FILENAMES handling
-       below is skipped. With the bundled dylib this is the normal path
-       on macOS. R128_GPU_LOADER=1 forces the Vulkan loader instead, to
-       diagnose or work around a problem with the direct open. */
-    {
-        const char *le = getenv("R128_GPU_LOADER");
-
-        if (le && le[0] && strcmp(le, "0") != 0)
-            direct = -1;
-    }
-    if (direct == 0 && r128_vk_load_direct()) {
-        direct = 1;
-    } else {
-        /* An inherited VK_ICD_FILENAMES or VK_DRIVER_FILES that points
-           at a deleted SDK replaces the loader's driver search, which
-           then finds no driver at all. So check each: keep a value that
-           names a readable file, replace a dead one with the Homebrew
-           MoltenVK manifest, and clear it when neither exists so the
-           loader's default search runs. */
-        static const char *const envs[2] = { "VK_ICD_FILENAMES", "VK_DRIVER_FILES" };
-#    ifdef __APPLE__
-        /* the Homebrew MoltenVK manifest is the one replacement known to
-           work; no other platform has a manifest at a path we can name */
-        const char *icd = "/opt/homebrew/etc/vulkan/icd.d/MoltenVK_icd.json";
-#    else
-        const char *icd = NULL;
-#    endif
-        FILE *f;
-        int   icd_ok = icd && (f = fopen(icd, "r")) != NULL;
-
-        if (icd_ok)
-            fclose(f);
-        for (int i = 0; i < 2; i++) {
-            const char *cur = getenv(envs[i]);
-
-            if (cur && (f = fopen(cur, "r"))) {
-                fclose(f);
-                continue; /* inherited value is alive */
-            }
-            if (icd_ok) {
-                if (cur)
-                    gpu_log("RAGE128 GPU: %s pointed at a missing file, overriding with %s\n",
-                            envs[i], icd);
-                r128_setenv(envs[i], icd, 1);
-            } else if (cur) {
-                gpu_log("RAGE128 GPU: clearing dead %s (%s)\n", envs[i], cur);
-                r128_unsetenv(envs[i]);
-            }
-        }
-
-        if (!r128_vk_load_loader()) {
-            gpu_err("RAGE128 GPU: disabled: no Vulkan library found "
-                    "(CPU renderer unaffected)\n");
-            return 0;
-        }
-    }
-    gpu_log("RAGE128 GPU: %s\n",
-            direct == 1 ? "MoltenVK opened directly (no loader, no ICD manifest)"
-                        : "using the host Vulkan loader");
+    /* KairoX86#239: the core's Vulkan library, opened at its start */
+    r128_vk.gipa = (PFN_vkGetInstanceProcAddr) kairo_gpu_vulkan()->get_instance_proc_addr;
     return 1;
 }
 
@@ -9342,11 +9168,9 @@ gpu_alloc(rage128_t *dev)
     if (!g)
         return NULL;
     g->verify = (mode == R128_GPU_VERIFY);
-    {
-        const char *ae = getenv("R128_GPU_ASYNC");
-
-        g->async = !g->verify && (!ae || !ae[0] || strcmp(ae, "0") != 0);
-    }
+    /* KairoX86#239: synchronous: the display shows the memory as drawn, as the CPU path's does (asynchronous present
+       shows GPU snapshots, a frame late where the processor wrote since) */
+    g->async = 0;
     {
         /* R128_GPU_FOLD=0 turns folded pipelines off, for comparison:
            every draw then runs the unfolded (uber) kernel with selectors
@@ -9422,11 +9246,10 @@ gpu_vram_reseat(rage128_t *dev, r128_gpu_t *g)
     size_t   vsz = (size_t) dev->vram_size * 2;
     size_t   sz  = (vsz + 16384 + 16383) & ~(size_t) 16383;
 
-    if (r128_aligned_alloc((void **) &nv, 16384, sz))
-        return "vram realign failed";
+    /* KairoX86#239: a core buffer (zeroed), as svga_init's was with Hardware acceleration on */
+    nv = (uint8_t *) kairo_gpu_alloc(sz);
     memcpy(nv, dev->svga.vram, dev->vram_size);
-    memset(nv + dev->vram_size, 0, sz - dev->vram_size);
-    free(dev->svga.vram);
+    kairo_gpu_free(dev->svga.vram);
     dev->vram_aligned           = nv;
     dev->svga.vram              = nv;
     dev->svga.vram_display_mask = (uint32_t) vsz - 1;
@@ -9452,42 +9275,10 @@ gpu_vram_reseat(rage128_t *dev, r128_gpu_t *g)
 static const char *
 gpu_instance_create(r128_gpu_t *g)
 {
-    const char *iexts[] = {
-        VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME,
-        VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME,
-    };
-    VkApplicationInfo    ai  = { VK_STRUCTURE_TYPE_APPLICATION_INFO };
-    VkInstanceCreateInfo ici = { VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO };
-
-    ai.pApplicationName         = "86Box-r128-gpu";
-    ai.apiVersion               = VK_API_VERSION_1_2;
-    ici.pApplicationInfo        = &ai;
-    ici.flags                   = VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
-    ici.enabledExtensionCount   = 2;
-    ici.ppEnabledExtensionNames = iexts;
-    /* Portability enumeration is a loader concept: an ICD opened
-       directly may reject the flag/extension outright, so fall back
-       to a plain instance rather than treating that as no GPU. */
-    if (vkCreateInstance(&ici, NULL, &g->inst) != VK_SUCCESS) {
-        ici.flags                   = 0;
-        ici.enabledExtensionCount   = 1;
-        ici.ppEnabledExtensionNames = &iexts[1];
-        if (vkCreateInstance(&ici, NULL, &g->inst) != VK_SUCCESS) {
-            ici.enabledExtensionCount   = 0;
-            ici.ppEnabledExtensionNames = NULL;
-            if (vkCreateInstance(&ici, NULL, &g->inst) != VK_SUCCESS)
-                return "vkCreateInstance failed (no usable Vulkan driver)";
-        }
-    }
-    if (!r128_vk_load_instance(g->inst)) {
-        PFN_vkDestroyInstance destroy_instance =
-            (PFN_vkDestroyInstance) r128_vk.gipa(g->inst, "vkDestroyInstance");
-
-        if (destroy_instance)
-            destroy_instance(g->inst, NULL);
-        g->inst = VK_NULL_HANDLE;
+    /* KairoX86#239: the core's instance */
+    g->inst = (VkInstance) kairo_gpu_vulkan()->instance;
+    if (!r128_vk_load_instance(g->inst))
         return "instance entry point resolution failed";
-    }
     return NULL;
 }
 
@@ -9501,68 +9292,8 @@ gpu_instance_create(r128_gpu_t *g)
 static const char *
 gpu_device_pick(r128_gpu_t *g)
 {
-    static const char *const tnames[] = {
-        "other", "integrated", "discrete", "virtual", "cpu"
-    };
-    uint32_t          np    = 0;
-    VkPhysicalDevice *pd    = NULL;
-    int               pick  = -1;
-    int               best  = -1;
-    int               force = -1;
-    const char       *fe    = getenv("R128_GPU_DEVICE");
-    VkResult          er    = vkEnumeratePhysicalDevices(g->inst, &np, NULL);
-
-    if (er != VK_SUCCESS || np == 0)
-        return "no Vulkan physical device";
-    pd = (VkPhysicalDevice *) calloc(np, sizeof(*pd));
-    er = vkEnumeratePhysicalDevices(g->inst, &np, pd);
-    if ((er != VK_SUCCESS && er != VK_INCOMPLETE) || np == 0) {
-        free(pd);
-        return "no Vulkan physical device";
-    }
-    if (fe && fe[0]) {
-        force = atoi(fe);
-        if (force < 0 || (uint32_t) force >= np) {
-            gpu_err("RAGE128 GPU: R128_GPU_DEVICE=%s is out of range "
-                    "(%u devices), ignored\n",
-                    fe, np);
-            force = -1;
-        }
-    }
-    for (uint32_t i = 0; i < np; i++) {
-        VkPhysicalDeviceProperties2 pp = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2 };
-        int                         rank;
-
-        vkGetPhysicalDeviceProperties2(pd[i], &pp);
-        /* clang-format off */
-        switch (pp.properties.deviceType) {
-            case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:   rank = 3; break;
-            case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU: rank = 2; break;
-            case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU:    rank = 1; break;
-            default:                                     rank = 0; break;
-        }
-        /* clang-format on */
-        if ((int) i == force)
-            rank = 100;
-        if (rank > best) {
-            best = rank;
-            pick = (int) i;
-        }
-    }
-    for (uint32_t i = 0; i < np; i++) {
-        VkPhysicalDeviceProperties2 pp = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2 };
-        unsigned                    t;
-
-        vkGetPhysicalDeviceProperties2(pd[i], &pp);
-        t = (unsigned) pp.properties.deviceType;
-        gpu_log("RAGE128 GPU: device %u/%u: \"%s\" vendor %04x type %s -- %s\n",
-                i + 1, np, pp.properties.deviceName, pp.properties.vendorID,
-                t < 5 ? tnames[t] : "unknown",
-                (int) i == pick ? (force >= 0 ? "forced by R128_GPU_DEVICE" : "chosen")
-                                : "passed over");
-    }
-    g->phys = pd[pick];
-    free(pd);
+    /* KairoX86#239: the core's GPU */
+    g->phys = (VkPhysicalDevice) kairo_gpu_vulkan()->physical;
     return NULL;
 }
 
@@ -9632,19 +9363,15 @@ gpu_queue_pick(r128_gpu_t *g)
     uint32_t                 nqf = 0;
     VkQueueFamilyProperties *qfp;
 
+    /* KairoX86#239: the core's queue family, its timestamp bits */
+    g->qfam = kairo_gpu_vulkan()->queue_family;
     vkGetPhysicalDeviceQueueFamilyProperties(g->phys, &nqf, NULL);
     qfp = (VkQueueFamilyProperties *) calloc(nqf, sizeof(*qfp));
+    if (qfp == NULL)
+        return "no memory for the queue families";
     vkGetPhysicalDeviceQueueFamilyProperties(g->phys, &nqf, qfp);
-    g->qfam = ~0u;
-    for (uint32_t i = 0; i < nqf; i++)
-        if (qfp[i].queueFlags & VK_QUEUE_COMPUTE_BIT) {
-            g->qfam   = i;
-            g->tqbits = qfp[i].timestampValidBits;
-            break;
-        }
+    g->tqbits = qfp[g->qfam].timestampValidBits;
     free(qfp);
-    if (g->qfam == ~0u)
-        return "no compute queue";
     return NULL;
 }
 
@@ -9652,71 +9379,16 @@ gpu_queue_pick(r128_gpu_t *g)
 static const char *
 gpu_device_create(r128_gpu_t *g)
 {
-    uint32_t               nde = 0;
-    VkExtensionProperties *de;
-    const char            *dexts[2];
-    uint32_t               ndext    = 0;
-    int                    have_emh = 0;
+    const kairo_gpu_vulkan_t *k = kairo_gpu_vulkan();
 
-    vkEnumerateDeviceExtensionProperties(g->phys, NULL, &nde, NULL);
-    de = (VkExtensionProperties *) calloc(nde, sizeof(*de));
-    vkEnumerateDeviceExtensionProperties(g->phys, NULL, &nde, de);
-    for (uint32_t i = 0; i < nde; i++) {
-        if (!strcmp(de[i].extensionName, "VK_KHR_portability_subset"))
-            dexts[ndext++] = "VK_KHR_portability_subset";
-        if (!strcmp(de[i].extensionName, VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME))
-            have_emh = 1;
-    }
-    free(de);
-    if (!have_emh)
-        return "VK_EXT_external_memory_host unsupported";
-    dexts[ndext++] = VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME;
-
-    {
-        VkPhysicalDeviceVulkan11Features f11 = {
-            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES
-        };
-        VkPhysicalDeviceFeatures2 f2   = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 };
-        float                     prio = 1.0f;
-        VkDeviceQueueCreateInfo   qci  = { VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO };
-        VkDeviceCreateInfo        dci  = { VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO };
-
-        /* The SPIR-V modules declare Int64 and StorageBuffer16BitAccess,
-           so both features are required. Query them first and name the
-           one that is missing: a bare vkCreateDevice failure on a new
-           host says nothing. */
-        {
-            VkPhysicalDeviceVulkan11Features h11 = {
-                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES
-            };
-            VkPhysicalDeviceFeatures2 h2 = {
-                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2
-            };
-
-            h2.pNext = &h11;
-            vkGetPhysicalDeviceFeatures2(g->phys, &h2);
-            if (!h2.features.shaderInt64)
-                return "device lacks shaderInt64 (the kernel's 64-bit "
-                       "edge/z chain)";
-            if (!h11.storageBuffer16BitAccess)
-                return "device lacks storageBuffer16BitAccess (the u16 "
-                       "vram view)";
-        }
-        f11.storageBuffer16BitAccess = VK_TRUE;
-        f2.pNext                     = &f11;
-        f2.features.shaderInt64      = VK_TRUE;
-        qci.queueFamilyIndex         = g->qfam;
-        qci.queueCount               = 1;
-        qci.pQueuePriorities         = &prio;
-        dci.pNext                    = &f2;
-        dci.queueCreateInfoCount     = 1;
-        dci.pQueueCreateInfos        = &qci;
-        dci.enabledExtensionCount    = ndext;
-        dci.ppEnabledExtensionNames  = dexts;
-        if (vkCreateDevice(g->phys, &dci, NULL, &g->dev) != VK_SUCCESS)
-            return "vkCreateDevice failed";
-        vkGetDeviceQueue(g->dev, g->qfam, 0, &g->queue);
-    }
+    /* KairoX86#239: the core's device, which turns on what the kernels need where the GPU has it. The SPIR-V modules
+       declare Int64 and StorageBuffer16BitAccess. */
+    if (!k->int64)
+        return "the GPU lacks shaderInt64 (the kernel's 64-bit edge/z chain)";
+    if (!k->storage16)
+        return "the GPU lacks storageBuffer16BitAccess (the u16 vram view)";
+    g->dev   = (VkDevice) k->device;
+    g->queue = (VkQueue) k->queue;
     return NULL;
 }
 
@@ -10415,43 +10087,15 @@ gpu_threads_start(r128_gpu_t *g)
         gpu_boot_precompile(g);
 }
 
-/* Teardown after an init failure: log why, move any imported arena back
-   to a plain heap block (with no backend left, the CPU grow and close
-   paths treat the arenas as heap blocks), then free the Vulkan objects
-   and g. ifn_ok means the instance entry points are loaded, so
-   vkDestroy* may be called. */
+/* KairoX86#239: an init failure. Hardware acceleration is on, so the machine stops with the reason (fatal does not
+   return); the Vulkan objects are the core's. */
 static void
 gpu_init_abort(rage128_t *dev, r128_gpu_t *g, int ifn_ok, const char *why)
 {
-    gpu_err("RAGE128 GPU: disabled: %s (CPU renderer unaffected)\n",
-            why ? why : "unknown");
-    if (ifn_ok) {
-        if (g->dev) {
-            vkDeviceWaitIdle(g->dev);
-            if (g->stage_ok) {
-                gpu_arena_rollback(g, &dev->tex_stage.arena,
-                                   &dev->tex_stage.cap, dev->tex_stage.used,
-                                   &g->stage_buf, &g->stage_mem);
-                if (!dev->tex_stage.arena) {
-                    dev->tex_stage.used = 0;
-                    dev->tex_stage.tgen++;
-                    dev->tex_stage.src_lo = dev->tex_stage.src_hi = 0;
-                }
-            }
-            if (g->czstage_ok) {
-                gpu_czstage_rollback(g, &dev->c_stage,
-                                     &g->cstage_buf, &g->cstage_mem);
-                gpu_czstage_rollback(g, &dev->z_stage,
-                                     &g->zstage_buf, &g->zstage_mem);
-            }
-            vkDestroyDevice(g->dev, NULL);
-        }
-        if (g->inst)
-            vkDestroyInstance(g->inst, NULL);
-    }
-    free(g->learned);
-    free(g->tuples);
-    free(g);
+    (void) dev;
+    (void) g;
+    (void) ifn_ok;
+    fatal("The PC stopped: the Rage 128's GPU backend failed to start (%s)\n", why ? why : "unknown");
 }
 
 static void
@@ -10511,12 +10155,9 @@ rage128_gpu_init_real(rage128_t *dev)
        import alignment: gpu_device_query refused an alignment above
        16 KB, and the block from gpu_vram_reseat has 16 KB of zeroed
        slack. */
-    why = gpu_import_host(g, dev->svga.vram,
-                          (VkDeviceSize) dev->vram_size * 2 + 4,
-                          (VkDeviceSize) dev->vram_size * 2 + 16384,
-                          &g->vram_buf, &g->vram_mem);
-    if (why)
-        goto fail;
+    /* KairoX86#239: the core buffer itself, no import */
+    g->vram_buf = (VkBuffer) kairo_gpu_buffer_handle(kairo_gpu_buffer_of(dev->svga.vram));
+    g->vram_mem = VK_NULL_HANDLE;
     gpu_mirror_create(dev, g);
     gpu_arenas_import(dev, g);
     why = gpu_slot_bufs_create(g);
@@ -10609,7 +10250,7 @@ gpu_vram_unseat(rage128_t *dev)
         return;
     if (dev->svga.vram == dev->vram_aligned)
         dev->svga.vram = NULL;
-    r128_aligned_free(dev->vram_aligned);
+    kairo_gpu_free(dev->vram_aligned); /* KairoX86#239: a core buffer */
     dev->vram_aligned = NULL;
 }
 
@@ -11219,7 +10860,9 @@ gpu_stats_prof_pack(r128_gpu_t *g)
 static void
 gpu_close_vk(r128_gpu_t *g)
 {
+    kairo_gpu_queue_lock(); /* KairoX86#239 */
     vkDeviceWaitIdle(g->dev);
+    kairo_gpu_queue_unlock();
     gpu_persist_save(g); /* pipeline cache data and the learned list */
     for (unsigned s = 0; s < GPU_RING_SLOTS; s++) {
         if (g->slot[s].tqpool)
@@ -11283,8 +10926,7 @@ gpu_close_vk(r128_gpu_t *g)
         vkDestroyBuffer(g->dev, g->stage2d.b, NULL);
         vkFreeMemory(g->dev, g->stage2d.m, NULL);
     }
-    vkDestroyBuffer(g->dev, g->vram_buf, NULL);
-    vkFreeMemory(g->dev, g->vram_mem, NULL);
+    /* KairoX86#239: the VRAM buffer is the core's */
     if (g->mirror_buf) {
         vkDestroyBuffer(g->dev, g->mirror_buf, NULL);
         vkFreeMemory(g->dev, g->mirror_mem, NULL);
@@ -11299,8 +10941,7 @@ gpu_close_vk(r128_gpu_t *g)
         vkDestroyBuffer(g->dev, g->zstage_buf, NULL);
         vkFreeMemory(g->dev, g->zstage_mem, NULL);
     }
-    vkDestroyDevice(g->dev, NULL);
-    vkDestroyInstance(g->inst, NULL);
+    /* KairoX86#239: the device and the instance are the core's */
 }
 
 void
@@ -11466,6 +11107,12 @@ rage128_gpu_scan_hazard(rage128_t *dev, uint32_t lo, uint32_t len)
     (void) dev;
     (void) lo;
     (void) len;
+    return 0;
+}
+int
+rage128_gpu_scan_always(rage128_t *dev)
+{
+    (void) dev;
     return 0;
 }
 uint64_t
