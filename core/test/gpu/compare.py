@@ -37,12 +37,15 @@ BOARDS = {
     '486ap4': "machine = 486ap4\ncpu_family = i486dx2\ncpu_speed = 66666666\ncpu_multi = 2\nmem_size = 8192\n",
     'ibmps2_m55ls': "machine = ibmps2_m55ls\ncpu_family = i386sx\ncpu_speed = 16000000\ncpu_multi = 1\nmem_size = 4096\n",
 }
-# The add-on cards, beside an S3 Trio64: each one's [Video] line and its own section (the Voodoos drawn by the C
-# rasteriser on the software side, KairoX86#289; the PowerVR PCX2, KairoX86#269)
+# The add-on cards: each one's [Video] line, its own section and the card beside it, an S3 Trio64 (the Voodoos drawn
+# by the C rasteriser on the software side, KairoX86#289; the PowerVR PCX2, KairoX86#269), or the IBM VGA beside the
+# 8514/A, whose ports the S3 has too (KairoX86#238; IBM's, and ATI's 8514 Ultra with the Mach8 engine)
 ADD_ONS = {
-    'voodoo': ('voodoo = 1\n', '\n[3Dfx Voodoo Graphics]\ntype = voodoo\nrecompiler = 0\n'),
-    'voodoo_2': ('voodoo = 1\n', '\n[3Dfx Voodoo Graphics]\ntype = voodoo_2\nrecompiler = 0\n'),
-    'powervr': ('powervr = 1\n', ''),
+    'voodoo': ('voodoo = 1\n', '\n[3Dfx Voodoo Graphics]\ntype = voodoo\nrecompiler = 0\n', 's3_trio64_pci'),
+    'voodoo_2': ('voodoo = 1\n', '\n[3Dfx Voodoo Graphics]\ntype = voodoo_2\nrecompiler = 0\n', 's3_trio64_pci'),
+    'powervr': ('powervr = 1\n', '', 's3_trio64_pci'),
+    '8514a': ('8514a = 1\n', '', 'vga'),
+    '8514a_ati': ('8514a = 1\n', '\n[IBM 8514/A clone (ISA)]\nextensions = 1\n', 'vga'),
 }
 # Each bus's board; any other bus (ISA, VLB, none) the 486's
 BUS_BOARD = {'pci': '686bx', 'agp': '686bx', 'mca': 'ibmps2_m55ls'}
@@ -67,7 +70,7 @@ def query(tool, roms, q):
 
 
 def machine_config(board, card, test, accel, name):
-    video = f"gfxcard = {card}\n" if card not in ADD_ONS else "gfxcard = s3_trio64_pci\n" + ADD_ONS[card][0]
+    video = f"gfxcard = {card}\n" if card not in ADD_ONS else f"gfxcard = {ADD_ONS[card][2]}\n" + ADD_ONS[card][0]
     voodoo = ADD_ONS[card][1] if card in ADD_ONS else ""
     if card not in ADD_ONS and card.startswith(VOODOO_FAMILY):
         # A device reads its settings from its name's section, "<name> #<n>" for instance n > 0 (the AGP

@@ -48,6 +48,8 @@
 #include <86box/vid_svga_render.h>
 #include <86box/vid_ati_eeprom.h>
 #include <86box/vid_ati_mach8.h>
+#include <86box/kairo_gpu.h> /* KairoX86#238 */
+#include <86box/kairo_gpu_ibm8514.h>
 
 #define BIOS_MACH8_VGA_ROM_PATH  "roms/video/mach8/BIOS.BIN"
 #define BIOS_MACH32_ISA_ROM_PATH "roms/video/mach32/ATi Mach32 Graphics Pro ISA.BIN"
@@ -174,21 +176,27 @@ mach_log(void *priv, const char *format, ...)
         }                                                                                                                                                   \
     }
 
-#define READ(addr, dat)                                     \
-    if (dev->bpp)                                           \
-        dat = vga_vram_w[(addr) & (svga->vram_mask >> 1)];  \
-    else {                                                  \
-        if (ATI_MACH32)                                     \
-            dat = svga->vram[(addr) & svga->vram_mask];     \
-        else                                                \
-            dat = dev->vram[(addr) & dev->vram_mask];       \
-    }
+#define READ(addr, dat)                                          \
+    do {                                                         \
+        IBM8514_K_TOUCH(svga, dev, (addr)); /* KairoX86#238 */   \
+        if (dev->bpp)                                            \
+            dat = vga_vram_w[(addr) & (svga->vram_mask >> 1)];   \
+        else {                                                   \
+            if (ATI_MACH32)                                      \
+                dat = svga->vram[(addr) & svga->vram_mask];      \
+            else                                                 \
+                dat = dev->vram[(addr) & dev->vram_mask];        \
+        }                                                        \
+    } while (0)
 
-#define READ_HIGH(addr, dat)                                    \
-    if (ATI_MACH32)                                             \
-        dat |= (svga->vram[(addr) & svga->vram_mask] << 8);     \
-    else                                                        \
-        dat |= (dev->vram[(addr) & (dev->vram_mask)] << 8);
+#define READ_HIGH(addr, dat)                                         \
+    do {                                                             \
+        IBM8514_K_TOUCH(svga, dev, (addr)); /* KairoX86#238 */       \
+        if (ATI_MACH32)                                              \
+            dat |= (svga->vram[(addr) & svga->vram_mask] << 8);      \
+        else                                                         \
+            dat |= (dev->vram[(addr) & (dev->vram_mask)] << 8);      \
+    } while (0)
 
 #define MIX(mixmode, dest_dat, src_dat)                                                                \
     {                                                                                                  \
@@ -307,19 +315,22 @@ mach_log(void *priv, const char *format, ...)
     }
 
 
-#define WRITE(addr, dat)                                                                                    \
-    if (dev->bpp) {                                                                                         \
-        vga_vram_w[((addr)) & (svga->vram_mask >> 1)]                    = dat;                             \
-        svga->changedvram[(((addr)) & (svga->vram_mask >> 1)) >> 11] = svga->monitor->mon_changeframecount; \
-    } else {                                                                                                \
-        if (ATI_MACH32) {                                                                                   \
-            svga->vram[(addr) & svga->vram_mask]                = dat;                                      \
-            svga->changedvram[((addr) & svga->vram_mask) >> 12] = svga->monitor->mon_changeframecount;      \
-        } else {                                                                                            \
-            dev->vram[((addr)) & (dev->vram_mask)]                = dat;                                    \
-            dev->changedvram[(((addr)) & (dev->vram_mask)) >> 12] = svga->monitor->mon_changeframecount;    \
-        }                                                                                                   \
-    }
+#define WRITE(addr, dat)                                                                                         \
+    do {                                                                                                         \
+        IBM8514_K_TOUCH(svga, dev, (addr)); /* KairoX86#238 */                                                   \
+        if (dev->bpp) {                                                                                          \
+            vga_vram_w[((addr)) & (svga->vram_mask >> 1)]                    = dat;                              \
+            svga->changedvram[(((addr)) & (svga->vram_mask >> 1)) >> 11] = svga->monitor->mon_changeframecount;  \
+        } else {                                                                                                 \
+            if (ATI_MACH32) {                                                                                    \
+                svga->vram[(addr) & svga->vram_mask]                = dat;                                       \
+                svga->changedvram[((addr) & svga->vram_mask) >> 12] = svga->monitor->mon_changeframecount;       \
+            } else {                                                                                             \
+                dev->vram[((addr)) & (dev->vram_mask)]                = dat;                                     \
+                dev->changedvram[(((addr)) & (dev->vram_mask)) >> 12] = svga->monitor->mon_changeframecount;     \
+            }                                                                                                    \
+        }                                                                                                        \
+    } while (0)
 
 static int
 mach_pixel_write(mach_t *mach)
@@ -361,15 +372,17 @@ mach_src6_byte(mach_t *mach, uint8_t byte, int x)
    pixels 4k to 4k+3 whose read-mask bits are all set. Past the source row, k beyond a quarter of
    its width, each of the four reads as (k mod 16) x 11h. */
 static uint8_t
-mach_src4_count(ibm8514_t *dev, uint32_t row, int k, int src_width, uint8_t rd_mask)
+mach_src4_count(svga_t *svga, ibm8514_t *dev, uint32_t row, int k, int src_width, uint8_t rd_mask)
 {
     int n = 0;
 
     for (int j = 0; j < 4; j++) {
         uint8_t px;
 
-        if (k < (src_width >> 2))
+        if (k < (src_width >> 2)) {
+            IBM8514_K_TOUCH(svga, dev, row + (k << 2) + j); /* KairoX86#238 */
             px = dev->vram[(row + (k << 2) + j) & dev->vram_mask];
+        }
         else
             px = (k & 0x0f) * 0x11;
         n += ((px & rd_mask) == rd_mask);
@@ -401,8 +414,73 @@ mach_mono_patt_bit(mach_t *mach, int i)
     return (word >> (15 - (pos & 15))) & 1;
 }
 
+/* KairoX86#238: one pixel of the walk at addr: the destination read, DEST_CMP_FN's compare, the mix (the foreground one
+   where mix is set) with the source src_dat and the write mask where it is not kept, the write. With Hardware
+   acceleration on, recorded for the GPU. */
 static void
-mach_accel_start(int cmd_type, int cpu_input, int count, uint32_t mix_dat, uint32_t cpu_dat, UNUSED(svga_t *svga), mach_t *mach, ibm8514_t *dev)
+mach_draw(ibm8514_t *dev, svga_t *svga, const ibm8514_k_px_t *px, uint32_t addr, int mix, uint16_t src_dat)
+{
+    uint16_t *vga_vram_w = (uint16_t *) svga->vram;
+    uint16_t  dest_dat;
+    uint16_t  old_dest_dat;
+    int       compare = 0;
+
+    if (dev->k_gpu != NULL) {
+        ibm8514_k_pixel(svga, px, addr, (uint32_t) (mix ? dev->accel.frgd_mix : dev->accel.bkgd_mix) | I8K_CMP, src_dat);
+        return;
+    }
+    READ(addr, dest_dat);
+    switch (px->compare_mode) {
+        case 8: {
+            int nib  = (px->cmp_fn & 0x10) ? (dest_dat & 0x0f) : ((dest_dat >> 4) & 0x0f);
+            int edge = (nib == 0x00) || (nib == 0x0f);
+            compare  = (px->cmp_fn & 0x08) ? edge : !edge;
+            break;
+        }
+        case 1:
+            compare = 1;
+            break;
+        case 2:
+            compare = (dest_dat >= px->compare) ? 1 : 0;
+            break;
+        case 3:
+            compare = (dest_dat < px->compare) ? 1 : 0;
+            break;
+        case 4:
+            compare = (dest_dat != px->compare) ? 1 : 0;
+            break;
+        case 5:
+            compare = (dest_dat == px->compare) ? 1 : 0;
+            break;
+        case 6:
+            compare = (dest_dat <= px->compare) ? 1 : 0;
+            break;
+        case 7:
+            compare = (dest_dat > px->compare) ? 1 : 0;
+            break;
+
+        default:
+            break;
+    }
+    if (!compare) {
+        old_dest_dat = dest_dat;
+        MIX(mix, dest_dat, src_dat);
+        dest_dat = (dest_dat & px->wrt_mask) | (old_dest_dat & ~px->wrt_mask);
+    }
+    WRITE(addr, dest_dat);
+}
+
+static void mach_accel_start_walk(int cmd_type, int cpu_input, int count, uint32_t mix_dat, uint32_t cpu_dat, svga_t *svga, mach_t *mach, ibm8514_t *dev);
+
+static void
+mach_accel_start(int cmd_type, int cpu_input, int count, uint32_t mix_dat, uint32_t cpu_dat, svga_t *svga, mach_t *mach, ibm8514_t *dev)
+{
+    mach_accel_start_walk(cmd_type, cpu_input, count, mix_dat, cpu_dat, svga, mach, dev);
+    ibm8514_k_flush(svga); /* KairoX86#238 */
+}
+
+static void
+mach_accel_start_walk(int cmd_type, int cpu_input, int count, uint32_t mix_dat, uint32_t cpu_dat, svga_t *svga, mach_t *mach, ibm8514_t *dev)
 {
     int           compare_mode;
     uint16_t      poly_src     = 0;
@@ -414,10 +492,7 @@ mach_accel_start(int cmd_type, int cpu_input, int count, uint32_t mix_dat, uint3
     int           frgd_sel;
     int           bkgd_sel;
     int           mono_src;
-    int           compare  = 0;
     uint16_t      src_dat  = 0;
-    uint16_t      dest_dat = 0;
-    uint16_t      old_dest_dat;
     uint16_t     *vga_vram_w = (uint16_t *) svga->vram;
     uint16_t      mix       = 0;
     uint32_t      mono_dat0 = 0;
@@ -452,6 +527,8 @@ mach_accel_start(int cmd_type, int cpu_input, int count, uint32_t mix_dat, uint3
     frgd_sel     = mach_frgd_sel(mach, dev);
     bkgd_sel     = (mach->accel.dp_config >> 7) & 3;
     mono_src     = (mach->accel.dp_config >> 5) & 3;
+
+    const ibm8514_k_px_t px = { wrt_mask, dest_cmp_clr, mach->accel.dest_cmp_fn, compare_mode, 1 }; /* KairoX86#238 */
 
     if (cpu_input) {
         if (dev->bpp) {
@@ -610,54 +687,13 @@ mach_accel_start(int cmd_type, int cpu_input, int count, uint32_t mix_dat, uint3
                             }
 
                             if (poly_line || mach->accel.poly_fill || !(mach->accel.linedraw_opt & 0x02)) {
-                                READ(mach->accel.dst_ge_offset + (dev->accel.dy * mach->accel.dst_pitch) + dev->accel.dx, dest_dat);
-
-                                switch (compare_mode) {
-                                    case 8: {
-                                        int nib  = (mach->accel.dest_cmp_fn & 0x10) ? (dest_dat & 0x0f) : ((dest_dat >> 4) & 0x0f);
-                                        int edge = (nib == 0x00) || (nib == 0x0f);
-                                        compare  = (mach->accel.dest_cmp_fn & 0x08) ? edge : !edge;
-                                        break;
-                                    }
-                                    case 1:
-                                        compare = 1;
-                                        break;
-                                    case 2:
-                                        compare = (dest_dat >= dest_cmp_clr) ? 1 : 0;
-                                        break;
-                                    case 3:
-                                        compare = (dest_dat < dest_cmp_clr) ? 1 : 0;
-                                        break;
-                                    case 4:
-                                        compare = (dest_dat != dest_cmp_clr) ? 1 : 0;
-                                        break;
-                                    case 5:
-                                        compare = (dest_dat == dest_cmp_clr) ? 1 : 0;
-                                        break;
-                                    case 6:
-                                        compare = (dest_dat <= dest_cmp_clr) ? 1 : 0;
-                                        break;
-                                    case 7:
-                                        compare = (dest_dat > dest_cmp_clr) ? 1 : 0;
-                                        break;
-
-                                    default:
-                                        break;
-                                }
-
-                                if (!compare) {
-                                    old_dest_dat = dest_dat;
-                                    MIX(mix, dest_dat, src_dat);
-                                    dest_dat = (dest_dat & wrt_mask) | (old_dest_dat & ~wrt_mask);
-                                }
-
                                 if (mach->accel.dp_config & 0x10) {
                                     if (mach->accel.linedraw_opt & 0x04) {
                                         if (((mono_src != 1) && (dev->accel.sx < mach->accel.width)) || ((mono_src == 1) && count)) {
-                                            WRITE(mach->accel.dst_ge_offset + (dev->accel.dy * mach->accel.dst_pitch) + dev->accel.dx, dest_dat);
+                                            mach_draw(dev, svga, &px, mach->accel.dst_ge_offset + (dev->accel.dy * mach->accel.dst_pitch) + dev->accel.dx, mix, src_dat);
                                         }
                                     } else {
-                                        WRITE(mach->accel.dst_ge_offset + (dev->accel.dy * mach->accel.dst_pitch) + dev->accel.dx, dest_dat);
+                                        mach_draw(dev, svga, &px, mach->accel.dst_ge_offset + (dev->accel.dy * mach->accel.dst_pitch) + dev->accel.dx, mix, src_dat);
                                     }
                                 }
                             }
@@ -824,54 +860,13 @@ mach_accel_start(int cmd_type, int cpu_input, int count, uint32_t mix_dat, uint3
                             }
 
                             if (mach->accel.poly_fill || !(mach->accel.linedraw_opt & 0x02)) {
-                                READ(mach->accel.dst_ge_offset + (dev->accel.dy * mach->accel.dst_pitch) + dev->accel.dx, dest_dat);
-
-                                switch (compare_mode) {
-                                    case 8: {
-                                        int nib  = (mach->accel.dest_cmp_fn & 0x10) ? (dest_dat & 0x0f) : ((dest_dat >> 4) & 0x0f);
-                                        int edge = (nib == 0x00) || (nib == 0x0f);
-                                        compare  = (mach->accel.dest_cmp_fn & 0x08) ? edge : !edge;
-                                        break;
-                                    }
-                                    case 1:
-                                        compare = 1;
-                                        break;
-                                    case 2:
-                                        compare = (dest_dat >= dest_cmp_clr) ? 1 : 0;
-                                        break;
-                                    case 3:
-                                        compare = (dest_dat < dest_cmp_clr) ? 1 : 0;
-                                        break;
-                                    case 4:
-                                        compare = (dest_dat != dest_cmp_clr) ? 1 : 0;
-                                        break;
-                                    case 5:
-                                        compare = (dest_dat == dest_cmp_clr) ? 1 : 0;
-                                        break;
-                                    case 6:
-                                        compare = (dest_dat <= dest_cmp_clr) ? 1 : 0;
-                                        break;
-                                    case 7:
-                                        compare = (dest_dat > dest_cmp_clr) ? 1 : 0;
-                                        break;
-
-                                    default:
-                                        break;
-                                }
-
-                                if (!compare) {
-                                    old_dest_dat = dest_dat;
-                                    MIX(mix, dest_dat, src_dat);
-                                    dest_dat = (dest_dat & wrt_mask) | (old_dest_dat & ~wrt_mask);
-                                }
-
                                 if (mach->accel.dp_config & 0x10) {
                                     if (mach->accel.linedraw_opt & 0x04) {
                                         if (((mono_src != 1) && (dev->accel.sx < mach->accel.width)) || ((mono_src == 1) && count)) {
-                                            WRITE(mach->accel.dst_ge_offset + (dev->accel.dy * mach->accel.dst_pitch) + dev->accel.dx, dest_dat);
+                                            mach_draw(dev, svga, &px, mach->accel.dst_ge_offset + (dev->accel.dy * mach->accel.dst_pitch) + dev->accel.dx, mix, src_dat);
                                         }
                                     } else {
-                                        WRITE(mach->accel.dst_ge_offset + (dev->accel.dy * mach->accel.dst_pitch) + dev->accel.dx, dest_dat);
+                                        mach_draw(dev, svga, &px, mach->accel.dst_ge_offset + (dev->accel.dy * mach->accel.dst_pitch) + dev->accel.dx, mix, src_dat);
                                     }
                                 }
                             }
@@ -1343,7 +1338,7 @@ mach_accel_start(int cmd_type, int cpu_input, int count, uint32_t mix_dat, uint3
                                     break;
                                 case 4:
                                     if (ATI_GRAPHICS_ULTRA && !dev->bpp)
-                                        src_dat = mach_src4_count(dev, dev->accel.src + dev->accel.cx - (mach->accel.sx * mach->accel.src_stepx),
+                                        src_dat = mach_src4_count(svga, dev, dev->accel.src + dev->accel.cx - (mach->accel.sx * mach->accel.src_stepx),
                                                                   dev->accel.sx, src_row_width, rd_mask);
                                     break;
                                 case 7:
@@ -1360,54 +1355,13 @@ mach_accel_start(int cmd_type, int cpu_input, int count, uint32_t mix_dat, uint3
                                     break;
                             }
 
-                            if ((dev->accel_bpp == 24) && (mono_src == 1) && (frgd_sel == 5) && !mach->accel.mono_pattern_enable) {
-                                if (dev->accel.sy & 1) {
-                                    READ(dev->accel.dest + (dev->accel.dx & x_mask) - mach->accel.dst_pitch, dest_dat);
-                                } else {
-                                    READ(dev->accel.dest + (dev->accel.dx & x_mask), dest_dat);
-                                }
-                            } else {
-                                READ(dev->accel.dest + (dev->accel.dx & x_mask), dest_dat);
-                            }
-
-                            switch (compare_mode) {
-                                case 8: {
-                                    int nib  = (mach->accel.dest_cmp_fn & 0x10) ? (dest_dat & 0x0f) : ((dest_dat >> 4) & 0x0f);
-                                    int edge = (nib == 0x00) || (nib == 0x0f);
-                                    compare  = (mach->accel.dest_cmp_fn & 0x08) ? edge : !edge;
-                                    break;
-                                }
-                                case 1:
-                                    compare = 1;
-                                    break;
-                                case 2:
-                                    compare = (dest_dat >= dest_cmp_clr) ? 1 : 0;
-                                    break;
-                                case 3:
-                                    compare = (dest_dat < dest_cmp_clr) ? 1 : 0;
-                                    break;
-                                case 4:
-                                    compare = (dest_dat != dest_cmp_clr) ? 1 : 0;
-                                    break;
-                                case 5:
-                                    compare = (dest_dat == dest_cmp_clr) ? 1 : 0;
-                                    break;
-                                case 6:
-                                    compare = (dest_dat <= dest_cmp_clr) ? 1 : 0;
-                                    break;
-                                case 7:
-                                    compare = (dest_dat > dest_cmp_clr) ? 1 : 0;
-                                    break;
-
-                                default:
-                                    break;
-                            }
-
                             /* Graphics Ultra (measured on a real card; TEST.COM sequence 1 ops 133-140): 92EEh bits 3-5
                                are a compare function in DEST_CMP_FN's encoding, applied to the source pixel
                                against EAEEh. A true result writes the background source through the background
-                               mix. An engine reset does not clear 92EEh. */
-                            if (ATI_GRAPHICS_ULTRA && !compare && (mach->accel.src_cmp_fn & 0x38)) {
+                               mix. An engine reset does not clear 92EEh. KairoX86#238: decided for every pixel, as a
+                               pixel whose destination is kept draws nothing (the mix and source are set again for
+                               the next one). */
+                            if (ATI_GRAPHICS_ULTRA && (mach->accel.src_cmp_fn & 0x38)) {
                                 uint16_t s_clr  = mach->accel.src_cmp_clr & (dev->bpp ? 0xffff : 0xff);
                                 int      s_true = 0;
                                 switch ((mach->accel.src_cmp_fn >> 3) & 7) {
@@ -1442,21 +1396,15 @@ mach_accel_start(int cmd_type, int cpu_input, int count, uint32_t mix_dat, uint3
                                 }
                             }
 
-                            if (!compare) {
-                                old_dest_dat = dest_dat;
-                                MIX(mix, dest_dat, src_dat);
-                                dest_dat = (dest_dat & wrt_mask) | (old_dest_dat & ~wrt_mask);
-                            }
-
                             if (mach->accel.dp_config & 0x10) {
                                 if ((dev->accel_bpp == 24) && (mono_src == 1) && (frgd_sel == 5) && !mach->accel.mono_pattern_enable) {
                                     if (dev->accel.sy & 1) {
-                                        WRITE(dev->accel.dest + (dev->accel.dx & x_mask) - mach->accel.dst_pitch, dest_dat);
+                                        mach_draw(dev, svga, &px, dev->accel.dest + (dev->accel.dx & x_mask) - mach->accel.dst_pitch, mix, src_dat);
                                     } else {
-                                        WRITE(dev->accel.dest + (dev->accel.dx & x_mask), dest_dat);
+                                        mach_draw(dev, svga, &px, dev->accel.dest + (dev->accel.dx & x_mask), mix, src_dat);
                                     }
                                 } else {
-                                    WRITE(dev->accel.dest + (dev->accel.dx & x_mask), dest_dat);
+                                    mach_draw(dev, svga, &px, dev->accel.dest + (dev->accel.dx & x_mask), mix, src_dat);
                                 }
                             }
                         }
@@ -1695,48 +1643,8 @@ mach_accel_start(int cmd_type, int cpu_input, int count, uint32_t mix_dat, uint3
                                         break;
                                 }
 
-                                READ(mach->accel.dst_ge_offset + (dev->accel.cy * mach->accel.dst_pitch) + (dev->accel.cx & x_mask), dest_dat);
-
-                                switch (compare_mode) {
-                                    case 8: {
-                                        int nib  = (mach->accel.dest_cmp_fn & 0x10) ? (dest_dat & 0x0f) : ((dest_dat >> 4) & 0x0f);
-                                        int edge = (nib == 0x00) || (nib == 0x0f);
-                                        compare  = (mach->accel.dest_cmp_fn & 0x08) ? edge : !edge;
-                                        break;
-                                    }
-                                    case 1:
-                                        compare = 1;
-                                        break;
-                                    case 2:
-                                        compare = (dest_dat >= dest_cmp_clr) ? 1 : 0;
-                                        break;
-                                    case 3:
-                                        compare = (dest_dat < dest_cmp_clr) ? 1 : 0;
-                                        break;
-                                    case 4:
-                                        compare = (dest_dat != dest_cmp_clr) ? 1 : 0;
-                                        break;
-                                    case 5:
-                                        compare = (dest_dat == dest_cmp_clr) ? 1 : 0;
-                                        break;
-                                    case 6:
-                                        compare = (dest_dat <= dest_cmp_clr) ? 1 : 0;
-                                        break;
-                                    case 7:
-                                        compare = (dest_dat > dest_cmp_clr) ? 1 : 0;
-                                        break;
-
-                                    default:
-                                        break;
-                                }
-
-                                if (!compare) {
-                                    old_dest_dat = dest_dat;
-                                    MIX(mix, dest_dat, src_dat);
-                                    dest_dat = (dest_dat & wrt_mask) | (old_dest_dat & ~wrt_mask);
-                                }
                                 if ((mach->accel.dp_config & 0x10) && (cmd_type == 3)) {
-                                    WRITE(mach->accel.dst_ge_offset + (dev->accel.cy * mach->accel.dst_pitch) + (dev->accel.cx & x_mask), dest_dat);
+                                    mach_draw(dev, svga, &px, mach->accel.dst_ge_offset + (dev->accel.cy * mach->accel.dst_pitch) + (dev->accel.cx & x_mask), mix, src_dat);
                                 }
                             }
                         } else if (!ATI_GRAPHICS_ULTRA)
@@ -1837,54 +1745,13 @@ mach_accel_start(int cmd_type, int cpu_input, int count, uint32_t mix_dat, uint3
                                 }
 
                                 if (mach->accel.poly_fill || !(mach->accel.linedraw_opt & 0x02)) {
-                                    READ(mach->accel.dst_ge_offset + (dev->accel.cy * mach->accel.dst_pitch) + (dev->accel.cx & x_mask), dest_dat);
-
-                                    switch (compare_mode) {
-                                        case 8: {
-                                            int nib  = (mach->accel.dest_cmp_fn & 0x10) ? (dest_dat & 0x0f) : ((dest_dat >> 4) & 0x0f);
-                                            int edge = (nib == 0x00) || (nib == 0x0f);
-                                            compare  = (mach->accel.dest_cmp_fn & 0x08) ? edge : !edge;
-                                            break;
-                                        }
-                                        case 1:
-                                            compare = 1;
-                                            break;
-                                        case 2:
-                                            compare = (dest_dat >= dest_cmp_clr) ? 1 : 0;
-                                            break;
-                                        case 3:
-                                            compare = (dest_dat < dest_cmp_clr) ? 1 : 0;
-                                            break;
-                                        case 4:
-                                            compare = (dest_dat != dest_cmp_clr) ? 1 : 0;
-                                            break;
-                                        case 5:
-                                            compare = (dest_dat == dest_cmp_clr) ? 1 : 0;
-                                            break;
-                                        case 6:
-                                            compare = (dest_dat <= dest_cmp_clr) ? 1 : 0;
-                                            break;
-                                        case 7:
-                                            compare = (dest_dat > dest_cmp_clr) ? 1 : 0;
-                                            break;
-
-                                        default:
-                                            break;
-                                    }
-
-                                    if (!compare) {
-                                        old_dest_dat = dest_dat;
-                                        MIX(mix, dest_dat, src_dat);
-                                        dest_dat = (dest_dat & wrt_mask) | (old_dest_dat & ~wrt_mask);
-                                    }
-
                                     if ((mach->accel.dp_config & 0x10) && (cmd_type == 3)) {
                                         if (mach->accel.linedraw_opt & 0x04) {
                                             if (dev->accel.sx < mach->accel.width) {
-                                                WRITE(mach->accel.dst_ge_offset + (dev->accel.cy * mach->accel.dst_pitch) + (dev->accel.cx & x_mask), dest_dat);
+                                                mach_draw(dev, svga, &px, mach->accel.dst_ge_offset + (dev->accel.cy * mach->accel.dst_pitch) + (dev->accel.cx & x_mask), mix, src_dat);
                                             }
                                         } else {
-                                            WRITE(mach->accel.dst_ge_offset + (dev->accel.cy * mach->accel.dst_pitch) + (dev->accel.cx & x_mask), dest_dat);
+                                            mach_draw(dev, svga, &px, mach->accel.dst_ge_offset + (dev->accel.cy * mach->accel.dst_pitch) + (dev->accel.cx & x_mask), mix, src_dat);
                                         }
                                     }
                                 }
@@ -1967,49 +1834,8 @@ mach_accel_start(int cmd_type, int cpu_input, int count, uint32_t mix_dat, uint3
                                         break;
                                 }
 
-                                READ(mach->accel.dst_ge_offset + (dev->accel.cy * mach->accel.dst_pitch) + (dev->accel.cx & x_mask), dest_dat);
-
-                                switch (compare_mode) {
-                                    case 8: {
-                                        int nib  = (mach->accel.dest_cmp_fn & 0x10) ? (dest_dat & 0x0f) : ((dest_dat >> 4) & 0x0f);
-                                        int edge = (nib == 0x00) || (nib == 0x0f);
-                                        compare  = (mach->accel.dest_cmp_fn & 0x08) ? edge : !edge;
-                                        break;
-                                    }
-                                    case 1:
-                                        compare = 1;
-                                        break;
-                                    case 2:
-                                        compare = (dest_dat >= dest_cmp_clr) ? 1 : 0;
-                                        break;
-                                    case 3:
-                                        compare = (dest_dat < dest_cmp_clr) ? 1 : 0;
-                                        break;
-                                    case 4:
-                                        compare = (dest_dat != dest_cmp_clr) ? 1 : 0;
-                                        break;
-                                    case 5:
-                                        compare = (dest_dat == dest_cmp_clr) ? 1 : 0;
-                                        break;
-                                    case 6:
-                                        compare = (dest_dat <= dest_cmp_clr) ? 1 : 0;
-                                        break;
-                                    case 7:
-                                        compare = (dest_dat > dest_cmp_clr) ? 1 : 0;
-                                        break;
-
-                                    default:
-                                        break;
-                                }
-
-                                if (!compare) {
-                                    old_dest_dat = dest_dat;
-                                    MIX(mix, dest_dat, src_dat);
-                                    dest_dat = (dest_dat & wrt_mask) | (old_dest_dat & ~wrt_mask);
-                                }
-
                                 if ((mach->accel.dp_config & 0x10) && (cmd_type == 3)) {
-                                    WRITE(mach->accel.dst_ge_offset + (dev->accel.cy * mach->accel.dst_pitch) + (dev->accel.cx & x_mask), dest_dat);
+                                    mach_draw(dev, svga, &px, mach->accel.dst_ge_offset + (dev->accel.cy * mach->accel.dst_pitch) + (dev->accel.cx & x_mask), mix, src_dat);
                                 }
                             }
                         } else if (!ATI_GRAPHICS_ULTRA)
@@ -2110,54 +1936,13 @@ mach_accel_start(int cmd_type, int cpu_input, int count, uint32_t mix_dat, uint3
                                 }
 
                                 if (mach->accel.poly_fill || !(mach->accel.linedraw_opt & 0x02)) {
-                                    READ(mach->accel.dst_ge_offset + (dev->accel.cy * mach->accel.dst_pitch) + (dev->accel.cx & x_mask), dest_dat);
-
-                                    switch (compare_mode) {
-                                        case 8: {
-                                            int nib  = (mach->accel.dest_cmp_fn & 0x10) ? (dest_dat & 0x0f) : ((dest_dat >> 4) & 0x0f);
-                                            int edge = (nib == 0x00) || (nib == 0x0f);
-                                            compare  = (mach->accel.dest_cmp_fn & 0x08) ? edge : !edge;
-                                            break;
-                                        }
-                                        case 1:
-                                            compare = 1;
-                                            break;
-                                        case 2:
-                                            compare = (dest_dat >= dest_cmp_clr) ? 1 : 0;
-                                            break;
-                                        case 3:
-                                            compare = (dest_dat < dest_cmp_clr) ? 1 : 0;
-                                            break;
-                                        case 4:
-                                            compare = (dest_dat != dest_cmp_clr) ? 1 : 0;
-                                            break;
-                                        case 5:
-                                            compare = (dest_dat == dest_cmp_clr) ? 1 : 0;
-                                            break;
-                                        case 6:
-                                            compare = (dest_dat <= dest_cmp_clr) ? 1 : 0;
-                                            break;
-                                        case 7:
-                                            compare = (dest_dat > dest_cmp_clr) ? 1 : 0;
-                                            break;
-
-                                        default:
-                                            break;
-                                    }
-
-                                    if (!compare) {
-                                        old_dest_dat = dest_dat;
-                                        MIX(mix, dest_dat, src_dat);
-                                        dest_dat = (dest_dat & wrt_mask) | (old_dest_dat & ~wrt_mask);
-                                    }
-
                                     if ((mach->accel.dp_config & 0x10) && (cmd_type == 3)) {
                                         if (mach->accel.linedraw_opt & 0x04) {
                                             if (dev->accel.sx < mach->accel.width) {
-                                                WRITE(mach->accel.dst_ge_offset + (dev->accel.cy * mach->accel.dst_pitch) + (dev->accel.cx & x_mask), dest_dat);
+                                                mach_draw(dev, svga, &px, mach->accel.dst_ge_offset + (dev->accel.cy * mach->accel.dst_pitch) + (dev->accel.cx & x_mask), mix, src_dat);
                                             }
                                         } else {
-                                            WRITE(mach->accel.dst_ge_offset + (dev->accel.cy * mach->accel.dst_pitch) + (dev->accel.cx & x_mask), dest_dat);
+                                            mach_draw(dev, svga, &px, mach->accel.dst_ge_offset + (dev->accel.cy * mach->accel.dst_pitch) + (dev->accel.cx & x_mask), mix, src_dat);
                                         }
                                     }
                                 }
@@ -2381,48 +2166,7 @@ mach_accel_start(int cmd_type, int cpu_input, int count, uint32_t mix_dat, uint3
                         (dev->accel.dy <= clip_b)) {
                         dev->subsys_stat |= INT_GE_BSY;
                         READ(dev->accel.src + (cx & x_mask), src_dat);
-                        READ(dev->accel.dest + (dev->accel.dx & x_mask), dest_dat);
-
-                        switch (compare_mode) {
-                            case 8: {
-                                int nib  = (mach->accel.dest_cmp_fn & 0x10) ? (dest_dat & 0x0f) : ((dest_dat >> 4) & 0x0f);
-                                int edge = (nib == 0x00) || (nib == 0x0f);
-                                compare  = (mach->accel.dest_cmp_fn & 0x08) ? edge : !edge;
-                                break;
-                            }
-                            case 1:
-                                compare = 1;
-                                break;
-                            case 2:
-                                compare = (dest_dat >= dest_cmp_clr) ? 1 : 0;
-                                break;
-                            case 3:
-                                compare = (dest_dat < dest_cmp_clr) ? 1 : 0;
-                                break;
-                            case 4:
-                                compare = (dest_dat != dest_cmp_clr) ? 1 : 0;
-                                break;
-                            case 5:
-                                compare = (dest_dat == dest_cmp_clr) ? 1 : 0;
-                                break;
-                            case 6:
-                                compare = (dest_dat <= dest_cmp_clr) ? 1 : 0;
-                                break;
-                            case 7:
-                                compare = (dest_dat > dest_cmp_clr) ? 1 : 0;
-                                break;
-
-                            default:
-                                break;
-                        }
-
-                        if (!compare) {
-                            old_dest_dat = dest_dat;
-                            MIX(mix, dest_dat, src_dat);
-                            dest_dat = (dest_dat & wrt_mask) | (old_dest_dat & ~wrt_mask);
-                        }
-
-                        WRITE(dev->accel.dest + (dev->accel.dx & x_mask), dest_dat);
+                        mach_draw(dev, svga, &px, dev->accel.dest + (dev->accel.dx & x_mask), mix, src_dat);
                     }
 
                     cx += mach->accel.src_stepx;
@@ -2552,49 +2296,8 @@ mach_accel_start(int cmd_type, int cpu_input, int count, uint32_t mix_dat, uint3
                                 break;
                         }
 
-                        READ(dev->accel.dest + (dev->accel.dx & x_mask), dest_dat);
-
-                        switch (compare_mode) {
-                            case 8: {
-                                int nib  = (mach->accel.dest_cmp_fn & 0x10) ? (dest_dat & 0x0f) : ((dest_dat >> 4) & 0x0f);
-                                int edge = (nib == 0x00) || (nib == 0x0f);
-                                compare  = (mach->accel.dest_cmp_fn & 0x08) ? edge : !edge;
-                                break;
-                            }
-                            case 1:
-                                compare = 1;
-                                break;
-                            case 2:
-                                compare = (dest_dat >= dest_cmp_clr) ? 1 : 0;
-                                break;
-                            case 3:
-                                compare = (dest_dat < dest_cmp_clr) ? 1 : 0;
-                                break;
-                            case 4:
-                                compare = (dest_dat != dest_cmp_clr) ? 1 : 0;
-                                break;
-                            case 5:
-                                compare = (dest_dat == dest_cmp_clr) ? 1 : 0;
-                                break;
-                            case 6:
-                                compare = (dest_dat <= dest_cmp_clr) ? 1 : 0;
-                                break;
-                            case 7:
-                                compare = (dest_dat > dest_cmp_clr) ? 1 : 0;
-                                break;
-
-                            default:
-                                break;
-                        }
-
-                        if (!compare) {
-                            old_dest_dat = dest_dat;
-                            MIX(mix, dest_dat, src_dat);
-                            dest_dat = (dest_dat & wrt_mask) | (old_dest_dat & ~wrt_mask);
-                        }
-
                         if (compat_scan || (mach->accel.dp_config & 0x10)) {
-                            WRITE(dev->accel.dest + (dev->accel.dx & x_mask), dest_dat);
+                            mach_draw(dev, svga, &px, dev->accel.dest + (dev->accel.dx & x_mask), mix, src_dat);
                         }
                     }
                 }
@@ -6087,6 +5790,7 @@ mach_accel_in_fifo(mach_t *mach, svga_t *svga, ibm8514_t *dev, uint16_t port, in
 
         case 0xe2e8:
         case 0xe6e8:
+            ibm8514_k_drain(svga); /* KairoX86#238 */
             if (mach->accel.cmd_type >= 0) {
                 if (mach_pixel_read(mach)) {
                     cmd = -1;
@@ -6235,6 +5939,7 @@ mach_accel_in_fifo(mach_t *mach, svga_t *svga, ibm8514_t *dev, uint16_t port, in
             break;
         case 0xe2e9:
         case 0xe6e9:
+            ibm8514_k_drain(svga); /* KairoX86#238 */
             if (mach->accel.cmd_type >= 0) {
                 mach_log(mach->log,"%04x pixtrans read, len=%d.\n", port, len);
                 if (mach_pixel_read(mach)) {
@@ -7245,6 +6950,7 @@ mach32_write_common(uint32_t addr, uint8_t val, int linear, mach_t *mach, svga_t
     latch8514_t vall;
     uint8_t wm = svga->writemask;
     uint8_t i;
+    ibm8514_k_touch_bytes(svga, 0, 0xffffffff); /* KairoX86#238 */
 
     cycles -= svga->monitor->mon_video_timing_write_b;
 
@@ -7511,6 +7217,7 @@ mach32_svga_write(uint32_t addr, uint8_t val, void *priv)
     uint8_t wm         = svga->writemask;
     uint8_t count;
     uint8_t i;
+    ibm8514_k_touch_bytes(svga, 0, 0xffffffff); /* KairoX86#238 */
 
     cycles -= svga->monitor->mon_video_timing_write_b;
 
@@ -7648,6 +7355,7 @@ mach32_svga_writew(uint32_t addr, uint16_t val, void *priv)
 {
     svga_t *svga = (svga_t *) priv;
     mach_t *mach = (mach_t *) svga->priv;
+    ibm8514_k_touch_bytes(svga, 0, 0xffffffff); /* KairoX86#238 */
 
     if (!svga->fast) {
         mach32_svga_write(addr, val, priv);
@@ -7685,6 +7393,7 @@ mach32_svga_writel(uint32_t addr, uint32_t val, void *priv)
 {
     svga_t *svga = (svga_t *) priv;
     mach_t *mach = (mach_t *) svga->priv;
+    ibm8514_k_touch_bytes(svga, 0, 0xffffffff); /* KairoX86#238 */
 
     if (!svga->fast) {
         mach32_svga_write(addr, val, priv);
@@ -7726,6 +7435,7 @@ mach32_writew_linear(uint32_t addr, uint16_t val, mach_t *mach)
 {
     svga_t *svga = &mach->svga;
     ibm8514_t *dev = (ibm8514_t *) svga->dev8514;
+    ibm8514_k_touch_bytes(svga, 0, 0xffffffff); /* KairoX86#238 */
 
     cycles -= svga->monitor->mon_video_timing_write_w;
     if (!dev->vram_512k_8514 && ((mach->accel.ext_ge_config & 0x30) == 0x00))
@@ -7754,6 +7464,7 @@ mach32_writel_linear(uint32_t addr, uint32_t val, mach_t *mach)
 {
     svga_t *svga = &mach->svga;
     ibm8514_t *dev = (ibm8514_t *) svga->dev8514;
+    ibm8514_k_touch_bytes(svga, 0, 0xffffffff); /* KairoX86#238 */
 
     cycles -= svga->monitor->mon_video_timing_write_l;
 
@@ -7784,6 +7495,7 @@ mach32_read_common(uint32_t addr, int linear, mach_t *mach, svga_t *svga)
     uint8_t          count;
     uint8_t          temp;
     uint8_t          ret = 0x00;
+    ibm8514_k_touch_bytes(svga, 0, 0xffffffff); /* KairoX86#238 */
 
     cycles -= svga->monitor->mon_video_timing_read_b;
 
@@ -7997,6 +7709,7 @@ mach32_readw_linear(uint32_t addr, mach_t *mach)
     svga_t          *svga       = &mach->svga;
     ibm8514_t       *dev        = (ibm8514_t *) svga->dev8514;
     uint16_t         ret;
+    ibm8514_k_touch_bytes(svga, 0, 0xffffffff); /* KairoX86#238 */
 
     cycles -= svga->monitor->mon_video_timing_read_w;
     if (!dev->vram_512k_8514 && ((mach->accel.ext_ge_config & 0x30) == 0x00)) {
@@ -8025,6 +7738,7 @@ mach32_readl_linear(uint32_t addr, mach_t *mach)
     svga_t          *svga       = &mach->svga;
     ibm8514_t       *dev        = (ibm8514_t *) svga->dev8514;
     uint32_t         ret;
+    ibm8514_k_touch_bytes(svga, 0, 0xffffffff); /* KairoX86#238 */
 
     cycles -= svga->monitor->mon_video_timing_read_l;
     if (!dev->vram_512k_8514 && ((mach->accel.ext_ge_config & 0x30) == 0x00)) {
@@ -9431,7 +9145,7 @@ mach8_init(const device_t *info)
                       NULL);
         dev->vram_size   = dev->vram_amount << 10;
         dev->vram_mask   = dev->vram_size - 1;
-        dev->vram        = calloc(dev->vram_size, 1);
+        dev->vram        = kairo_gpu_on ? kairo_gpu_alloc(dev->vram_size) : calloc(dev->vram_size, 1); /* KairoX86#238 */
         dev->changedvram = calloc((dev->vram_size >> 12) + 1, 1);
         if (dev->vram_amount == 512)
             dev->vram_mask &= 0xfffffff7;
@@ -9457,6 +9171,7 @@ mach8_init(const device_t *info)
     }
     dev->bpp = 0;
     svga->getclock = ics2494_getclock;
+    ibm8514_k_open(svga); /* KairoX86#238 */
     if (!ATI_MACH32) {
         svga->clock_gen8514 = svga->clock_gen;
         svga->getclock8514 = svga->getclock;
@@ -9608,7 +9323,11 @@ mach_close(void *priv)
     ibm8514_t *dev  = (ibm8514_t *) svga->dev8514;
 
     if (dev) {
-        free(dev->vram);
+        ibm8514_k_close(svga); /* KairoX86#238 */
+        if (kairo_gpu_on)
+            kairo_gpu_free(dev->vram);
+        else
+            free(dev->vram);
         free(dev->changedvram);
 
         free(dev);

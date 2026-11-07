@@ -43,6 +43,9 @@
 #include <86box/vid_svga_render.h>
 #include <86box/vid_ati_eeprom.h>
 #include <86box/vid_ati_mach8.h>
+#include <86box/kairo_gpu.h> /* KairoX86#238 */
+#include <86box/kairo_gpu_seg.h>
+#include <86box/kairo_gpu_ibm8514.h>
 #include "cpu.h"
 
 #ifdef CLAMP
@@ -123,18 +126,24 @@ CLAMP(int16_t in, int16_t min, int16_t max)
         temp |= (dev->vram[(dev->accel.dest + (cx) + (n + 1)) & dev->vram_mask] << 8);              \
     }                                                                                               \
 
-#define READ(addr, dat)                                         \
-    if (ATI_MACH32) {                                           \
-        if (dev->bpp)                                           \
-            dat = vga_vram_w[(addr) & (svga->vram_mask >> 1)];  \
-        else                                                    \
-            dat = svga->vram[(addr) & svga->vram_mask];         \
-    } else {                                                    \
-        dat = (dev->vram[(addr) & (dev->vram_mask)]);           \
-    }
+#define READ(addr, dat)                                             \
+    do {                                                            \
+        IBM8514_K_TOUCH(svga, dev, (addr)); /* KairoX86#238 */      \
+        if (ATI_MACH32) {                                           \
+            if (dev->bpp)                                           \
+                dat = vga_vram_w[(addr) & (svga->vram_mask >> 1)];  \
+            else                                                    \
+                dat = svga->vram[(addr) & svga->vram_mask];         \
+        } else {                                                    \
+            dat = (dev->vram[(addr) & (dev->vram_mask)]);           \
+        }                                                           \
+    } while (0)
 
-#define READ_HIGH(addr, dat)                            \
-    dat |= (dev->vram[(addr) & (dev->vram_mask)] << 8);
+#define READ_HIGH(addr, dat)                                    \
+    do {                                                        \
+        IBM8514_K_TOUCH(svga, dev, (addr)); /* KairoX86#238 */  \
+        dat |= (dev->vram[(addr) & (dev->vram_mask)] << 8);     \
+    } while (0)
 
 #define MIX(mixmode, dest_dat, src_dat)                                                                \
     {                                                                                                  \
@@ -252,19 +261,174 @@ CLAMP(int16_t in, int16_t min, int16_t max)
         }                                                                                              \
     }
 
-#define WRITE(addr, dat)                                                                                        \
-    if (ATI_MACH32) {                                                                                           \
-        if (dev->bpp) {                                                                                         \
-            vga_vram_w[(addr) & (svga->vram_mask >> 1)]           = dat;                                        \
-            svga->changedvram[(((addr)) & (svga->vram_mask >> 1)) >> 11] = svga->monitor->mon_changeframecount; \
-        } else {                                                                                                \
-            svga->vram[(addr) & svga->vram_mask]                  = dat;                                        \
-            svga->changedvram[((addr) & svga->vram_mask) >> 12] = svga->monitor->mon_changeframecount;          \
-        }                                                                                                       \
-    } else {                                                                                                    \
-            dev->vram[((addr)) & (dev->vram_mask)]                = dat;                                        \
-            dev->changedvram[(((addr)) & (dev->vram_mask)) >> 12] = svga->monitor->mon_changeframecount;        \
+#define WRITE(addr, dat)                                                                                            \
+    do {                                                                                                            \
+        IBM8514_K_TOUCH(svga, dev, (addr)); /* KairoX86#238 */                                                      \
+        if (ATI_MACH32) {                                                                                           \
+            if (dev->bpp) {                                                                                         \
+                vga_vram_w[(addr) & (svga->vram_mask >> 1)]           = dat;                                        \
+                svga->changedvram[(((addr)) & (svga->vram_mask >> 1)) >> 11] = svga->monitor->mon_changeframecount; \
+            } else {                                                                                                \
+                svga->vram[(addr) & svga->vram_mask]                  = dat;                                        \
+                svga->changedvram[((addr) & svga->vram_mask) >> 12] = svga->monitor->mon_changeframecount;          \
+            }                                                                                                       \
+        } else {                                                                                                    \
+                dev->vram[((addr)) & (dev->vram_mask)]                = dat;                                        \
+                dev->changedvram[(((addr)) & (dev->vram_mask)) >> 12] = svga->monitor->mon_changeframecount;        \
+        }                                                                                                           \
+    } while (0)
+
+/* KairoX86#238: the drawing engine's batch on the GPU, with Hardware acceleration on */
+struct ibm8514_k_gpu {
+    kairo_seg_t     *seg;
+    kairo_seg_run_t *run[2];             /* 1 and 2-byte pixels */
+    uint32_t         record[I8_WORDS];   /* the operation last put in the batch */
+    uint32_t         next[I8_WORDS];     /* the operation of the pixels being recorded */
+    uint64_t         generation;
+    int              issued;
+    int              in_order;
+};
+
+/* The run's operation in the batch: the record again only where it differs or the batch has been drawn */
+static void
+ibm8514_k_op(void *priv, bool in_order)
+{
+    struct ibm8514_k_gpu *g = (struct ibm8514_k_gpu *) priv;
+
+    kairo_seg_make_room(g->seg);
+    if (g->issued && (g->in_order == in_order) && (g->generation == kairo_seg_generation(g->seg)) &&
+        !memcmp(g->record, g->next, sizeof(g->record)))
+        return;
+    memcpy(kairo_seg_op(g->seg, in_order), g->next, sizeof(g->next));
+    memcpy(g->record, g->next, sizeof(g->record));
+    g->generation = kairo_seg_generation(g->seg);
+    g->in_order   = in_order;
+    g->issued     = 1;
+}
+
+/* A pixel's first byte in the engine's memory: the pixel address addr as READ and WRITE take it */
+static uint32_t
+ibm8514_k_byte(const ibm8514_t *dev, const svga_t *svga, uint32_t addr)
+{
+    if (ATI_MACH32)
+        return dev->bpp ? ((addr & (svga->vram_mask >> 1)) << 1) : (addr & svga->vram_mask);
+    return addr & dev->vram_mask;
+}
+
+void
+ibm8514_k_pixel(svga_t *svga, const ibm8514_k_px_t *px, uint32_t addr, uint32_t kind, uint32_t src)
+{
+    ibm8514_t            *dev           = (ibm8514_t *) svga->dev8514;
+    struct ibm8514_k_gpu *g             = dev->k_gpu;
+    uint32_t              rec[I8_WORDS] = { 0 };
+
+    if (dev->bpp && !ATI_MACH32)
+        fatal("8514/A on the GPU: 16-bit pixels in the 8514/A's own memory\n");
+    rec[I8_WRT_MASK] = px->wrt_mask;
+    rec[I8_CMP]      = px->compare;
+    rec[I8_MODE]     = ((uint32_t) px->compare_mode & 0xff) | ((uint32_t) px->cmp_fn << 8);
+    rec[I8_FLAGS]    = (dev->bpp ? I8F_W16 : 0) | (px->mach ? I8F_MACH : 0);
+    rec[I8_BYTES]    = dev->bpp ? 2 : 1;
+    /* A run is of one operation */
+    if (memcmp(rec, g->next, sizeof(rec))) {
+        ibm8514_k_flush(svga);
+        memcpy(g->next, rec, sizeof(rec));
     }
+
+    const uint32_t words[I8_PIXEL_WORDS] = { kind, src };
+
+    kairo_seg_run_pixel(g->run[dev->bpp ? 1 : 0], ibm8514_k_byte(dev, svga, addr), words, NULL);
+}
+
+void
+ibm8514_k_flush(svga_t *svga)
+{
+    const ibm8514_t *dev = (ibm8514_t *) svga->dev8514;
+
+    if (dev->k_gpu != NULL)
+        for (int i = 0; i < 2; i++)
+            kairo_seg_run_flush(dev->k_gpu->run[i]);
+}
+
+void
+ibm8514_k_drain(svga_t *svga)
+{
+    const ibm8514_t *dev = (ibm8514_t *) svga->dev8514;
+
+    if (dev->k_gpu != NULL) {
+        ibm8514_k_flush(svga);
+        kairo_seg_drain(dev->k_gpu->seg);
+    }
+}
+
+void
+ibm8514_k_touch(svga_t *svga, uint32_t addr)
+{
+    const ibm8514_t *dev = (ibm8514_t *) svga->dev8514;
+
+    kairo_seg_touch(dev->k_gpu->seg, ibm8514_k_byte(dev, svga, addr), 2);
+}
+
+void
+ibm8514_k_touch_bytes(svga_t *svga, uint32_t addr, uint32_t len)
+{
+    const ibm8514_t *dev = (ibm8514_t *) svga->dev8514;
+
+    if (dev->k_gpu != NULL)
+        kairo_seg_touch(dev->k_gpu->seg, addr, len);
+}
+
+/* The SVGA core's memory handlers and display on the Mach32, whose memory the engine draws on (svga->kairo_touch) */
+static void
+ibm8514_svga_touch(svga_t *svga, uint32_t addr, uint32_t len)
+{
+    ibm8514_k_touch_bytes(svga, addr, len);
+}
+
+void
+ibm8514_k_open(svga_t *svga)
+{
+    ibm8514_t            *dev = (ibm8514_t *) svga->dev8514;
+    struct ibm8514_k_gpu *g;
+    uint8_t              *vram;
+    uint32_t              mask;
+    uint8_t              *changed;
+
+    if (!kairo_gpu_on)
+        return;
+    g = calloc(1, sizeof(*g));
+    if (g == NULL)
+        fatal("8514/A on the GPU: no memory\n");
+    if (ATI_MACH32) {
+        vram    = svga->vram;
+        mask    = svga->vram_mask;
+        changed = svga->changedvram;
+    } else {
+        vram    = dev->vram;
+        mask    = dev->vram_size - 1;
+        changed = dev->changedvram;
+    }
+    g->seg = kairo_ibm8514_open(vram, mask, changed, &svga->monitor->mon_changeframecount);
+    for (int i = 0; i < 2; i++)
+        g->run[i] = kairo_seg_run_open(g->seg, mask, i + 1, I8_PIXEL_WORDS, 0, ibm8514_k_op, g);
+    dev->k_gpu = g;
+    if (ATI_MACH32)
+        svga->kairo_touch = ibm8514_svga_touch;
+}
+
+void
+ibm8514_k_close(svga_t *svga)
+{
+    ibm8514_t *dev = (ibm8514_t *) svga->dev8514;
+
+    if (dev->k_gpu == NULL)
+        return;
+    kairo_seg_close(dev->k_gpu->seg);
+    for (int i = 0; i < 2; i++)
+        kairo_seg_run_close(dev->k_gpu->run[i]);
+    free(dev->k_gpu);
+    dev->k_gpu = NULL;
+}
 
 int ibm8514_active = 0;
 
@@ -1002,6 +1166,7 @@ ibm8514_accel_in_fifo(svga_t *svga, uint16_t port, int len)
             if (ibm8514_cpu_dest(svga)) {
                 if (len == 2) {
                     cmd = (dev->accel.cmd >> 13);
+                    ibm8514_k_drain(svga); /* KairoX86#238 */
                     READ_PIXTRANS_WORD(dev->accel.cx, 0);
                     if (dev->accel.input || dev->accel.input3) {
                         ibm8514_accel_out_pixtrans(svga, port, temp & 0xff, len);
@@ -1222,8 +1387,40 @@ ibm8514_rect_width(ibm8514_t *dev)
     return w;
 }
 
+/* KairoX86#238: one pixel of the walk at addr: the destination read, the colour compare (cmp), the mix (the foreground
+   one where mix is set) with the source src_dat, the write mask and the write. With Hardware acceleration on, recorded
+   for the GPU. */
+static void
+ibm8514_draw(ibm8514_t *dev, svga_t *svga, const ibm8514_k_px_t *px, uint32_t addr, int mix, uint16_t src_dat, int cmp)
+{
+    uint16_t *vga_vram_w = (uint16_t *) svga->vram;
+    uint16_t  dest_dat;
+    uint16_t  old_dest_dat;
+
+    if (dev->k_gpu != NULL) {
+        ibm8514_k_pixel(svga, px, addr, (uint32_t) (mix ? dev->accel.frgd_mix : dev->accel.bkgd_mix) | (cmp ? I8K_CMP : 0), src_dat);
+        return;
+    }
+    READ(addr, dest_dat);
+    if (cmp && ibm8514_pixel_kept(dev, px->cmp_fn, px->compare_mode, dest_dat, px->compare, px->wrt_mask))
+        return;
+    old_dest_dat = dest_dat;
+    MIX(mix, dest_dat, src_dat);
+    dest_dat = (dest_dat & px->wrt_mask) | (old_dest_dat & ~px->wrt_mask);
+    WRITE(addr, dest_dat);
+}
+
+static void ibm8514_accel_start_walk(int count, int cpu_input, uint32_t mix_dat, uint32_t cpu_dat, svga_t *svga);
+
 void
 ibm8514_accel_start(int count, int cpu_input, uint32_t mix_dat, uint32_t cpu_dat, svga_t *svga, UNUSED(int len))
+{
+    ibm8514_accel_start_walk(count, cpu_input, mix_dat, cpu_dat, svga);
+    ibm8514_k_flush(svga); /* KairoX86#238 */
+}
+
+static void
+ibm8514_accel_start_walk(int count, int cpu_input, uint32_t mix_dat, uint32_t cpu_dat, svga_t *svga)
 {
     ibm8514_t *dev     = (ibm8514_t *) svga->dev8514;
     uint16_t  *vga_vram_w = (uint16_t *) svga->vram;
@@ -1267,6 +1464,8 @@ ibm8514_accel_start(int count, int cpu_input, uint32_t mix_dat, uint32_t cpu_dat
 
     frgd_mix = dev->accel.frgd_sel;
     bkgd_mix = dev->accel.bkgd_sel;
+
+    const ibm8514_k_px_t px = { wrt_mask, compare, ati_cmp_fn, compare_mode, 0 }; /* KairoX86#238 */
 
     if (cpu_input) {
         if ((dev->accel.cmd & 0x02) || (pixcntl == 2)) {
@@ -1491,17 +1690,12 @@ ibm8514_accel_start(int count, int cpu_input, uint32_t mix_dat, uint32_t cpu_dat
                                     break;
                             }
 
-                            READ((dev->accel.cy * dev->pitch) + (dev->accel.cx & 0x7ff), dest_dat);
-
-                            if (!ibm8514_pixel_kept(dev, ati_cmp_fn, compare_mode, dest_dat, compare, wrt_mask)) {
-                                old_dest_dat = dest_dat;
-                                MIX(mix_dat & mix_mask, dest_dat, src_dat);
-                                dest_dat = (dest_dat & wrt_mask) | (old_dest_dat & ~wrt_mask);
+                            {
                                 if (dev->accel.ssv_draw) {
                                     if ((dev->accel.cmd & 0x04) && dev->accel.ssv_len) {
-                                        WRITE((dev->accel.cy * dev->pitch) + (dev->accel.cx & 0x7ff), dest_dat);
+                                        ibm8514_draw(dev, svga, &px, (dev->accel.cy * dev->pitch) + (dev->accel.cx & 0x7ff), mix_dat & mix_mask, src_dat, 1);
                                     } else if (!(dev->accel.cmd & 0x04)) {
-                                        WRITE((dev->accel.cy * dev->pitch) + (dev->accel.cx & 0x7ff), dest_dat);
+                                        ibm8514_draw(dev, svga, &px, (dev->accel.cy * dev->pitch) + (dev->accel.cx & 0x7ff), mix_dat & mix_mask, src_dat, 1);
                                     }
                                 }
                             }
@@ -1587,18 +1781,13 @@ ibm8514_accel_start(int count, int cpu_input, uint32_t mix_dat, uint32_t cpu_dat
                                     break;
                             }
 
-                            READ((dev->accel.cy * dev->pitch) + (dev->accel.cx & 0x7ff), dest_dat);
-
-                            if (!ibm8514_pixel_kept(dev, ati_cmp_fn, compare_mode, dest_dat, compare, wrt_mask)) {
-                                old_dest_dat = dest_dat;
-                                MIX(mix_dat & mix_mask, dest_dat, src_dat);
-                                dest_dat = (dest_dat & wrt_mask) | (old_dest_dat & ~wrt_mask);
+                            {
 
                                 if (dev->accel.ssv_draw) {
                                     if ((dev->accel.cmd & 0x04) && dev->accel.ssv_len) {
-                                        WRITE((dev->accel.cy * dev->pitch) + (dev->accel.cx & 0x7ff), dest_dat);
+                                        ibm8514_draw(dev, svga, &px, (dev->accel.cy * dev->pitch) + (dev->accel.cx & 0x7ff), mix_dat & mix_mask, src_dat, 1);
                                     } else if (!(dev->accel.cmd & 0x04)) {
-                                        WRITE((dev->accel.cy * dev->pitch) + (dev->accel.cx & 0x7ff), dest_dat);
+                                        ibm8514_draw(dev, svga, &px, (dev->accel.cy * dev->pitch) + (dev->accel.cx & 0x7ff), mix_dat & mix_mask, src_dat, 1);
                                     }
                                 }
                             }
@@ -1873,34 +2062,29 @@ ibm8514_accel_start(int count, int cpu_input, uint32_t mix_dat, uint32_t cpu_dat
                                     break;
                             }
 
-                            READ((dev->accel.cy * dev->pitch) + (dev->accel.cx & x_mask), dest_dat);
-
-                            if (!ibm8514_pixel_kept(dev, ati_cmp_fn, compare_mode, dest_dat, compare, wrt_mask)) {
-                                old_dest_dat = dest_dat;
-                                MIX(mix_dat & ((dev->accel.cmd & 0x02) ? 0x01 : mix_mask), dest_dat, src_dat);
-                                dest_dat = (dest_dat & wrt_mask) | (old_dest_dat & ~wrt_mask);
+                            {
                                 if ((dev->accel.cmd & 0x02) && ibm8514_cpu_src(svga)) {
                                     if (!(dev->accel.cmd & 0x1000)) {
                                         if (dev->accel.x_count >= and3) {
                                             if ((dev->accel.cmd & 0x04) && dev->accel.sy) {
-                                                WRITE((dev->accel.cy * dev->pitch) + (dev->accel.cx & x_mask), dest_dat);
+                                                ibm8514_draw(dev, svga, &px, (dev->accel.cy * dev->pitch) + (dev->accel.cx & x_mask), mix_dat & ((dev->accel.cmd & 0x02) ? 0x01 : mix_mask), src_dat, 1);
                                             } else if (!(dev->accel.cmd & 0x04)) {
-                                                WRITE((dev->accel.cy * dev->pitch) + (dev->accel.cx & x_mask), dest_dat);
+                                                ibm8514_draw(dev, svga, &px, (dev->accel.cy * dev->pitch) + (dev->accel.cx & x_mask), mix_dat & ((dev->accel.cmd & 0x02) ? 0x01 : mix_mask), src_dat, 1);
                                             }
                                         }
                                     } else {
                                         if ((dev->accel.cmd & 0x04) && dev->accel.sy) {
-                                            WRITE((dev->accel.cy * dev->pitch) + (dev->accel.cx & x_mask), dest_dat);
+                                            ibm8514_draw(dev, svga, &px, (dev->accel.cy * dev->pitch) + (dev->accel.cx & x_mask), mix_dat & ((dev->accel.cmd & 0x02) ? 0x01 : mix_mask), src_dat, 1);
                                         } else if (!(dev->accel.cmd & 0x04)) {
-                                            WRITE((dev->accel.cy * dev->pitch) + (dev->accel.cx & x_mask), dest_dat);
+                                            ibm8514_draw(dev, svga, &px, (dev->accel.cy * dev->pitch) + (dev->accel.cx & x_mask), mix_dat & ((dev->accel.cmd & 0x02) ? 0x01 : mix_mask), src_dat, 1);
                                         }
                                     }
                                 } else {
                                     if (ibm8514_cpu_src(svga) || !cpu_input) {
                                         if ((dev->accel.cmd & 0x04) && dev->accel.sy) {
-                                            WRITE((dev->accel.cy * dev->pitch) + (dev->accel.cx & x_mask), dest_dat);
+                                            ibm8514_draw(dev, svga, &px, (dev->accel.cy * dev->pitch) + (dev->accel.cx & x_mask), mix_dat & ((dev->accel.cmd & 0x02) ? 0x01 : mix_mask), src_dat, 1);
                                         } else if (!(dev->accel.cmd & 0x04)) {
-                                            WRITE((dev->accel.cy * dev->pitch) + (dev->accel.cx & x_mask), dest_dat);
+                                            ibm8514_draw(dev, svga, &px, (dev->accel.cy * dev->pitch) + (dev->accel.cx & x_mask), mix_dat & ((dev->accel.cmd & 0x02) ? 0x01 : mix_mask), src_dat, 1);
                                         }
                                     }
                                 }
@@ -2017,16 +2201,11 @@ ibm8514_accel_start(int count, int cpu_input, uint32_t mix_dat, uint32_t cpu_dat
                                         break;
                                 }
 
-                            READ((dev->accel.cy * dev->pitch) + (dev->accel.cx & x_mask), dest_dat);
-
-                            if (!ibm8514_pixel_kept(dev, ati_cmp_fn, compare_mode, dest_dat, compare, wrt_mask)) {
-                                old_dest_dat = dest_dat;
-                                MIX(mix_dat & 0x01, dest_dat, src_dat);
-                                dest_dat = (dest_dat & wrt_mask) | (old_dest_dat & ~wrt_mask);
+                            {
                                 if ((dev->accel.cmd & 0x04) && dev->accel.sy) {
-                                    WRITE((dev->accel.cy * dev->pitch) + (dev->accel.cx & x_mask), dest_dat);
+                                    ibm8514_draw(dev, svga, &px, (dev->accel.cy * dev->pitch) + (dev->accel.cx & x_mask), mix_dat & 0x01, src_dat, 1);
                                 } else if (!(dev->accel.cmd & 0x04)) {
-                                    WRITE((dev->accel.cy * dev->pitch) + (dev->accel.cx & x_mask), dest_dat);
+                                    ibm8514_draw(dev, svga, &px, (dev->accel.cy * dev->pitch) + (dev->accel.cx & x_mask), mix_dat & 0x01, src_dat, 1);
                                 }
                             }
                         }
@@ -2106,13 +2285,8 @@ ibm8514_accel_start(int count, int cpu_input, uint32_t mix_dat, uint32_t cpu_dat
                                         break;
                                 }
 
-                                READ((dev->accel.cy * dev->pitch) + (dev->accel.cx & x_mask), dest_dat);
-
-                                if (!ibm8514_pixel_kept(dev, ati_cmp_fn, compare_mode, dest_dat, compare, wrt_mask)) {
-                                    old_dest_dat = dest_dat;
-                                    MIX(mix_dat & mix_mask, dest_dat, src_dat);
-                                    dest_dat = (dest_dat & wrt_mask) | (old_dest_dat & ~wrt_mask);
-                                    WRITE((dev->accel.cy * dev->pitch) + (dev->accel.cx & x_mask), dest_dat);
+                                {
+                                    ibm8514_draw(dev, svga, &px, (dev->accel.cy * dev->pitch) + (dev->accel.cx & x_mask), mix_dat & mix_mask, src_dat, 1);
                                 }
                             }
                         }
@@ -2253,11 +2427,7 @@ ibm8514_accel_start(int count, int cpu_input, uint32_t mix_dat, uint32_t cpu_dat
                                         src_dat = 0;
                                         break;
                                 }
-                                READ((y * dev->pitch) + x, dest_dat);
-                                old_dest_dat = dest_dat;
-                                MIX(mix_dat & mix_mask, dest_dat, src_dat);
-                                dest_dat = (dest_dat & wrt_mask) | (old_dest_dat & ~wrt_mask);
-                                WRITE((y * dev->pitch) + x, dest_dat);
+                                ibm8514_draw(dev, svga, &px, (y * dev->pitch) + x, mix_dat & mix_mask, src_dat, 0);
                             }
                         }
                         if (++dev->accel.sy >= rows) {
@@ -2317,11 +2487,7 @@ ibm8514_accel_start(int count, int cpu_input, uint32_t mix_dat, uint32_t cpu_dat
                                 src_dat = 0;
                                 break;
                         }
-                        READ((dev->accel.cy * dev->pitch) + dev->accel.cx, dest_dat);
-                        old_dest_dat = dest_dat;
-                        MIX(mix_dat & mix_mask, dest_dat, src_dat);
-                        dest_dat = (dest_dat & wrt_mask) | (old_dest_dat & ~wrt_mask);
-                        WRITE((dev->accel.cy * dev->pitch) + dev->accel.cx, dest_dat);
+                        ibm8514_draw(dev, svga, &px, (dev->accel.cy * dev->pitch) + dev->accel.cx, mix_dat & mix_mask, src_dat, 0);
                     }
                     mix_dat <<= 1;
                     mix_dat |= 1;
@@ -2498,33 +2664,28 @@ ibm8514_accel_start(int count, int cpu_input, uint32_t mix_dat, uint32_t cpu_dat
                                         break;
                                 }
 
-                                READ(dev->accel.dest + (dev->accel.cx & x_mask), dest_dat);
-
-                                if (!ibm8514_pixel_kept(dev, ati_cmp_fn, compare_mode, dest_dat, compare, wrt_mask)) {
-                                    old_dest_dat = dest_dat;
-                                    MIX(mix_dat & ((dev->accel.cmd & 0x02) ? 0x01 : mix_mask), dest_dat, src_dat);
-                                    dest_dat = (dest_dat & wrt_mask) | (old_dest_dat & ~wrt_mask);
+                                {
                                     if (dev->accel.cmd & 0x02) {
                                         if (dev->accel.cmd & 0x1000) {
                                             if ((dev->accel.cmd & 0x04) && (dev->accel.sx || ATI_GRAPHICS_ULTRA)) { /*GU: the row is already one short*/
-                                                WRITE(dev->accel.dest + (dev->accel.cx & x_mask), dest_dat);
+                                                ibm8514_draw(dev, svga, &px, dev->accel.dest + (dev->accel.cx & x_mask), mix_dat & ((dev->accel.cmd & 0x02) ? 0x01 : mix_mask), src_dat, 1);
                                             } else if (!(dev->accel.cmd & 0x04)) {
-                                                WRITE(dev->accel.dest + (dev->accel.cx & x_mask), dest_dat);
+                                                ibm8514_draw(dev, svga, &px, dev->accel.dest + (dev->accel.cx & x_mask), mix_dat & ((dev->accel.cmd & 0x02) ? 0x01 : mix_mask), src_dat, 1);
                                             }
                                         } else {
                                             if (dev->accel.x_count >= and3) {
                                                 if ((dev->accel.cmd & 0x04) && (dev->accel.sx || ATI_GRAPHICS_ULTRA)) { /*GU: the row is already one short*/
-                                                    WRITE(dev->accel.dest + (dev->accel.cx & x_mask), dest_dat);
+                                                    ibm8514_draw(dev, svga, &px, dev->accel.dest + (dev->accel.cx & x_mask), mix_dat & ((dev->accel.cmd & 0x02) ? 0x01 : mix_mask), src_dat, 1);
                                                 } else if (!(dev->accel.cmd & 0x04)) {
-                                                    WRITE(dev->accel.dest + (dev->accel.cx & x_mask), dest_dat);
+                                                    ibm8514_draw(dev, svga, &px, dev->accel.dest + (dev->accel.cx & x_mask), mix_dat & ((dev->accel.cmd & 0x02) ? 0x01 : mix_mask), src_dat, 1);
                                                 }
                                             }
                                         }
                                     } else {
                                         if ((dev->accel.cmd & 0x04) && (dev->accel.sx || ATI_GRAPHICS_ULTRA)) { /*GU: the row is already one short*/
-                                            WRITE(dev->accel.dest + (dev->accel.cx & x_mask), dest_dat);
+                                            ibm8514_draw(dev, svga, &px, dev->accel.dest + (dev->accel.cx & x_mask), mix_dat & ((dev->accel.cmd & 0x02) ? 0x01 : mix_mask), src_dat, 1);
                                         } else if (!(dev->accel.cmd & 0x04)) {
-                                            WRITE(dev->accel.dest + (dev->accel.cx & x_mask), dest_dat);
+                                            ibm8514_draw(dev, svga, &px, dev->accel.dest + (dev->accel.cx & x_mask), mix_dat & ((dev->accel.cmd & 0x02) ? 0x01 : mix_mask), src_dat, 1);
                                         }
                                     }
                                 }
@@ -2653,33 +2814,28 @@ ibm8514_accel_start(int count, int cpu_input, uint32_t mix_dat, uint32_t cpu_dat
                                         break;
                                 }
 
-                                READ(dev->accel.dest + (dev->accel.cx & x_mask), dest_dat);
-
-                                if (!ibm8514_pixel_kept(dev, ati_cmp_fn, compare_mode, dest_dat, compare, wrt_mask)) {
-                                    old_dest_dat = dest_dat;
-                                    MIX(mix_dat & ((dev->accel.cmd & 0x02) ? 0x01 : mix_mask), dest_dat, src_dat);
-                                    dest_dat = (dest_dat & wrt_mask) | (old_dest_dat & ~wrt_mask);
+                                {
                                     if (dev->accel.cmd & 0x02) {
                                         if (dev->accel.cmd & 0x1000) {
                                             if ((dev->accel.cmd & 0x04) && (dev->accel.sx || ATI_GRAPHICS_ULTRA)) { /*GU: the row is already one short*/
-                                                WRITE(dev->accel.dest + (dev->accel.cx & x_mask), dest_dat);
+                                                ibm8514_draw(dev, svga, &px, dev->accel.dest + (dev->accel.cx & x_mask), mix_dat & ((dev->accel.cmd & 0x02) ? 0x01 : mix_mask), src_dat, 1);
                                             } else if (!(dev->accel.cmd & 0x04)) {
-                                                WRITE(dev->accel.dest + (dev->accel.cx & x_mask), dest_dat);
+                                                ibm8514_draw(dev, svga, &px, dev->accel.dest + (dev->accel.cx & x_mask), mix_dat & ((dev->accel.cmd & 0x02) ? 0x01 : mix_mask), src_dat, 1);
                                             }
                                         } else {
                                             if (dev->accel.x_count >= and3) {
                                                 if ((dev->accel.cmd & 0x04) && (dev->accel.sx || ATI_GRAPHICS_ULTRA)) { /*GU: the row is already one short*/
-                                                    WRITE(dev->accel.dest + (dev->accel.cx & x_mask), dest_dat);
+                                                    ibm8514_draw(dev, svga, &px, dev->accel.dest + (dev->accel.cx & x_mask), mix_dat & ((dev->accel.cmd & 0x02) ? 0x01 : mix_mask), src_dat, 1);
                                                 } else if (!(dev->accel.cmd & 0x04)) {
-                                                    WRITE(dev->accel.dest + (dev->accel.cx & x_mask), dest_dat);
+                                                    ibm8514_draw(dev, svga, &px, dev->accel.dest + (dev->accel.cx & x_mask), mix_dat & ((dev->accel.cmd & 0x02) ? 0x01 : mix_mask), src_dat, 1);
                                                 }
                                             }
                                         }
                                     } else {
                                         if ((dev->accel.cmd & 0x04) && (dev->accel.sx || ATI_GRAPHICS_ULTRA)) { /*GU: the row is already one short*/
-                                            WRITE(dev->accel.dest + (dev->accel.cx & x_mask), dest_dat);
+                                            ibm8514_draw(dev, svga, &px, dev->accel.dest + (dev->accel.cx & x_mask), mix_dat & ((dev->accel.cmd & 0x02) ? 0x01 : mix_mask), src_dat, 1);
                                         } else if (!(dev->accel.cmd & 0x04)) {
-                                            WRITE(dev->accel.dest + (dev->accel.cx & x_mask), dest_dat);
+                                            ibm8514_draw(dev, svga, &px, dev->accel.dest + (dev->accel.cx & x_mask), mix_dat & ((dev->accel.cmd & 0x02) ? 0x01 : mix_mask), src_dat, 1);
                                         }
                                     }
                                 }
@@ -2773,13 +2929,8 @@ patt_row:
                                             break;
                                     }
 
-                                    READ(dev->accel.dest + (dev->accel.cx & x_mask), dest_dat);
-
-                                    if (!ibm8514_pixel_kept(dev, ati_cmp_fn, compare_mode, dest_dat, compare, wrt_mask)) {
-                                        old_dest_dat = dest_dat;
-                                        MIX(mix_dat & mix_mask, dest_dat, src_dat);
-                                        dest_dat = (dest_dat & wrt_mask) | (old_dest_dat & ~wrt_mask);
-                                        WRITE(dev->accel.dest + (dev->accel.cx & x_mask), dest_dat);
+                                    {
+                                        ibm8514_draw(dev, svga, &px, dev->accel.dest + (dev->accel.cx & x_mask), mix_dat & mix_mask, src_dat, 1);
                                     }
                                 }
 
@@ -2852,13 +3003,8 @@ patt_row:
                                             break;
                                     }
 
-                                    READ(dev->accel.dest + (dev->accel.cx & x_mask), dest_dat);
-
-                                    if (!ibm8514_pixel_kept(dev, ati_cmp_fn, compare_mode, dest_dat, compare, wrt_mask)) {
-                                        old_dest_dat = dest_dat;
-                                        MIX(mix_dat & 0x01, dest_dat, src_dat);
-                                        dest_dat = (dest_dat & wrt_mask) | (old_dest_dat & ~wrt_mask);
-                                        WRITE(dev->accel.dest + (dev->accel.cx & x_mask), dest_dat);
+                                    {
+                                        ibm8514_draw(dev, svga, &px, dev->accel.dest + (dev->accel.cx & x_mask), mix_dat & 0x01, src_dat, 1);
                                     }
                                 }
 
@@ -3048,15 +3194,10 @@ patt_row:
                                         break;
                                 }
 
-                                READ(dev->accel.dest + (dev->accel.cx & x_mask), dest_dat);
-
-                                if (!ibm8514_pixel_kept(dev, ati_cmp_fn, compare_mode, dest_dat, compare, wrt_mask)) {
-                                    old_dest_dat = dest_dat;
-                                    MIX(mix_dat & mix_mask, dest_dat, src_dat);
-                                    dest_dat = (dest_dat & wrt_mask) | (old_dest_dat & ~wrt_mask);
+                                {
 
                                     if (dev->accel.cmd & 0x10) {
-                                        WRITE(dev->accel.dest + (dev->accel.cx & x_mask), dest_dat);
+                                        ibm8514_draw(dev, svga, &px, dev->accel.dest + (dev->accel.cx & x_mask), mix_dat & mix_mask, src_dat, 1);
                                     }
                                 }
                             } else
@@ -3172,20 +3313,15 @@ patt_row:
                         }
 
 
-                        READ((dev->accel.cy * dev->pitch) + dev->accel.cx, dest_dat);
-
-                        if (!ibm8514_pixel_kept(dev, ati_cmp_fn, compare_mode, dest_dat, compare, wrt_mask)) {
-                            old_dest_dat = dest_dat;
-                            MIX(mix_dat & mix_mask, dest_dat, src_dat);
-                            dest_dat = (dest_dat & wrt_mask) | (old_dest_dat & ~wrt_mask);
+                        {
                             if ((dev->accel.cmd & 0x10) && !(ATI_GRAPHICS_ULTRA && !(dev->accel.cmd & 0x60))) {
                                 if (dev->accel.sy && (dev->accel.cmd & 0x04)) {
                                     if (dev->accel.oldcy != dev->accel.cy) {
-                                        WRITE((dev->accel.cy * dev->pitch) + (dev->accel.cx), dest_dat);
+                                        ibm8514_draw(dev, svga, &px, (dev->accel.cy * dev->pitch) + (dev->accel.cx), mix_dat & mix_mask, src_dat, 1);
                                     }
                                 } else if (!(dev->accel.cmd & 0x04)) {
                                     if (dev->accel.oldcy != dev->accel.cy) {
-                                        WRITE((dev->accel.cy * dev->pitch) + (dev->accel.cx), dest_dat);
+                                        ibm8514_draw(dev, svga, &px, (dev->accel.cy * dev->pitch) + (dev->accel.cx), mix_dat & mix_mask, src_dat, 1);
                                     }
                                 }
                             }
@@ -3284,21 +3420,16 @@ patt_row:
                                 break;
                         }
 
-                        READ((dev->accel.cy * dev->pitch) + dev->accel.cx, dest_dat);
-
-                        if (!ibm8514_pixel_kept(dev, ati_cmp_fn, compare_mode, dest_dat, compare, wrt_mask)) {
-                            old_dest_dat = dest_dat;
-                            MIX(mix_dat & mix_mask, dest_dat, src_dat);
-                            dest_dat = (dest_dat & wrt_mask) | (old_dest_dat & ~wrt_mask);
+                        {
 
                             if (ATI_GRAPHICS_ULTRA) {
                                 if ((dev->accel.cmd & 0x10) && (dev->accel.sy ? ((dev->accel.cmd & 0x40) || (dev->accel.err_term >= 0)) : !(dev->accel.cmd & 0x04))) {
-                                    WRITE((dev->accel.cy * dev->pitch) + dev->accel.cx, dest_dat);
+                                    ibm8514_draw(dev, svga, &px, (dev->accel.cy * dev->pitch) + dev->accel.cx, mix_dat & mix_mask, src_dat, 1);
                                 }
                             } else if ((dev->accel.cmd & 0x14) == 0x14) {
                                 if (dev->accel.sy) {
                                     if (dev->accel.oldcy != dev->accel.cy) {
-                                        WRITE((dev->accel.cy * dev->pitch) + dev->accel.cx, dest_dat);
+                                        ibm8514_draw(dev, svga, &px, (dev->accel.cy * dev->pitch) + dev->accel.cx, mix_dat & mix_mask, src_dat, 1);
                                     }
                                 }
                             }
@@ -3470,22 +3601,17 @@ patt_row:
                                 break;
                         }
 
-                        READ(dev->accel.dest + (dev->accel.dx & x_mask), dest_dat);
-
-                        if (!ibm8514_pixel_kept(dev, ati_cmp_fn, compare_mode, dest_dat, compare, wrt_mask)) {
-                            old_dest_dat = dest_dat;
-                            MIX(mix_dat & ((dev->accel.cmd & 0x02) ? 0x01 : mix_mask), dest_dat, src_dat);
-                            dest_dat = (dest_dat & wrt_mask) | (old_dest_dat & ~wrt_mask);
+                        {
                             if (dev->accel.cmd & 0x02) {
                                 if (dev->accel.cmd & 0x1000) {
-                                    WRITE(dev->accel.dest + (dev->accel.dx & x_mask), dest_dat);
+                                    ibm8514_draw(dev, svga, &px, dev->accel.dest + (dev->accel.dx & x_mask), mix_dat & ((dev->accel.cmd & 0x02) ? 0x01 : mix_mask), src_dat, 1);
                                 } else {
                                     if (dev->accel.x_count >= and3_blt) {
-                                        WRITE(dev->accel.dest + (dev->accel.dx & x_mask), dest_dat);
+                                        ibm8514_draw(dev, svga, &px, dev->accel.dest + (dev->accel.dx & x_mask), mix_dat & ((dev->accel.cmd & 0x02) ? 0x01 : mix_mask), src_dat, 1);
                                     }
                                 }
                             } else {
-                                WRITE(dev->accel.dest + (dev->accel.dx & x_mask), dest_dat);
+                                ibm8514_draw(dev, svga, &px, dev->accel.dest + (dev->accel.dx & x_mask), mix_dat & ((dev->accel.cmd & 0x02) ? 0x01 : mix_mask), src_dat, 1);
                             }
                         }
                     }
@@ -3578,13 +3704,8 @@ patt_row:
                                         break;
                                 }
 
-                                READ(dev->accel.dest + (dev->accel.dx & x_mask), dest_dat);
-
-                                if (!ibm8514_pixel_kept(dev, ati_cmp_fn, compare_mode, dest_dat, compare, wrt_mask)) {
-                                    old_dest_dat = dest_dat;
-                                    MIX(mix_dat & mix_mask, dest_dat, src_dat);
-                                    dest_dat = (dest_dat & wrt_mask) | (old_dest_dat & ~wrt_mask);
-                                    WRITE(dev->accel.dest + (dev->accel.dx & x_mask), dest_dat);
+                                {
+                                    ibm8514_draw(dev, svga, &px, dev->accel.dest + (dev->accel.dx & x_mask), mix_dat & mix_mask, src_dat, 1);
                                 }
                             }
 
@@ -3662,13 +3783,8 @@ patt_row:
                                         break;
                                 }
 
-                                READ(dev->accel.dest + (dev->accel.dx & x_mask), dest_dat);
-
-                                if (!ibm8514_pixel_kept(dev, ati_cmp_fn, compare_mode, dest_dat, compare, wrt_mask)) {
-                                    old_dest_dat = dest_dat;
-                                    MIX(mix_dat & 0x01, dest_dat, src_dat);
-                                    dest_dat = (dest_dat & wrt_mask) | (old_dest_dat & ~wrt_mask);
-                                    WRITE(dev->accel.dest + (dev->accel.dx & x_mask), dest_dat);
+                                {
+                                    ibm8514_draw(dev, svga, &px, dev->accel.dest + (dev->accel.dx & x_mask), mix_dat & 0x01, src_dat, 1);
                                 }
                             }
 
@@ -3734,11 +3850,7 @@ patt_row:
                                 (dev->accel.dy >= (clip_t << 1)) &&
                                 (dev->accel.dy <= (clip_b << 1))) {
                                 READ(dev->accel.src + (cx & x_mask), src_dat);
-                                READ(dev->accel.dest + (dx & x_mask), dest_dat);
-                                old_dest_dat = dest_dat;
-                                MIX(mix_dat & mix_mask, dest_dat, src_dat);
-                                dest_dat = (dest_dat & wrt_mask) | (old_dest_dat & ~wrt_mask);
-                                WRITE(dev->accel.dest + (dx & x_mask), dest_dat);
+                                ibm8514_draw(dev, svga, &px, dev->accel.dest + (dx & x_mask), mix_dat & mix_mask, src_dat, 0);
                             }
 
                             cx++;
@@ -3789,13 +3901,8 @@ patt_row:
                                         break;
                                 }
 
-                                READ(dev->accel.dest + (dev->accel.dx & x_mask), dest_dat);
-
-                                if (!ibm8514_pixel_kept(dev, ati_cmp_fn, compare_mode, dest_dat, compare, wrt_mask)) {
-                                    old_dest_dat = dest_dat;
-                                    MIX(mix_dat & mix_mask, dest_dat, src_dat);
-                                    dest_dat = (dest_dat & wrt_mask) | (old_dest_dat & ~wrt_mask);
-                                    WRITE(dev->accel.dest + (dev->accel.dx & x_mask), dest_dat);
+                                {
+                                    ibm8514_draw(dev, svga, &px, dev->accel.dest + (dev->accel.dx & x_mask), mix_dat & mix_mask, src_dat, 1);
                                 }
                             }
 
@@ -4430,6 +4537,9 @@ ibm8514_poll(void *priv)
                     if (svga->hwcursor_on)
                         svga->changedvram[svga->memaddr >> 12] = svga->changedvram[(svga->memaddr >> 12) + 1] = svga->interlace ? 3 : 2;
 
+                    /* KairoX86#238: the batch's work on the line (up to 4 bytes a pixel, from either address) first */
+                    ibm8514_k_touch_bytes(svga, svga->memaddr, (uint32_t) (dev->h_disp + 16) * 4);
+                    ibm8514_k_touch_bytes(svga, dev->memaddr, (uint32_t) (dev->h_disp + 16) * 4);
                     svga->render8514(svga);
 
                     svga->x_add = svga->left_overscan;
@@ -4438,6 +4548,7 @@ ibm8514_poll(void *priv)
                     svga->x_add = svga->left_overscan;
 
                     if (svga->hwcursor_on) {
+                        ibm8514_k_touch_bytes(svga, 0, 0xffffffff); /* KairoX86#238: the cursor's memory */
                         if (svga->hwcursor_draw)
                             svga->hwcursor_draw(svga, (svga->displine + svga->y_add + ((svga->hwcursor_latch.y >= 0) ? 0 : svga->hwcursor_latch.y)) & 2047);
 
@@ -4621,6 +4732,9 @@ ibm8514_poll(void *priv)
                     if (dev->hwcursor_on)
                         dev->changedvram[dev->memaddr >> 12] = dev->changedvram[(dev->memaddr >> 12) + 1] = dev->interlace ? 3 : 2;
 
+                    /* KairoX86#238: the batch's work on the line (up to 4 bytes a pixel, from either address) first */
+                    ibm8514_k_touch_bytes(svga, svga->memaddr, (uint32_t) (dev->h_disp + 16) * 4);
+                    ibm8514_k_touch_bytes(svga, dev->memaddr, (uint32_t) (dev->h_disp + 16) * 4);
                     svga->render8514(svga);
 
                     svga->x_add = svga->left_overscan;
@@ -4629,6 +4743,7 @@ ibm8514_poll(void *priv)
                     svga->x_add = svga->left_overscan;
 
                     if (dev->hwcursor_on) {
+                        ibm8514_k_touch_bytes(svga, 0, 0xffffffff); /* KairoX86#238: the cursor's memory */
                         if (svga->hwcursor_draw)
                             svga->hwcursor_draw(svga, (dev->displine + svga->y_add + ((dev->hwcursor_latch.y >= 0) ? 0 : dev->hwcursor_latch.y)) & 2047);
 
@@ -4896,10 +5011,11 @@ ibm8514_init(const device_t *info)
     dev->vram_amount = device_get_config_int("memory");
     dev->vram_512k_8514 = dev->vram_amount == 512;
     dev->vram_size   = dev->vram_amount << 10;
-    dev->vram        = calloc(dev->vram_size, 1);
+    dev->vram        = kairo_gpu_on ? kairo_gpu_alloc(dev->vram_size) : calloc(dev->vram_size, 1); /* KairoX86#238 */
     dev->changedvram = calloc((dev->vram_size >> 12) + 1, 1);
     dev->vram_mask   = dev->vram_size - 1;
     dev->map8        = dev->pallook;
+    ibm8514_k_open(svga);
     dev->local       = 0;
     dev->accel_bpp   = 8;
     dev->on          = 0;
@@ -5007,7 +5123,11 @@ ibm8514_close(void *priv)
             dev->log = NULL;
         }
 
-        free(dev->vram);
+        ibm8514_k_close(svga); /* KairoX86#238 */
+        if (kairo_gpu_on)
+            kairo_gpu_free(dev->vram);
+        else
+            free(dev->vram);
         free(dev->changedvram);
         free(dev->rom_image);
         free(dev->bios_rom.rom);

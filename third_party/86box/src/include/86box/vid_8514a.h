@@ -301,7 +301,43 @@ typedef struct ibm8514_t {
     void (*accel_out_fifo)(void *priv, uint16_t port, uint16_t val, int len);
     void (*update_irqs)(void *priv);
 
+    /* KairoX86#238: the drawing engine's batch on the GPU (vid_8514a.c), shared by the 8514/A's walk and the Mach
+       engine's; NULL in software */
+    struct ibm8514_k_gpu *k_gpu;
 } ibm8514_t;
+
+/* KairoX86#238: what an operation's pixels share, as the engine's walk has them: the write mask, the compare colour,
+   DEST_CMP_FN, the compare (the 8514/A's PIX_CNTL mode, or the Mach engine's 1 to 8), and whether the
+   Mach engine draws (its mixes and compare) */
+typedef struct ibm8514_k_px_t {
+    uint16_t wrt_mask;
+    uint16_t compare;
+    uint16_t cmp_fn;
+    int      compare_mode;
+    int      mach;
+} ibm8514_k_px_t;
+
+struct svga_t;
+/* With Hardware acceleration on, the engine's memory (the Mach32's, or the 8514/A's and Mach8's own) drawn on the GPU:
+   opened once the memory is there, closed before it is freed */
+void ibm8514_k_open(struct svga_t *svga);
+void ibm8514_k_close(struct svga_t *svga);
+/* A pixel drawn at addr (a pixel address, as the walk's READ and WRITE take it): kind (kairo_gpu_ibm8514.h) of the
+   source src */
+void ibm8514_k_pixel(struct svga_t *svga, const ibm8514_k_px_t *px, uint32_t addr, uint32_t kind, uint32_t src);
+/* The pixels recorded so far into the batch: the engine has stopped, the processor may meet them next */
+void ibm8514_k_flush(struct svga_t *svga);
+/* The batch drawn: the processor reads the engine's results */
+void ibm8514_k_drain(struct svga_t *svga);
+/* The walk reads or writes the pixel at addr (a pixel address), or the processor or the display len bytes at addr:
+   the batch's work there first */
+void ibm8514_k_touch(struct svga_t *svga, uint32_t addr);
+void ibm8514_k_touch_bytes(struct svga_t *svga, uint32_t addr, uint32_t len);
+#define IBM8514_K_TOUCH(svga, dev, addr)           \
+    do {                                           \
+        if ((dev)->k_gpu != NULL)                  \
+            ibm8514_k_touch((svga), (addr));       \
+    } while (0)
 
 #define IBM_8514A (((dev->local & 0xff) == IBM_8514A_TYPE) && (dev->extensions == IBM))
 #define ATI_8514A_ULTRA (((dev->local & 0xff) == IBM_8514A_TYPE) && (dev->extensions == ATI))

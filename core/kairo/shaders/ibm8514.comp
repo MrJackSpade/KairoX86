@@ -1,0 +1,149 @@
+#version 450
+#extension GL_EXT_control_flow_attributes : require
+/*
+ * The IBM 8514/A's drawing engine and the ATI Mach8 and Mach32's on the GPU (KairoX86#238): 86Box's per-pixel draw
+ * of ibm8514_accel_start (vid_8514a.c) and mach_accel_start (vid_ati_mach8.c): the destination read, the colour
+ * compare, the mix, the write mask and the write, for runs of pixels (kairo_seg_run), on the drawing engines' shared
+ * batches (seg.glsl). The walk stays the CPU's; each pixel's mix code and source are its stream words
+ * (86box/kairo_gpu_ibm8514.h).
+ *
+ * Copyright 2026 MrJackSpade. GPL-2.0-or-later.
+ */
+#include "seg.glsl"
+
+const uint I8_WRT_MASK = 0u, I8_CMP = 1u, I8_MODE = 2u, I8_FLAGS = 3u, I8_BYTES = 4u, I8_WORDS = 8u;
+const uint I8K_CMP = 0x100u;
+const uint I8F_W16 = 1u, I8F_MACH = 2u;
+
+uint rd_px(uint a, uint pb)
+{
+    return (pb == 2u) ? (rd8(a) | (rd8(a + 1u) << 8)) : rd8(a);
+}
+
+int sat(int v, int top)
+{
+    return (v < 0) ? 0 : ((v > top) ? top : v);
+}
+
+/* The mixes (MIX), on 16-bit values as the C does them in int: d the destination, s the source */
+uint mix(uint code, uint d, uint s, bool w16, bool mach)
+{
+    const int di  = int(d);
+    const int si  = int(s);
+    const int top = w16 ? 0xffff : 0xff;
+    int       r;
+    switch (code) {
+        case 0x00u: r = ~di; break;
+        case 0x01u: r = 0; break;
+        case 0x02u: r = ~0; break;
+        case 0x03u: r = di; break;
+        case 0x04u: r = ~si; break;
+        case 0x05u: r = si ^ di; break;
+        case 0x06u: r = ~(si ^ di); break;
+        case 0x07u: r = si; break;
+        case 0x08u: r = ~(si & di); break;
+        case 0x09u: r = ~si | di; break;
+        case 0x0au: r = si | ~di; break;
+        case 0x0bu: r = si | di; break;
+        case 0x0cu: r = si & di; break;
+        case 0x0du: r = si & ~di; break;
+        case 0x0eu: r = ~si & di; break;
+        case 0x0fu: r = ~(si | di); break;
+        case 0x10u: r = min(si, di); break;
+        case 0x11u: r = di - si; break;
+        case 0x12u: r = si - di; break;
+        case 0x13u: r = si + di; break;
+        case 0x14u: r = max(si, di); break;
+        case 0x15u: r = (di - si) >> 1; break;
+        case 0x16u: r = (si - di) >> 1; break;
+        case 0x17u: r = (si + di) >> 1; break;
+        case 0x18u:
+        case 0x19u: r = sat(di - si, top); break;
+        case 0x1au: r = sat(si - di, top); break;
+        case 0x1bu: r = sat(si + di, top); break;
+        case 0x1cu:
+        case 0x1du: r = sat((di - si) >> 1, top); break;
+        case 0x1eu: r = sat((si - di) >> 1, top); break;
+        default:
+            /* 1Fh: the Mach engine saturates the halved sum, the 8514/A the sum */
+            r = mach ? sat((si + di) >> 1, top) : (((si + di) > top) ? top : ((si + di) >> 1));
+            break;
+    }
+    return uint(r) & 0xffffu;
+}
+
+/* PIX_CNTL's colour compare (ibm8514_color_cmp): true keeps the destination */
+bool color_cmp(uint mode, uint d, uint c, uint mask)
+{
+    d &= mask;
+    c &= mask;
+    switch (mode) {
+        case 0x08u: return true;
+        case 0x10u: return d >= c;
+        case 0x18u: return d < c;
+        case 0x20u: return d != c;
+        case 0x28u: return d == c;
+        case 0x30u: return d <= c;
+        case 0x38u: return d > c;
+        default: return false;
+    }
+}
+
+/* Whether the destination d is kept: the 8514/A's compare (ibm8514_pixel_kept: the mode in bits 7:0, the Graphics
+   Ultra's DEST_CMP_FN in bits 15:8), or the Mach engine's (its mode 1 to 8, DEST_CMP_FN in bits 15:8) */
+bool kept(uint o, uint d, bool w16, bool mach)
+{
+    const uint mode = ops[o + I8_MODE] & 0xffu;
+    const uint fn   = ops[o + I8_MODE] >> 8;
+    const uint c    = ops[o + I8_CMP];
+    if (mach) {
+        switch (mode) {
+            case 8u: {
+                const uint nib  = ((fn & 0x10u) != 0u) ? (d & 0x0fu) : ((d >> 4) & 0x0fu);
+                const bool edge = (nib == 0x00u) || (nib == 0x0fu);
+                return ((fn & 0x08u) != 0u) ? edge : !edge;
+            }
+            case 1u: return true;
+            case 2u: return d >= c;
+            case 3u: return d < c;
+            case 4u: return d != c;
+            case 5u: return d == c;
+            case 6u: return d <= c;
+            case 7u: return d > c;
+            default: return false;
+        }
+    }
+    const uint wm = ops[o + I8_WRT_MASK];
+    if (color_cmp(mode, d, c, wm))
+        return true;
+    if (((fn & 0x40u) != 0u) && !w16) {
+        const uint nib  = ((fn & 0x10u) != 0u) ? (d & 0x0fu) : ((d >> 4) & 0x0fu);
+        const bool edge = (nib == 0x00u) || (nib == 0x0fu);
+        return ((fn & 0x08u) != 0u) ? edge : !edge;
+    }
+    return color_cmp(fn & 0x38u, d, c, wm);
+}
+
+void card_pixels(uint seg, uint op, uint row, uint first, int i0, int i1)
+{
+    const uint o    = op * I8_WORDS;
+    const uint pb   = ops[o + I8_BYTES];
+    const uint wm   = ops[o + I8_WRT_MASK];
+    const bool w16  = (ops[o + I8_FLAGS] & I8F_W16) != 0u;
+    const bool mach = (ops[o + I8_FLAGS] & I8F_MACH) != 0u;
+    const int  dir  = int(segs[seg * KG_WORDS + KG_DIR]);
+    const uint d0   = segs[seg * KG_WORDS + KG_BIT] >> 3;
+    [[dont_unroll]] for (int n = i0; n < i1; n++) {
+        const uint w    = row + uint(n) * 2u;
+        const uint kind = stream[w];
+        const uint src  = stream[w + 1u];
+        const uint a   = d0 + uint((int(first) + n * dir) * int(pb));
+        const uint old = rd_px(a, pb);
+        if (((kind & I8K_CMP) != 0u) && kept(o, old, w16, mach))
+            continue;
+        const uint res = (mix(kind & 0x1fu, old, src, w16, mach) & wm) | (old & ~wm);
+        wr8(a, res);
+        if (pb == 2u)
+            wr8(a + 1u, res >> 8);
+    }
+}
