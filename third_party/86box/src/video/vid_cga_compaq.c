@@ -34,6 +34,7 @@
 #include <86box/device.h>
 #include <86box/video.h>
 #include <86box/vid_cga.h>
+#include <86box/kairo_gpu.h> /* KairoX86#243 */
 #include <86box/vid_cga_comp.h>
 
 #define CGA_RGB       0
@@ -76,6 +77,65 @@ compaq_cga_recalctimings(cga_t *dev)
     _dispofftime *= MDACONST;
     dev->dispontime  = (uint64_t) (int64_t) (_dispontime);
     dev->dispofftime = (uint64_t) (int64_t) (_dispofftime);
+}
+
+/* KairoX86#243: line [line]'s characters (compaq_cga_poll's 350-line text, read as it reads them) to the GPU's scanout
+   queue, coloured as video_process_8 will colour them; returns whether the GPU draws them. Not with composite output
+   or the light pen, which read the picture back. */
+static bool
+compaq_cga_render_gpu(cga_t *dev, int line, uint16_t cursoraddr)
+{
+    if (!kairo_gpu_on || dev->composite || cga_lightpen_enabled)
+        return false;
+    const int hdisp = dev->crtc[CGA_CRTC_HDISP];
+    if (hdisp <= 0)
+        return false;
+    bitmap_t      *bitmap  = buffer32;
+    const uint32_t out     = (uint32_t) (&bitmap->line[line][8] - bitmap->dat);
+    const bool     highres = (dev->cgamode & CGA_MODE_FLAG_HIGHRES) != 0;
+    uint32_t      *cells   = kairo_gpu_scan(bitmap, bitmap->kairo_gpu, out, KAIRO_SCAN_TEXT, (uint32_t) hdisp * (highres ? 8 : 16),
+                                            (uint32_t) hdisp, pal_lookup, 256, 8, 0, highres ? 0 : KAIRO_SCAN_WIDE);
+    int            blink   = 0;
+
+    for (int x = 0; x < hdisp; x++) {
+        const uint8_t chr        = highres ? dev->charbuffer[x << 1] : dev->vram[(dev->memaddr << 1) & 0x3fff];
+        const uint8_t attr       = highres ? dev->charbuffer[(x << 1) + 1] : dev->vram[((dev->memaddr << 1) + 1) & 0x3fff];
+        const int     drawcursor = ((dev->memaddr == cursoraddr) && dev->cursorvisible && dev->cursoron);
+        int           underline  = 0;
+        uint32_t      fg;
+        uint32_t      bg;
+
+        if (vflags)
+            blink = ((dev->cgablink & 8) && (dev->cgamode & CGA_MODE_FLAG_BLINK) && (attr & 0x80) && !drawcursor);
+        if (vflags && (dev->cgamode & 0x80)) {
+            bg = mdaattr[attr][blink][0];
+            fg = mdaattr[attr][blink][1];
+            if ((dev->scanline == 12) && ((attr & 7) == 1))
+                underline = 1;
+        } else if (dev->cgamode & CGA_MODE_FLAG_BLINK) {
+            fg = (attr & 15) + 16;
+            bg = ((attr >> 4) & 7) + 16;
+            if (vflags) {
+                if (blink)
+                    fg = bg;
+            } else if ((dev->cgablink & 8) && (attr & 0x80) && !dev->drawcursor)
+                fg = bg;
+        } else {
+            fg = (attr & 15) + 16;
+            bg = (attr >> 4) + 16;
+        }
+        if (vflags && underline) {
+            const uint32_t solid = mdaattr[attr][blink][1];
+            cells[x]             = 0xff | (solid << 8) | (solid << 16);
+        } else {
+            /* The CPU's colours are bytes: the cursor's flip stays within them */
+            const uint32_t flip = drawcursor ? 15 : 0;
+            cells[x] = fontdatm[chr + dev->fontbase][dev->scanline & 15] | (((fg ^ flip) & 0xff) << 8) | (((bg ^ flip) & 0xff) << 16);
+        }
+        dev->memaddr++;
+    }
+    kairo_gpu_scan_commit();
+    return true;
 }
 
 static void
@@ -131,6 +191,8 @@ compaq_cga_poll(void *priv)
 
             cols[0] = (dev->cgacol & 15) + 16;
 
+            if (kairo_gpu_on) /* KairoX86#243 */
+                kairo_gpu_scan_touch(buffer32, (uint32_t) (buffer32->line[dev->displine] - buffer32->dat), (uint32_t) buffer32->w);
             for (c = 0; c < 8; c++) {
                 buffer32->line[dev->displine][c] = cols[0];
                 if (dev->cgamode & CGA_MODE_FLAG_HIGHRES)
@@ -139,7 +201,9 @@ compaq_cga_poll(void *priv)
                     buffer32->line[dev->displine][c + (dev->crtc[CGA_CRTC_HDISP] << 4) + 8] = cols[0];
             }
 
-            if (dev->cgamode & CGA_MODE_FLAG_HIGHRES) {
+            if (compaq_cga_render_gpu(dev, dev->displine, cursoraddr)) {
+                /* KairoX86#243: the GPU draws the line between the borders */
+            } else if (dev->cgamode & CGA_MODE_FLAG_HIGHRES) {
                 for (x = 0; x < dev->crtc[CGA_CRTC_HDISP]; x++) {
                     chr        = dev->charbuffer[x << 1];
                     attr       = dev->charbuffer[(x << 1) + 1];
@@ -239,6 +303,8 @@ compaq_cga_poll(void *priv)
         } else {
             cols[0] = (dev->cgacol & 15) + 16;
 
+            if (kairo_gpu_on) /* KairoX86#243 */
+                kairo_gpu_scan_touch(buffer32, (uint32_t) (buffer32->line[dev->displine] - buffer32->dat), (uint32_t) buffer32->w);
             if (dev->cgamode & CGA_MODE_FLAG_HIGHRES)
                 hline(buffer32, 0, dev->displine, (dev->crtc[CGA_CRTC_HDISP] << 3) + 16, cols[0]);
             else

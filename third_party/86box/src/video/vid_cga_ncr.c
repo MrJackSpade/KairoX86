@@ -34,6 +34,7 @@
 #include <86box/rom.h>
 #include <86box/device.h>
 #include <86box/vid_cga.h>
+#include <86box/kairo_gpu.h> /* KairoX86#244 */
 #include <86box/vid_nga.h>
 #include <86box/vid_cga_comp.h>
 #include <86box/plat_unused.h>
@@ -144,6 +145,121 @@ nga_read(uint32_t addr, void *priv)
     return ret;
 }
 
+/* KairoX86#244: the colour of each value of a 640 x 400 line's pixels and where its rows lie, as nga_poll works them out */
+static void
+nga_graphics_colours(const nga_t *nga, int *cols, uint16_t *dat2)
+{
+    int col;
+
+    if (nga->cga.cgamode & 0x40) {
+        if (nga->cga.cgamode & 0x4 || nga->cga.cgamode & CGA_MODE_FLAG_HIGHRES_GRAPHICS) {
+            *dat2   = ((nga->cga.scanline & 1) * 0x2000) | (nga->lineff * 0x4000);
+            cols[0] = 0;
+            cols[1] = 15 + 16;
+        } else {
+            cols[0] = (nga->cga.cgacol & 15) | 16;
+            col     = (nga->cga.cgacol & 16) ? 24 : 16;
+            if (nga->cga.cgamode & CGA_MODE_FLAG_BW) {
+                cols[1] = col | 3;
+                cols[2] = col | 4;
+                cols[3] = col | 7;
+            } else if (nga->cga.cgacol & 32) {
+                cols[1] = col | 3;
+                cols[2] = col | 5;
+                cols[3] = col | 7;
+            } else {
+                cols[1] = col | 2;
+                cols[2] = col | 4;
+                cols[3] = col | 6;
+            }
+            *dat2 = (nga->cga.scanline & 1) * 0x4000;
+        }
+    } else {
+        *dat2   = (nga->cga.scanline & 1) * 0x2000;
+        cols[0] = 0;
+        cols[1] = (nga->cga.cgacol & 15) + 16;
+    }
+}
+
+/* KairoX86#244: line [line]'s characters or pixels (nga_poll's, read as it reads them) to the GPU's scanout queue,
+   coloured as video_process_8 will colour them; returns whether the GPU draws them. Not with the light pen, which
+   reads the picture back. */
+static bool
+nga_render_gpu(nga_t *nga, int line, uint16_t cursoraddr)
+{
+    cga_t *cga = &nga->cga;
+
+    if (!kairo_gpu_on || cga->composite || cga_lightpen_enabled)
+        return false;
+    const int hdisp = cga->crtc[CGA_CRTC_HDISP];
+    if (hdisp <= 0)
+        return false;
+    bitmap_t      *bitmap  = buffer32;
+    const uint32_t out     = (uint32_t) (&bitmap->line[line][8] - bitmap->dat);
+    const bool     enabled = (cga->cgamode & CGA_MODE_FLAG_VIDEO_ENABLE) != 0;
+
+    if (!(cga->cgamode & CGA_MODE_FLAG_GRAPHICS)) {
+        /* Text, its font's 16 lines: 80 columns of 8 dots, or 40 of 8 doubled */
+        const bool highres = (cga->cgamode & CGA_MODE_FLAG_HIGHRES) != 0;
+        uint32_t  *cells   = kairo_gpu_scan(bitmap, bitmap->kairo_gpu, out, KAIRO_SCAN_TEXT, (uint32_t) hdisp * (highres ? 8 : 16),
+                                            (uint32_t) hdisp, pal_lookup, 256, 8, 0, highres ? 0 : KAIRO_SCAN_WIDE);
+        for (int x = 0; x < hdisp; x++) {
+            uint8_t chr  = 0;
+            uint8_t attr = 0;
+            if (enabled) {
+                if (highres) {
+                    chr  = cga->charbuffer[x << 1];
+                    attr = cga->charbuffer[(x << 1) + 1];
+                } else {
+                    chr  = cga->vram[((cga->memaddr << 1) & 0x3fff) + nga->base];
+                    attr = cga->vram[(((cga->memaddr << 1) + 1) & 0x3fff) + nga->base];
+                }
+            }
+            const bool drawcursor = ((cga->memaddr == cursoraddr) && cga->cursorvisible && cga->cursoron);
+            uint32_t   fg         = (attr & 15) + 16;
+            uint32_t   bg;
+            if (cga->cgamode & CGA_MODE_FLAG_BLINK) {
+                bg = ((attr >> 4) & 7) + 16;
+                if ((cga->cgablink & 8) && (attr & 0x80) && !cga->drawcursor)
+                    fg = bg;
+            } else
+                bg = (attr >> 4) + 16;
+            const uint32_t flip = drawcursor ? 15 : 0;
+            cells[x] = fontdatm[chr][((cga->scanline & 7) << 1) | nga->lineff] | ((fg ^ flip) << 8) | ((bg ^ flip) << 16);
+            cga->memaddr++;
+        }
+        kairo_gpu_scan_commit();
+        return true;
+    }
+
+    /* 640 x 400: 16 pixels of 1 bit, or 8 of 2 bits, a character (2 bytes). With video off the CPU leaves the
+       line as it was: so does the GPU, by not drawing it. */
+    if (!enabled)
+        return false;
+    int      cols[4] = { 0, 0, 0, 0 };
+    uint16_t dat2    = 0;
+    nga_graphics_colours(nga, cols, &dat2);
+    const bool mono = (cga->cgamode & 0x4) || (cga->cgamode & CGA_MODE_FLAG_HIGHRES_GRAPHICS);
+    uint32_t   colours[4];
+    for (int v = 0; v < 4; v++)
+        colours[v] = pal_lookup[cols[v]];
+    uint8_t *bytes = (uint8_t *) kairo_gpu_scan(bitmap, bitmap->kairo_gpu, out, KAIRO_SCAN_BITS, (uint32_t) hdisp * (mono ? 16 : 8),
+                                                ((uint32_t) hdisp * 2 + 3) / 4, colours, mono ? 2 : 4, mono ? 1 : 2, 0, 0);
+    for (int x = 0; x < hdisp; x++) {
+        if (mono) {
+            bytes[x * 2]     = cga->vram[((cga->memaddr << 1) & 0x1fff) + dat2];
+            bytes[x * 2 + 1] = cga->vram[((cga->memaddr << 1) & 0x1fff) + dat2 + 1];
+        } else {
+            const uint8_t *plane = (cga->scanline & 2) ? nga->vram_64k : cga->vram;
+            bytes[x * 2]         = plane[((cga->memaddr << 1) & 0x7fff) + dat2];
+            bytes[x * 2 + 1]     = plane[((cga->memaddr << 1) & 0x7fff) + dat2 + 1];
+        }
+        cga->memaddr++;
+    }
+    kairo_gpu_scan_commit();
+    return true;
+}
+
 void
 nga_poll(void *priv)
 {
@@ -191,8 +307,13 @@ nga_poll(void *priv)
                     video_wait_for_buffer();
                 }
                 nga->cga.lastline = nga->cga.displine;
+                if (kairo_gpu_on) /* KairoX86#244 */
+                    kairo_gpu_scan_touch(buffer32, (uint32_t) (buffer32->line[nga->cga.displine] - buffer32->dat), (uint32_t) buffer32->w);
+                if (nga_render_gpu(nga, nga->cga.displine, cursoraddr)) {
+                    /* KairoX86#244: the GPU draws the line */
+                }
                 /* 80-col */
-                if ((nga->cga.cgamode & CGA_MODE_FLAG_HIGHRES) && !(nga->cga.cgamode & CGA_MODE_FLAG_GRAPHICS)) {
+                else if ((nga->cga.cgamode & CGA_MODE_FLAG_HIGHRES) && !(nga->cga.cgamode & CGA_MODE_FLAG_GRAPHICS)) {
                     /* for each text column */
                     for (x = 0; x < nga->cga.crtc[CGA_CRTC_HDISP]; x++) {
                         /* video output enabled */
@@ -353,6 +474,8 @@ nga_poll(void *priv)
 
                 /* nga specific */
                 cols[0] = ((nga->cga.cgamode & 0x12) == 0x12) ? 0 : (nga->cga.cgacol & 15) + 16;
+                if (kairo_gpu_on) /* KairoX86#244: the two rows the border lines blank */
+                    kairo_gpu_scan_touch(buffer32, (uint32_t) (buffer32->line[nga->cga.displine << 1] - buffer32->dat), 2 * (uint32_t) buffer32->w);
                 /* 80-col */
                 if (nga->cga.cgamode & CGA_MODE_FLAG_HIGHRES) {
                     hline(buffer32, 0, (nga->cga.displine << 1), ((nga->cga.crtc[CGA_CRTC_HDISP] << 3) + 16) << 2, cols[0]);

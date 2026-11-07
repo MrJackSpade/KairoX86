@@ -94,6 +94,11 @@
 - **`kairox86-pgc-sync` group:** the PGC's (and IM-1024's) drawing processor works at fixed points in emulated time (KairoX86#310): the wake timer waits until the drawing thread sleeps again, and the machine starts once it first sleeps. Before, two runs of the same machine did not end alike.
 - **`kairox86-gpu-pgc-draw` group:** the PGC's drawing processor, and so the IM-1024's, on the GPU (KairoX86#268, #261; `kairo_gpu_pgc.h`, `core/kairo/gpu_pgc.c`, `shaders/pgc.comp`): its video memory is shared with the GPU, `pgc_plot` and `pgc_write_pixel` record each pixel with its operation, and `pgc_vram_addr`, the CPU's one door to that memory, draws what is pending there first, as CLEARS and the display do. Checked by `core/test/gpu/pgc.c` on both cards.
 - **`kairox86-gpu-chips45x` group:** the Chips & Technologies 82C45x's own 1bpp renderer (its CGA 640 x 200 and Hercules graphics emulations) on the GPU (KairoX86#248), one bit a pixel through its two colours, by the shared renderers' bit-line helper, now exported for card renderers as `svga_render_gpu_bits`. Checked by `core/test/gpu/chips45.c`.
+- **`kairox86-gpu-colorplus` group:** the Plantronics ColorPlus's 320 x 200 x 16 and 640 x 200 x 4 modes on the GPU (KairoX86#242), as 4 or 2 bits a pixel through the colours `video_process_8` gives them. Checked by `core/test/gpu/colorplus.c`.
+- **`kairox86-gpu-ncr` group:** the NCR NGA's 16-line text and 640 x 400 graphics on the GPU (KairoX86#244). Checked by `core/test/gpu/cgaext.c`.
+- **`kairox86-gpu-olivetti` group:** the Olivetti OGC's 16-line text (underline included) and 640 x 400 graphics on the GPU (KairoX86#245). Checked by `core/test/gpu/cgaext.c`.
+- **`kairox86-gpu-compaq` group:** the Compaq CGA's 350-line text on the GPU as text cells (KairoX86#243). Checked by `core/test/gpu/cgaext.c`.
+- **`kairox86-gpu-jega` group:** the JEGA's Japanese text on the GPU as text cells through a 33-colour line palette, a double-byte character two cells (KairoX86#262). Checked by `core/test/gpu/jega.c`.
 
 ## 86Box's translations
 

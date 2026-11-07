@@ -36,6 +36,7 @@
 #include <86box/video.h>
 #include <86box/vid_ega.h>
 #include <86box/vid_svga.h>
+#include <86box/kairo_gpu.h> /* KairoX86#262 */
 #include <86box/vid_vga.h>
 
 /* JEGA internal registers */
@@ -195,6 +196,140 @@ dbcs_write(uint16_t sjis, int index, uint8_t val, void *priv) {
     jega->jfont_dbcs_16[seq * 32 + index] = val;
 }
 
+/* KairoX86#262: the line's palette: the 16 EGA colours as the JEGA attributes take them (0-15), through the DAC mask
+   as the EGA attributes take them (16-31), and black (32) */
+#define JEGA_K_MASKED 16u
+#define JEGA_K_BLACK  32u
+#define JEGA_K_CELLS  512
+
+/* KairoX86#262: jega_render_text's line as text cells (86box/kairo_gpu.h KAIRO_SCAN_TEXT: 8 dots each, a double-byte
+   character two of them) to the GPU's scanout queue at p, worked out as the CPU works out its pixels; returns whether
+   the GPU draws it (not when another renderer may draw on the line, or it has more cells than JEGA_K_CELLS) */
+static bool
+jega_render_text_gpu(jega_t *jega, uint32_t *p, uint8_t *vram, int sc, int hdisp, int scrollcache, uint32_t *memaddr,
+                     uint8_t mask, bool blinked, bool crtcreset, bool attrblink)
+{
+    if (!kairo_gpu_on || (jega->is_vga && !jega->vga.svga.render_async))
+        return false;
+    static uint32_t cells[JEGA_K_CELLS];
+    uint32_t        colours[33];
+    uint32_t        n          = 0;
+    uint32_t        ma         = *memaddr;
+    bool            chr_wide   = false;
+    int             sc_wide    = sc - jega->start_scan_count;
+    const bool      cursoron   = (blinked || jega->cursorblink_disable) && (sc >= jega->regs[RCCSL]) && (sc <= jega->regs[RCCEL]);
+    uint32_t        attr_basic = 0;
+    uint32_t        chr_first  = 0;
+    uint32_t        fg         = JEGA_K_BLACK;
+    uint32_t        bg         = JEGA_K_BLACK;
+
+    for (int i = 0; i < 16; i++) {
+        colours[i]                 = jega->pallook[jega->egapal[i]];
+        colours[JEGA_K_MASKED + i] = jega->pallook[jega->egapal[i] & mask];
+    }
+    colours[JEGA_K_BLACK] = 0;
+    for (int x = 0; x < (hdisp + scrollcache); x += 8) {
+        if (n + 2 > JEGA_K_CELLS)
+            return false;
+        uint32_t addr = 0;
+        if (jega->is_vga) {
+            if (!jega->vga.svga.force_old_addr)
+                addr = jega->vga.svga.remap_func(&jega->vga.svga, ma) & jega->vga.svga.vram_display_mask;
+        } else
+            addr = jega->ega.remap_func(&jega->ega, ma) & jega->ega.vrammask;
+        const int drawcursor = ((ma == jega->cursoraddr) && cursoron);
+        uint32_t  chr        = crtcreset ? 0 : vram[addr];
+        uint32_t  attr       = crtcreset ? 0 : vram[addr + 1];
+        const uint32_t pair  = (fg << 8) | (bg << 16);
+        if (chr_wide) {
+            uint8_t attr_ext = 0;
+            if (jega->regs[RMOD2] & 0x40) {
+                attr_ext = attr;
+                if ((attr_ext & 0x30) == 0x30)
+                    sc_wide = sc - jega->start_scan_lower;
+                else if ((attr_ext & 0x30) == 0x20)
+                    sc_wide = sc - jega->start_scan_upper;
+                else
+                    sc_wide = sc - jega->start_scan_count;
+            }
+            uint32_t dots = 0; /* the 16 dots, the leftmost bit 15 */
+            if (is_SJIS_2(chr) && sc_wide >= 0 && sc_wide < 16 && sc <= jega->regs[RPESL]) {
+                chr |= chr_first << 8;
+                if (attr_ext & 0x20)
+                    sc_wide = (attr_ext & 0x10) ? ((sc_wide >> 1) + 8) : (sc_wide >> 1);
+                if (attr_ext & 0x40) {
+                    uint32_t dat = dbcs_read(chr, sc_wide, jega);
+                    if (!(attr_ext & 0x08))
+                        dat = dbcs_read(chr, sc_wide + 16, jega);
+                    for (int xx = 0; xx < 8; xx++)
+                        if (dat & (0x80 >> xx))
+                            dots |= 0xc000u >> (xx * 2);
+                } else {
+                    uint32_t dat = (dbcs_read(chr, sc_wide, jega) << 8) | dbcs_read(chr, sc_wide + 16, jega);
+                    if (attr_ext & 0x80)
+                        dat |= dat >> 1;
+                    dots = dat & 0xffff;
+                }
+            }
+            if (attr_basic & 0x20)
+                dots |= 0x8000;
+            if ((sc == jega->regs[RPULP]) && (attr_basic & 0x10))
+                dots = 0xffff;
+            cells[n++] = (dots >> 8) | pair;
+            cells[n++] = (dots & 0xff) | pair;
+            chr_wide   = false;
+        } else {
+            if (jega->regs[RMOD2] & 0x80) {
+                if (drawcursor || attr & 0x40) {
+                    bg = attr & 0x0f;
+                    fg = JEGA_K_BLACK;
+                } else {
+                    fg = attr & 0x0f;
+                    bg = JEGA_K_BLACK;
+                    if ((attr & 0x80) && blinked)
+                        fg = bg;
+                }
+                attr_basic = attr;
+            } else {
+                if (drawcursor) {
+                    bg = JEGA_K_MASKED + (attr & 0x0f);
+                    fg = JEGA_K_MASKED + (attr >> 4);
+                } else {
+                    fg = JEGA_K_MASKED + (attr & 0x0f);
+                    bg = JEGA_K_MASKED + (attr >> 4);
+                    if ((attr & 0x80) && attrblink) {
+                        bg = JEGA_K_MASKED + ((attr >> 4) & 7);
+                        if (blinked)
+                            fg = bg;
+                    }
+                }
+                attr_basic = 0;
+            }
+            if (is_SJIS_1(chr)) {
+                chr_first = chr;
+                chr_wide  = true;
+            } else {
+                uint32_t dots = jega->jfont_sbcs_19[chr * 19 + sc];
+                if (attr_basic & 0x20)
+                    dots |= 0x80;
+                if ((sc == jega->regs[RPULP]) && (attr_basic & 0x10))
+                    dots = 0xff;
+                cells[n++] = (dots & 0xff) | (fg << 8) | (bg << 16);
+            }
+        }
+        ma += 4;
+    }
+    if (n == 0)
+        return false;
+    bitmap_t *bitmap = buffer32;
+    uint32_t *line   = kairo_gpu_scan(bitmap, bitmap->kairo_gpu, (uint32_t) (p - bitmap->dat), KAIRO_SCAN_TEXT, n * 8, n, colours, 33,
+                                      8, 0, 0);
+    memcpy(line, cells, n * sizeof(uint32_t));
+    kairo_gpu_scan_commit();
+    *memaddr = ma & 0x3ffff;
+    return true;
+}
+
 /* Display Adapter Mode 3 Drawing */
 void
 jega_render_text(void *priv)
@@ -261,6 +396,12 @@ jega_render_text(void *priv)
         uint32_t   chr_first;
         int        fg            = 0;
         int        bg            = 0;
+
+        /* KairoX86#262: the GPU draws the line, else the CPU (after what the GPU still has to draw there) */
+        if (jega_render_text_gpu(jega, p, vram, *sc, *hdisp, *scrollcache, memaddr, mask, blinked, crtcreset, attrblink))
+            return;
+        if (kairo_gpu_on)
+            kairo_gpu_scan_touch(buffer32, (uint32_t) (p - buffer32->dat), (uint32_t) (buffer32->w - *x_add));
 
         for (int x = 0; x < (*hdisp + *scrollcache); x += charwidth) {
             uint32_t addr = 0;

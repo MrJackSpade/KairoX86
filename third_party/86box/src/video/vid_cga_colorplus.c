@@ -31,6 +31,7 @@
 #include <86box/video.h>
 #include <86box/mouse.h>
 #include <86box/vid_cga.h>
+#include <86box/kairo_gpu.h> /* KairoX86#242 */
 #include <86box/vid_colorplus.h>
 #include <86box/vid_cga_comp.h>
 #include <86box/plat_unused.h>
@@ -127,6 +128,57 @@ colorplus_update_latch(cga_t *cga, uint16_t memaddr)
     cga->crtc[CGA_CRTC_LIGHT_PEN_ADDR_LOW] = lp_latch & 0xFF;
 }
 
+/* KairoX86#242: line [line]'s pixels between the borders (the extra modes' two planes, read as colorplus_poll reads them)
+   to the GPU's scanout queue, coloured as video_process_8 will colour them: the 320 x 200 mode's 16 colours as 4 bits a
+   pixel drawn twice across, the 640 x 200 mode's 4 as 2 bits. Returns whether the GPU draws them; not with composite
+   output or the light pen, which read the picture back. */
+static bool
+colorplus_render_gpu(colorplus_t *colorplus, int line, const int *cols16, const int *cols)
+{
+    cga_t *cga = &colorplus->cga;
+
+    if (!kairo_gpu_on || cga->composite || cga_lightpen_enabled)
+        return false;
+    const int hdisp = cga->crtc[CGA_CRTC_HDISP];
+    if (hdisp <= 0)
+        return false;
+    const bool      lowres = (colorplus->control & COLORPLUS_320x200_MODE) != 0;
+    const uint8_t  *plane0 = cga->vram;
+    const uint8_t  *plane1 = cga->vram + 0x4000;
+    uint32_t        colours[16];
+    for (int v = 0; v < (lowres ? 16 : 4); v++)
+        colours[v] = pal_lookup[lowres ? cols16[v] : cols[v]];
+    bitmap_t       *bitmap = buffer32;
+    const uint32_t  out    = (uint32_t) (&bitmap->line[line][8] - bitmap->dat);
+    /* A character is 16 pixels: 8 of 4 bits doubled, or 16 of 2 bits; 4 bytes either way */
+    uint8_t        *bytes  = (uint8_t *) kairo_gpu_scan(bitmap, bitmap->kairo_gpu, out, KAIRO_SCAN_BITS, (uint32_t) hdisp * 16,
+                                                        (uint32_t) hdisp, colours, lowres ? 16 : 4, lowres ? 4 : 2, 0,
+                                                        lowres ? KAIRO_SCAN_WIDE : 0);
+    for (int x = 0; x < hdisp; x++) {
+        const uint32_t at   = ((cga->memaddr << 1) & 0x1fff) + ((cga->scanline & 1) * 0x2000);
+        uint16_t       dat0 = (plane0[at] << 8) | plane0[at + 1];
+        uint16_t       dat1 = (plane1[at] << 8) | plane1[at + 1];
+        uint32_t       word = 0;
+        if (lowres)
+            for (int c = 0; c < 8; c++) {
+                word = (word << 4) | (uint32_t) ((dat0 >> 14) | ((dat1 >> 14) << 2));
+                dat0 <<= 2;
+                dat1 <<= 2;
+            }
+        else
+            for (int c = 0; c < 16; c++) {
+                word = (word << 2) | (uint32_t) ((dat0 >> 15) | ((dat1 >> 15) << 1));
+                dat0 <<= 1;
+                dat1 <<= 1;
+            }
+        for (int b = 0; b < 4; b++)
+            bytes[x * 4 + b] = (uint8_t) (word >> (24 - 8 * b));
+        cga->memaddr++;
+    }
+    kairo_gpu_scan_commit();
+    return true;
+}
+
 void
 colorplus_poll(void *priv)
 {
@@ -172,11 +224,32 @@ colorplus_poll(void *priv)
                 video_wait_for_buffer();
             }
             colorplus->cga.lastline = colorplus->cga.displine;
+            if (kairo_gpu_on) /* KairoX86#242 */
+                kairo_gpu_scan_touch(buffer32, (uint32_t) (buffer32->line[colorplus->cga.displine] - buffer32->dat), (uint32_t) buffer32->w);
             /* Left / right border */
             for (c = 0; c < 8; c++) {
                 buffer32->line[colorplus->cga.displine][c] = buffer32->line[colorplus->cga.displine][c + (colorplus->cga.crtc[CGA_CRTC_HDISP] << 4) + 8] = (colorplus->cga.cgacol & 15) + 16;
             }
-            if (colorplus->control & COLORPLUS_320x200_MODE) {
+            cols[0] = (colorplus->cga.cgacol & 15) | 16;
+            col     = (colorplus->cga.cgacol & 16) ? 24 : 16;
+            if (colorplus->cga.cgamode & CGA_MODE_FLAG_BW) {
+                cols[1] = col | 3;
+                cols[2] = col | 4;
+                cols[3] = col | 7;
+            } else if (colorplus->cga.cgacol & 32) {
+                cols[1] = col | 3;
+                cols[2] = col | 5;
+                cols[3] = col | 7;
+            } else {
+                cols[1] = col | 2;
+                cols[2] = col | 4;
+                cols[3] = col | 6;
+            }
+            if (!(colorplus->control & (COLORPLUS_320x200_MODE | COLORPLUS_640x200_MODE))) {
+                /* neither mode's pixels: only the borders */
+            } else if (colorplus_render_gpu(colorplus, colorplus->cga.displine, cols16, cols)) {
+                /* KairoX86#242: the GPU draws the line between the borders */
+            } else if (colorplus->control & COLORPLUS_320x200_MODE) {
                 for (x = 0; x < colorplus->cga.crtc[CGA_CRTC_HDISP]; x++) {
                     dat0 = (plane0[((colorplus->cga.memaddr << 1) & 0x1fff) + ((colorplus->cga.scanline & 1) * 0x2000)] << 8) | plane0[((colorplus->cga.memaddr << 1) & 0x1fff) + ((colorplus->cga.scanline & 1) * 0x2000) + 1];
                     dat1 = (plane1[((colorplus->cga.memaddr << 1) & 0x1fff) + ((colorplus->cga.scanline & 1) * 0x2000)] << 8) | plane1[((colorplus->cga.memaddr << 1) & 0x1fff) + ((colorplus->cga.scanline & 1) * 0x2000) + 1];
@@ -195,21 +268,6 @@ colorplus_poll(void *priv)
                     colorplus->cga.memaddr++;
                 }
             } else if (colorplus->control & COLORPLUS_640x200_MODE) {
-                cols[0] = (colorplus->cga.cgacol & 15) | 16;
-                col     = (colorplus->cga.cgacol & 16) ? 24 : 16;
-                if (colorplus->cga.cgamode & CGA_MODE_FLAG_BW) {
-                    cols[1] = col | 3;
-                    cols[2] = col | 4;
-                    cols[3] = col | 7;
-                } else if (colorplus->cga.cgacol & 32) {
-                    cols[1] = col | 3;
-                    cols[2] = col | 5;
-                    cols[3] = col | 7;
-                } else {
-                    cols[1] = col | 2;
-                    cols[2] = col | 4;
-                    cols[3] = col | 6;
-                }
                 for (x = 0; x < colorplus->cga.crtc[CGA_CRTC_HDISP]; x++) {
                     dat0 = (plane0[((colorplus->cga.memaddr << 1) & 0x1fff) + ((colorplus->cga.scanline & 1) * 0x2000)] << 8) | plane0[((colorplus->cga.memaddr << 1) & 0x1fff) + ((colorplus->cga.scanline & 1) * 0x2000) + 1];
                     dat1 = (plane1[((colorplus->cga.memaddr << 1) & 0x1fff) + ((colorplus->cga.scanline & 1) * 0x2000)] << 8) | plane1[((colorplus->cga.memaddr << 1) & 0x1fff) + ((colorplus->cga.scanline & 1) * 0x2000) + 1];
@@ -230,6 +288,8 @@ colorplus_poll(void *priv)
         } else /* Top / bottom border */
         {
             cols[0] = (colorplus->cga.cgacol & 15) + 16;
+            if (kairo_gpu_on) /* KairoX86#242 */
+                kairo_gpu_scan_touch(buffer32, (uint32_t) (buffer32->line[colorplus->cga.displine] - buffer32->dat), (uint32_t) buffer32->w);
             hline(buffer32, 0, colorplus->cga.displine, (colorplus->cga.crtc[CGA_CRTC_HDISP] << 4) + 16, cols[0]);
         }
 
