@@ -112,6 +112,7 @@
 - **`kairox86-gpu-f82` group:** the C&T 82C425 LCD (the Victor V86P's) on the GPU (KairoX86#316); characters of other heights than 8 dots stay the CPU's. Checked by `cga86.S`.
 - **`kairox86-gpu-ibm5140` group:** the IBM PC Convertible's LCD on the GPU (KairoX86#317): the panel's response levels worked out as ever, a level a byte through their colours. Checked by `cga86.S`.
 - **`kairox86-gpu-pc3270` group:** the IBM 3270 PC's display adapter on the GPU (KairoX86#311), 9-dot text and graphics; not while its diagnostic readback samples the pixels. Checked by `cga86.S`.
+- **`kairox86-gpu-tandy2k` group:** the Tandy 2000's video on the GPU (KairoX86#322), its 640 x 400 planes and its text. Checked by `core/test/gpu/t2k86.S` (its own hardware, no IBM BIOS calls; the colour option on).
 
 ## 86Box's translations
 

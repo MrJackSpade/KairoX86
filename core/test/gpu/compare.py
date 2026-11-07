@@ -74,6 +74,8 @@ SCRIPT = {'ibmps2_m80_type3': '3100:+0x3b,3106:-0x3b',
           # The 8086 machines' unset CMOS or configuration, each prompt answered as it asks (F1, or Enter to keep the
           # floppy type offered), at a few points through a POST of unknown length
           't1200': '800:+0x1c,806:-0x1c,1600:+0x1c,1606:-0x1c,2400:+0x1c,2406:-0x1c',
+          # the MediaGX board's CMOS unset: F1 to continue
+          'p5gxm': '600:+0x3b,606:-0x3b,1200:+0x3b,1206:-0x3b',
           **{m: '800:+0x3b,806:-0x3b,1600:+0x3b,1606:-0x3b,2400:+0x3b,2406:-0x3b,3200:+0x3b,3206:-0x3b,4000:+0x3b,4006:-0x3b'
              for m in ('ibm3270pc', 'v86p', 'ibmps2_m30', 'portableiii', 't3100e', 'ibm5140')},
           # its CMOS unset too: "CMOS checksum error", F1 to continue
@@ -81,6 +83,10 @@ SCRIPT = {'ibmps2_m80_type3': '3100:+0x3b,3106:-0x3b',
           # its CMOS unset: F1 runs Setup, left without saving (Esc, Y, Enter)
           'asus386': '200:+0x3b,206:-0x3b,400:+0x01,406:-0x01,500:+0x15,506:-0x15,520:+0x1c,526:-0x1c'}
 # Boards' own graphics chips (gfxcard = internal), each named as its chip's device is, on its board
+# Boards whose drive is not the 8086 machines' 360 KB one: the IBM 5550's are 1.2 MB drives
+BOARD_FDD = {'ibm5550': '525_2hd'}
+# Boards' own video settings: the Tandy 2000 with its colour graphics option, so its graphics are tested too
+BOARD_VIDEO = {'tandy2000': '\n[Tandy 2000 (Video)]\ngraphics = 2\n'}
 ONBOARD = {'chips_69000_onboard': 'nupro592', **{f'{m}_video': m for m in BOARDS_8086}, 'p5gxm_video': 'p5gxm'}
 # The add-on cards: each one's [Video] line, its own section and the card beside it, an S3 Trio64 (the Voodoos drawn
 # by the C rasteriser on the software side, KairoX86#289; the PowerVR PCX2, KairoX86#269), or the IBM VGA beside the
@@ -131,12 +137,13 @@ def machine_config(board, card, test, accel, name):
         # A device reads its settings from its name's section, "<name> #<n>" for instance n > 0 (the AGP
         # Banshee is instance 1)
         voodoo = f"\n[{name}]\nrecompiler = 0\n\n[{name} #1]\nrecompiler = 0\n"
+    voodoo += BOARD_VIDEO.get(board, "")
     return (f"[Machine]\n{BOARDS[board]}cpu_use_dynarec = 1\nfpu_type = internal\ntime_sync = disabled\n\n"
             f"[Video]\n{video}{voodoo}\n[Input devices]\n"
             # The 8086 machines take their own keyboards (an XT-class board reads no PS/2 keyboard)
             + ("" if board in BOARDS_8086 else "keyboard_type = keyboard_ps2\n") + "mouse_type = none\n\n"
             f"[Storage controllers]\nhdc = none\n\n"
-            f"[Floppy and CD-ROM drives]\nfdd_01_type = {'525_2dd' if board in BOARDS_8086 else '35_2hd'}\n"
+            f"[Floppy and CD-ROM drives]\nfdd_01_type = {BOARD_FDD.get(board, '525_2dd' if board in BOARDS_8086 else '35_2hd')}\n"
             f"fdd_01_fn = {test}.img\nfdd_02_type = none\n\n"
             f"[KairoX86]\nhardware_acceleration = {1 if accel == 'on' else 0}\n")
 

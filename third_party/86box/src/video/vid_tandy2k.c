@@ -26,6 +26,7 @@
 #include <86box/mem.h>
 #include <86box/pic.h>
 #include <86box/video.h>
+#include <86box/kairo_gpu.h> /* KairoX86#322 */
 #include <86box/device.h>
 #include <86box/plat_unused.h>
 
@@ -367,6 +368,26 @@ vid_render_hires(t2kvid_t *vid)
     for (int i = 0; i < 8; i++)
         pal32[i] = pen_color(vid->pal[i]);
 
+    /* KairoX86#322: with Hardware acceleration on each row goes to the GPU's scanout queue as planar pixels, a dword
+       of the three planes' bytes for each 8 dots (the one-plane board's planes 1 and 2 none), through the pens */
+    if (kairo_gpu_on) {
+        uint32_t pens[16] = { 0 };
+        for (int i = 0; i < 8; i++)
+            pens[i] = pal32[i];
+        for (int y = 0; y < 400; y++) {
+            uint32_t *planes = kairo_gpu_scan(buffer32, buffer32->kairo_gpu, (uint32_t) (buffer32->line[y] - buffer32->dat),
+                                              KAIRO_SCAN_PLANES, TANDY2K_COLS * 8, TANDY2K_COLS, pens, 16, 0, 0, 0);
+            for (int sx = 0; sx < TANDY2K_COLS; sx++) {
+                const uint32_t off = (uint32_t) ((y * TANDY2K_COLS) + sx);
+                planes[sx]         = (uint32_t) vid->vram[0][off];
+                if (color_board)
+                    planes[sx] |= ((uint32_t) vid->vram[1][off] << 8) | ((uint32_t) vid->vram[2][off] << 16);
+            }
+            kairo_gpu_scan_commit();
+        }
+        return;
+    }
+
     for (int y = 0; y < 400; y++) {
         uint32_t *p = buffer32->line[y];
 
@@ -418,6 +439,45 @@ vid_render(t2kvid_t *vid)
        palette entries once per frame is all the colour work text mode needs. */
     for (int i = 0; i < 16; i++)
         green[i] = pen_green((uint8_t) i);
+
+    /* KairoX86#322: with Hardware acceleration on each scan line goes to the GPU's scanout queue as text cells, their
+       pens indexes into the 16 greens, worked out as the CPU works out its dots */
+    if (kairo_gpu_on) {
+        for (int row = 0; row < TANDY2K_ROWS; row++) {
+            for (int line = 0; line < 16; line++) {
+                uint32_t *cells = kairo_gpu_scan(buffer32, buffer32->kairo_gpu,
+                                                 (uint32_t) (buffer32->line[(row * 16) + line] - buffer32->dat), KAIRO_SCAN_TEXT,
+                                                 TANDY2K_COLS * 8, TANDY2K_COLS, green, 16, 8, 0, 0);
+                for (int col = 0; col < TANDY2K_COLS; col++) {
+                    uint32_t cell  = (uint32_t) ((row * TANDY2K_COLS) + col) * 2;
+                    uint8_t *cellp = vid_cell_ptr(vid, fb + cell);
+                    uint8_t  bits  = 0x00;
+                    uint32_t fg    = 0x0f;
+                    uint32_t bg    = 0x00;
+
+                    if (cellp != NULL) {
+                        const uint8_t code = cellp[0];
+                        const uint8_t attr = cellp[1];
+                        const uint8_t pen  = (uint8_t) (4 | ((attr & 0x40) ? 0 : 2));
+                        bits               = vid->chram[((code & 0x80) ? 0x1000 : 0x0000) + ((code & 0x7f) * 32) + (line * 2)];
+                        fg                 = vid->pal[pen | 1];
+                        bg                 = vid->pal[pen];
+                        if (attr & 0x04)
+                            bits = 0x00;
+                        if (attr & 0x80)
+                            bits = (uint8_t) ~bits;
+                        if ((attr & 0x20) && blink_off)
+                            bits = 0x00;
+                    }
+                    if (cursor_on && (row == vid->vpac[0x18]) && (col == vid->vpac[0x19]))
+                        bits = (uint8_t) ~bits;
+                    cells[col] = bits | ((fg & 0x0f) << 8) | ((bg & 0x0f) << 16);
+                }
+                kairo_gpu_scan_commit();
+            }
+        }
+        return;
+    }
 
     for (int row = 0; row < TANDY2K_ROWS; row++) {
         for (int line = 0; line < 16; line++) {

@@ -5582,6 +5582,20 @@ KAIROX86_GPU_PC3270 = [
      "\n            /* KairoX86#311: the GPU draws the line, else the CPU (after what the GPU still has to draw there); not while\n               the diagnostic readback samples the CPU's pixels */\n            if (!(kairo_gpu_on && !(dev->reg189 & 0x20) && pc3270_render_gpu(dev))) {\n                if (kairo_gpu_on)\n                    kairo_gpu_scan_touch(buffer32, (uint32_t) (buffer32->line[dev->displine] - buffer32->dat), (uint32_t) buffer32->w);\n                dev->render(dev);\n            }\n\n"),
 ]
 
+# KairoX86#322: the Tandy 2000's video on the GPU: its 640 x 400 graphics as the three planes' bytes through the pens,
+# its text as cells through the 16 greens, worked out as the CPU works out its dots.
+KAIROX86_GPU_TANDY2K = [
+    ('86box/src/video/vid_tandy2k.c',
+     '#include <86box/video.h>\n#include <86box/device.h>\n',
+     '#include <86box/video.h>\n#include <86box/kairo_gpu.h> /* KairoX86#322 */\n#include <86box/device.h>\n'),
+    ('86box/src/video/vid_tandy2k.c',
+     '\n    for (int y = 0; y < 400; y++) {\n',
+     "\n    /* KairoX86#322: with Hardware acceleration on each row goes to the GPU's scanout queue as planar pixels, a dword\n       of the three planes' bytes for each 8 dots (the one-plane board's planes 1 and 2 none), through the pens */\n    if (kairo_gpu_on) {\n        uint32_t pens[16] = { 0 };\n        for (int i = 0; i < 8; i++)\n            pens[i] = pal32[i];\n        for (int y = 0; y < 400; y++) {\n            uint32_t *planes = kairo_gpu_scan(buffer32, buffer32->kairo_gpu, (uint32_t) (buffer32->line[y] - buffer32->dat),\n                                              KAIRO_SCAN_PLANES, TANDY2K_COLS * 8, TANDY2K_COLS, pens, 16, 0, 0, 0);\n            for (int sx = 0; sx < TANDY2K_COLS; sx++) {\n                const uint32_t off = (uint32_t) ((y * TANDY2K_COLS) + sx);\n                planes[sx]         = (uint32_t) vid->vram[0][off];\n                if (color_board)\n                    planes[sx] |= ((uint32_t) vid->vram[1][off] << 8) | ((uint32_t) vid->vram[2][off] << 16);\n            }\n            kairo_gpu_scan_commit();\n        }\n        return;\n    }\n\n    for (int y = 0; y < 400; y++) {\n"),
+    ('86box/src/video/vid_tandy2k.c',
+     '        green[i] = pen_green((uint8_t) i);\n\n',
+     "        green[i] = pen_green((uint8_t) i);\n\n    /* KairoX86#322: with Hardware acceleration on each scan line goes to the GPU's scanout queue as text cells, their\n       pens indexes into the 16 greens, worked out as the CPU works out its dots */\n    if (kairo_gpu_on) {\n        for (int row = 0; row < TANDY2K_ROWS; row++) {\n            for (int line = 0; line < 16; line++) {\n                uint32_t *cells = kairo_gpu_scan(buffer32, buffer32->kairo_gpu,\n                                                 (uint32_t) (buffer32->line[(row * 16) + line] - buffer32->dat), KAIRO_SCAN_TEXT,\n                                                 TANDY2K_COLS * 8, TANDY2K_COLS, green, 16, 8, 0, 0);\n                for (int col = 0; col < TANDY2K_COLS; col++) {\n                    uint32_t cell  = (uint32_t) ((row * TANDY2K_COLS) + col) * 2;\n                    uint8_t *cellp = vid_cell_ptr(vid, fb + cell);\n                    uint8_t  bits  = 0x00;\n                    uint32_t fg    = 0x0f;\n                    uint32_t bg    = 0x00;\n\n                    if (cellp != NULL) {\n                        const uint8_t code = cellp[0];\n                        const uint8_t attr = cellp[1];\n                        const uint8_t pen  = (uint8_t) (4 | ((attr & 0x40) ? 0 : 2));\n                        bits               = vid->chram[((code & 0x80) ? 0x1000 : 0x0000) + ((code & 0x7f) * 32) + (line * 2)];\n                        fg                 = vid->pal[pen | 1];\n                        bg                 = vid->pal[pen];\n                        if (attr & 0x04)\n                            bits = 0x00;\n                        if (attr & 0x80)\n                            bits = (uint8_t) ~bits;\n                        if ((attr & 0x20) && blink_off)\n                            bits = 0x00;\n                    }\n                    if (cursor_on && (row == vid->vpac[0x18]) && (col == vid->vpac[0x19]))\n                        bits = (uint8_t) ~bits;\n                    cells[col] = bits | ((fg & 0x0f) << 8) | ((bg & 0x0f) << 16);\n                }\n                kairo_gpu_scan_commit();\n            }\n        }\n        return;\n    }\n\n"),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -5697,6 +5711,7 @@ PATCHES = {
     'kairox86-gpu-f82': KAIROX86_GPU_F82,
     'kairox86-gpu-ibm5140': KAIROX86_GPU_IBM5140,
     'kairox86-gpu-pc3270': KAIROX86_GPU_PC3270,
+    'kairox86-gpu-tandy2k': KAIROX86_GPU_TANDY2K,
 }
 
 ADDED = [
