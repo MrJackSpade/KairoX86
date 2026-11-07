@@ -57,6 +57,7 @@
 #include <86box/serial.h>
 #include <86box/snd_speaker.h>
 #include <86box/video.h>
+#include <86box/kairo_gpu.h> /* KairoX86#324 */
 #include <86box/machine.h>
 #include <86box/plat_unused.h>
 #define EMU_DEVICE_H
@@ -954,6 +955,33 @@ getPS55ForeColor(uint8_t attr, epoch_t *epoch)
     return foreground;
 }
 
+/* KairoX86#324: the display's line to the GPU's scanout queue: count pixels from pixel at of the line, bits a pixel
+   (bits: 1 or 4, most significant first over the bytes), through colours (colour_count); NULL bytes for all zero. Returns
+   whether the GPU draws it; else what the GPU still has to draw on the line is drawn, for the CPU. */
+static bool
+epoch_line_gpu(epoch_t *epoch, uint32_t at, uint32_t count, uint32_t bits, const uint8_t *bytes, uint32_t n_bytes,
+               const uint32_t *colours, uint32_t colour_count)
+{
+    bitmap_t      *bitmap = buffer32;
+    const uint32_t out    = (uint32_t) (bitmap->line[epoch->displine] - bitmap->dat) + at;
+    static const uint32_t black[1] = { 0 };
+
+    if (!kairo_gpu_on)
+        return false;
+    if ((count == 0) || ((at + count) > (uint32_t) bitmap->w)) {
+        kairo_gpu_scan_touch(bitmap, (uint32_t) (bitmap->line[epoch->displine] - bitmap->dat), (uint32_t) bitmap->w);
+        return false;
+    }
+    const uint32_t words = (((count * bits) + 7) / 8 + 3) / 4;
+    uint32_t      *w     = kairo_gpu_scan(bitmap, bitmap->kairo_gpu, out, KAIRO_SCAN_BITS, count, words,
+                                          (bytes == NULL) ? black : colours, (bytes == NULL) ? 1 : colour_count, bits, 0, 0);
+    memset(w, 0, (size_t) words * 4);
+    if (bytes != NULL)
+        memcpy(w, bytes, n_bytes);
+    kairo_gpu_scan_commit();
+    return true;
+}
+
 static void
 epoch_render_blank(epoch_t *epoch)
 {
@@ -963,6 +991,9 @@ epoch_render_blank(epoch_t *epoch)
         epoch->firstline_draw = epoch->displine;
     epoch->lastline_draw = epoch->displine;
 
+    /* KairoX86#324: on the GPU, a line of black */
+    if (epoch_line_gpu(epoch, 0, (uint32_t) ((epoch->hdisp + epoch->scrollcache) * epoch->char_width), 1, NULL, 0, NULL, 0))
+        return;
     for (x = 0; x < epoch->hdisp + epoch->scrollcache; x++) {
         for (xx = 0; xx < epoch->char_width; xx++)
             ((uint32_t *) buffer32->line[epoch->displine])[(x * epoch->char_width) + xx] = 0;
@@ -980,7 +1011,9 @@ epoch_render_text(epoch_t *epoch)
 
     if (epoch->fullchange) {
         int       offset = (8 - epoch->scrollcache) + 24;
-        uint32_t *p      = &((uint32_t *) buffer32->line[epoch->displine])[offset];
+        /* KairoX86#324: the line composed as palette indexes (egapal's), then drawn by the CPU or the GPU */
+        static uint8_t idx_line[4096];
+        uint8_t  *p      = idx_line;
         int       x;
         int       drawcursor;
         uint8_t   chr, attr;
@@ -1024,9 +1057,11 @@ epoch_render_text(epoch_t *epoch)
                 fg = ((epoch->blink & 0x20) || (!(attr & 0x80))) ? fg : bg;
                 // if(chr!=0x20) epoch_log("chr: %x, %x, %x, %x, %x    ", chr, attr, fg, epoch->egapal[fg], epoch->pallook[epoch->egapal[fg]]);
             }
+            if ((size_t) ((p - idx_line) + epoch->char_width) > sizeof(idx_line))
+                fatal("IBM 5550: a text line of more than %u dots\n", (unsigned) sizeof(idx_line));
             /* Draw character */
             for (uint32_t n = 0; n < epoch->char_width; n++)
-                p[n] = epoch->pallook[epoch->egapal[bg]]; /* draw blank */
+                p[n] = bg; /* draw blank */
             /*  SBCS or DBCS left half */
             if (chr_wide == 0) {
                 /* Bit 0 of a cell's own attribute marks a wide character; the
@@ -1057,7 +1092,7 @@ epoch_render_text(epoch_t *epoch)
                     uint32_t font = getfont_ps55dbcs(chr_dbcs, epoch->scanline, chr_card, epoch);
                     /* Draw 13 dots */
                     for (uint32_t n = 0; n < epoch->char_width; n++) {
-                        p[n] = epoch->pallook[epoch->egapal[(font & 0x80000000) ? fg : bg]];
+                        p[n] = (font & 0x80000000) ? fg : bg;
                         font <<= 1;
                     }
                 } else {
@@ -1141,7 +1176,7 @@ epoch_render_text(epoch_t *epoch)
                     // if(chr!=0x20) epoch_log("memaddr: %x, scanline: %x, chr: %x, font: %x    ", epoch->memaddr, epoch->scanline, chr, font);
                     /* Draw 13 dots */
                     for (uint32_t n = 0; n < epoch->char_width; n++) {
-                        p[n] = epoch->pallook[epoch->egapal[(font & 0x8000) ? fg : bg]];
+                        p[n] = (font & 0x8000) ? fg : bg;
                         font <<= 1;
                     }
                 }
@@ -1153,7 +1188,7 @@ epoch_render_text(epoch_t *epoch)
                                                  epoch->scanline, chr_card, epoch);
                 /* Draw 13 dots */
                 for (uint32_t n = 0; n < epoch->char_width; n++) {
-                    p[n] = epoch->pallook[epoch->egapal[(font & (is3477dbcs ? 0x80000000u : 0x8000)) ? fg : bg]];
+                    p[n] = (font & (is3477dbcs ? 0x80000000u : 0x8000)) ? fg : bg;
                     font <<= 1;
                 }
                 chr_wide = 0;
@@ -1162,15 +1197,15 @@ epoch_render_text(epoch_t *epoch)
             /* Line 28 (Underscore) Note: Draw this first to display blink + vertical + underline correctly. */
             if (epoch->scanline == underscore_y && attr & 0x40 && !colormode) { /* Underscore only in monochrome mode */
                 for (uint32_t n = 0; n < epoch->char_width; n++)
-                    p[n] = epoch->pallook[epoch->egapal[fg]]; /* under line (white) */
+                    p[n] = fg; /* under line (white) */
             }
             /* Column 1 (Vertical Line) */
             if (attr & 0x10) {
-                p[0] = epoch->pallook[epoch->egapal[2]]; /* vertical line (white) */
+                p[0] = 2; /* vertical line (white) */
             }
             if (epoch->scanline == 0 && attr & 0x20) { /* HGrid */
                 for (uint32_t n = 0; n < epoch->char_width; n++)
-                    p[n] = epoch->pallook[epoch->egapal[2]]; /* horizontal line (white) */
+                    p[n] = 2; /* horizontal line (white) */
             }
             /* Drawing text cursor */
             drawcursor = ((epoch->memaddr == epoch->cursoraddr) && epoch->cursorvisible && epoch->cursoron);
@@ -1184,15 +1219,35 @@ epoch_render_text(epoch_t *epoch)
                     bg = fg;
                     fg = 0;
                 }
-                for (uint32_t n = 0; n < cursorwidth; n++)
-                    if (p[n] == epoch->pallook[epoch->egapal[cursorcolor]] || epoch->egapal[bg] == epoch->egapal[cursorcolor])
-                        p[n] = (p[n] == epoch->pallook[epoch->egapal[bg]]) ? epoch->pallook[epoch->egapal[fg]] : epoch->pallook[epoch->egapal[bg]];
+                /* the tests on the dots' colours, as when the line was drawn in colours */
+                for (uint32_t n = 0; n < cursorwidth; n++) {
+                    const uint32_t c = epoch->pallook[epoch->egapal[p[n]]];
+                    if (c == epoch->pallook[epoch->egapal[cursorcolor]] || epoch->egapal[bg] == epoch->egapal[cursorcolor])
+                        p[n] = (c == epoch->pallook[epoch->egapal[bg]]) ? fg : bg;
                     else
-                        p[n] = (p[n] == epoch->pallook[epoch->egapal[bg]]) ? epoch->pallook[epoch->egapal[cursorcolor]] : p[n];
+                        p[n] = (c == epoch->pallook[epoch->egapal[bg]]) ? cursorcolor : p[n];
+                }
             }
             epoch->memaddr += 2;
             p += epoch->char_width;
         }
+
+        /* KairoX86#324: the line's indexes to the GPU (4 bits a dot), or to colours for the CPU */
+        const uint32_t dots = (uint32_t) (p - idx_line);
+        static uint8_t packed[2048];
+        uint32_t       colours[16];
+        for (int i = 0; i < 16; i++)
+            colours[i] = epoch->pallook[epoch->egapal[i]];
+        if (kairo_gpu_on && (dots <= 2 * sizeof(packed))) {
+            for (uint32_t n = 0; n < dots; n += 2)
+                packed[n >> 1] = (uint8_t) ((idx_line[n] << 4) | (((n + 1) < dots) ? (idx_line[n + 1] & 0x0f) : 0));
+            if (epoch_line_gpu(epoch, (uint32_t) offset, dots, 4, packed, (dots + 1) / 2, colours, 16))
+                return;
+        } else if (kairo_gpu_on)
+            kairo_gpu_scan_touch(buffer32, (uint32_t) (buffer32->line[epoch->displine] - buffer32->dat), (uint32_t) buffer32->w);
+        uint32_t *line = &((uint32_t *) buffer32->line[epoch->displine])[offset];
+        for (uint32_t n = 0; n < dots; n++)
+            line[n] = colours[idx_line[n]];
     }
 }
 
@@ -1213,6 +1268,19 @@ epoch_render_color_4bpp(epoch_t *epoch)
         epoch->lastline_draw = epoch->displine;
         // epoch_log("d %X\n", epoch->memaddr);
         int readvaddr = (epoch->memaddr * 8) + (epoch->scanline * 128);
+        if (kairo_gpu_on) { /* KairoX86#324: the line's bytes, a bit a pixel, to the GPU */
+            static uint8_t bytes[1024];
+            const uint32_t n = (uint32_t) (epoch->hdisp / 8) + 1;
+            const uint32_t colours[2] = { epoch->pallook[epoch->egapal[0]], epoch->pallook[epoch->egapal[1]] };
+            if ((epoch->hdisp >= 0) && (n <= sizeof(bytes))) {
+                int a = readvaddr;
+                for (uint32_t i = 0; i < n; i++, a++)
+                    bytes[i] = epoch->vram[a & epoch->vram_display_mask];
+                if (epoch_line_gpu(epoch, (uint32_t) offset, n * 8, 1, bytes, n, colours, 2))
+                    return;
+            } else
+                kairo_gpu_scan_touch(buffer32, (uint32_t) (buffer32->line[epoch->displine] - buffer32->dat), (uint32_t) buffer32->w);
+        }
         for (x = 0; x <= epoch->hdisp; x += 8) /* hdisp = 1024 */
         {
             uint8_t edat[8];

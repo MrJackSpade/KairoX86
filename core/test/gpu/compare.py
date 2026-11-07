@@ -82,9 +82,11 @@ SCRIPT = {'ibmps2_m80_type3': '3100:+0x3b,3106:-0x3b',
           'nupro592': '600:+0x3b,606:-0x3b',
           # its CMOS unset: F1 runs Setup, left without saving (Esc, Y, Enter)
           'asus386': '200:+0x3b,206:-0x3b,400:+0x01,406:-0x01,500:+0x15,506:-0x15,520:+0x1c,526:-0x1c'}
-# Boards whose drive is not the 8086 machines' 360 KB one: the IBM 5550's DSQD (720 KB 5.25") drives. Its IPL takes no PC
-# boot sector yet (KairoX86#324), so its tests do not reach their end
+# Boards whose drive is not the 8086 machines' 360 KB one: the IBM 5550's DSQD (720 KB 5.25") drives
 BOARD_FDD = {'ibm5550': '525_2qd'}
+# Boards that boot images of their own size only: the IBM 5550's IPL load modules (make_tests.py ipl_5550_image)
+FLOPPY_720K = 737280
+BOARD_IMAGE = {'ibm5550': FLOPPY_720K}
 # Boards' own video settings: the Tandy 2000 with its colour graphics option, so its graphics are tested too
 BOARD_VIDEO = {'tandy2000': '\n[Tandy 2000 (Video)]\ngraphics = 2\n'}
 # Boards' own graphics chips (gfxcard = internal), each named as its chip's device is, on its board
@@ -279,10 +281,14 @@ def main():
             print(f'{card}: no test board takes it', flush=True)
             return [(card, '-', 'no test board takes it')]
         found = []
-        # The 8086 machines boot the 8086 tests only, the others the rest
+        # A board with images of its own boots those only; the other 8086 machines the 8086 tests, the rest the others
         for8086 = board in BOARDS_8086
         for test in tests:
-            if ((Path(args.tests_folder) / f'{test}.img').stat().st_size == FLOPPY_360K) != for8086:
+            size = (Path(args.tests_folder) / f'{test}.img').stat().st_size
+            if board in BOARD_IMAGE:
+                if size != BOARD_IMAGE[board]:
+                    continue
+            elif (size in BOARD_IMAGE.values()) or ((size == FLOPPY_360K) != for8086):
                 continue
             folder = out / card / test
             try:
