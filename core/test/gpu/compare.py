@@ -42,12 +42,17 @@ BOARDS = {
                         "mem_size = 8192\n",
     # The Chips & Technologies B69000's own board (its on-board chip, KairoX86#249)
     'nupro592': "machine = nupro592\ncpu_family = pentium_p55c\ncpu_speed = 200000000\ncpu_multi = 3\nmem_size = 32768\n",
+    # The Sigma Color 400's (KairoX86#285): an AMI 386 board whose BIOS has its timer vector set when the card's ROM
+    # hooks it (the later Award BIOSes of the 486AP4 and 686BX hand it a stub their memory test then wipes)
+    'asus386': "machine = asus386\ncpu_family = i386dx\ncpu_speed = 33333333\ncpu_multi = 1\nmem_size = 4096\n",
 }
 # A board's input: the Model 80's CMOS was never set (no reference diskette), so POST stops at 161 and 163 waiting
 # for F1, which it is given well after the prompt appears
 SCRIPT = {'ibmps2_m80_type3': '3100:+0x3b,3106:-0x3b',
           # its CMOS unset too: "CMOS checksum error", F1 to continue
-          'nupro592': '600:+0x3b,606:-0x3b'}
+          'nupro592': '600:+0x3b,606:-0x3b',
+          # its CMOS unset: F1 runs Setup, left without saving (Esc, Y, Enter)
+          'asus386': '200:+0x3b,206:-0x3b,400:+0x01,406:-0x01,500:+0x15,506:-0x15,520:+0x1c,526:-0x1c'}
 # Boards' own graphics chips (gfxcard = internal), each named as its chip's device is, on its board
 ONBOARD = {'chips_69000_onboard': 'nupro592'}
 # The add-on cards: each one's [Video] line, its own section and the card beside it, an S3 Trio64 (the Voodoos drawn
@@ -69,6 +74,7 @@ BUS_BOARD = {'pci': '686bx', 'agp': '686bx', 'mca': 'ibmps2_m80_type3'}
 # Cards whose software path fails on their bus's board, each on one where it works until its bug is fixed
 CARD_BOARD = {
     'quadcolor': '686bx',  # KairoX86#286: on the 486AP4 it hands over no picture and the machine never boots
+    'sigma400': 'asus386',  # KairoX86#285: its ROM hooks the timer before the later Award BIOSes set it
 }
 # The 3dfx cards (Voodoo Graphics, Voodoo2, the Banshee family): the software side draws with 86Box's C
 # rasteriser, the reference its recompiler is meant to match and does not yet in every mode (KairoX86#289)

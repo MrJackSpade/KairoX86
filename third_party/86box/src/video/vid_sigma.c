@@ -24,6 +24,7 @@
 #include <86box/pit.h>
 #include <86box/mem.h>
 #include <86box/nmi.h>
+#include <86box/kairo_gpu.h> /* KairoX86#273 */
 #include <86box/rom.h>
 #include <86box/device.h>
 #include <86box/video.h>
@@ -598,6 +599,108 @@ sigma_gfx4col(sigma_t *sigma)
     }
 }
 
+/* KairoX86#273: with the machine's Hardware acceleration on, the line between the borders (sigma_text80/40,
+   sigma_gfx400/200/4col's, read as they read it) to the GPU's scanout queue, coloured as the poll's palette pass and
+   video_process_8 will colour it; sigma->memaddr moved as those move it. Returns whether the GPU draws it. */
+static bool
+sigma_render_gpu(sigma_t *sigma)
+{
+    const int cells = sigma->crtc[1] << 1;
+
+    if (!kairo_gpu_on || (cells <= 0))
+        return false;
+    bitmap_t      *bitmap = buffer32;
+    const uint32_t out    = (uint32_t) (&bitmap->line[sigma->displine][8] - bitmap->dat);
+    uint32_t       colours[16];
+    for (int i = 0; i < 16; i++)
+        colours[i] = pal_lookup[sigma->palette[i] | 16];
+
+    if (!(sigma->sigmamode & MODE_GRAPHICS)) {
+        /* Text: 8-dot cells, the font byte and the colours' indexes (low 4 bits: the palette pass's) */
+        const bool     wide       = !(sigma->sigmamode & MODE_80COLS);
+        uint16_t       cursoraddr = (sigma->crtc[15] | (sigma->crtc[14] << 8));
+        uint16_t       memaddr    = ((sigma->memaddr & 0x3FFF) << 1);
+        const uint8_t *vram       = wide ? (sigma->vram + ((memaddr << 1) & 0x3FFF)) : (sigma->vram + (memaddr << 1));
+
+        cursoraddr = cursoraddr << 1;
+        if (sigma->sigma_ctl & CTL_CURSOR)
+            ++cursoraddr;
+        cursoraddr &= 0x3fff;
+        uint32_t *words = kairo_gpu_scan(bitmap, bitmap->kairo_gpu, out, KAIRO_SCAN_TEXT, (uint32_t) cells * (wide ? 16 : 8),
+                                         (uint32_t) cells, colours, 16, 8, 0, wide ? KAIRO_SCAN_WIDE : 0);
+        for (int x = 0; x < cells; x++) {
+            const uint8_t chr        = vram[x << 1];
+            const uint8_t attr       = vram[(x << 1) + 1];
+            const int     drawcursor = ((memaddr == cursoraddr) && sigma->cursorvisible && sigma->cursoron);
+            uint32_t      fg;
+            uint32_t      bg;
+
+            if (!(sigma->sigmamode & MODE_NOBLINK)) {
+                fg = attr & 15;
+                bg = (attr >> 4) & 7;
+                if ((sigma->cgablink & 8) && (attr & 0x80) && !sigma->drawcursor)
+                    fg = bg;
+            } else {
+                fg = attr & 15;
+                bg = attr >> 4;
+            }
+            if (drawcursor) {
+                fg ^= 0xf;
+                bg ^= 0xf;
+            }
+            const uint8_t font = (wide || (sigma->sigmamode & MODE_FONT16)) ? fontdatm[chr][sigma->scanline & 15]
+                                                                             : fontdat[chr][sigma->scanline & 7];
+            words[x] = font | (fg << 8) | (bg << 16);
+            ++memaddr;
+        }
+        kairo_gpu_scan_commit();
+        sigma->memaddr += sigma->crtc[1];
+        return true;
+    }
+
+    if (sigma->sigmamode & (MODE_640x400 | MODE_HRGFX)) {
+        /* 640 x 400 or 640 x 200: four planes, a pixel's value its bit of each */
+        const uint32_t base = ((sigma->memaddr << 1) & 0x1FFF) +
+                              ((sigma->sigmamode & MODE_640x400) ? (sigma->scanline & 3) * 0x2000 : (sigma->scanline & 2) * 0x1000);
+        uint32_t      *words = kairo_gpu_scan(bitmap, bitmap->kairo_gpu, out, KAIRO_SCAN_PLANES, (uint32_t) cells * 8,
+                                              (uint32_t) cells, colours, 16, 0, 0, 0);
+        for (int x = 0; x < cells; x++)
+            words[x] = sigma->vram[base + x] | (sigma->vram[base + 0x8000 + x] << 8) |
+                       (sigma->vram[base + 0x10000 + x] << 16) | ((uint32_t) sigma->vram[base + 0x18000 + x] << 24);
+        kairo_gpu_scan_commit();
+        sigma->memaddr += sigma->crtc[1];
+        return true;
+    }
+
+    /* 320 x 200: four pixels a byte pair (planes 2 and 3), each drawn twice, as nibbles low first */
+    const uint32_t base   = ((sigma->memaddr << 1) & 0x1FFF) + (sigma->scanline & 2) * 0x1000;
+    uint32_t       shifts = 0;
+    for (uint32_t k = 0; k < 8; k++)
+        shifts |= (4u * k) << (3u * k);
+    uint32_t *words = kairo_gpu_scan(bitmap, bitmap->kairo_gpu, out, KAIRO_SCAN_NIBBLES, (uint32_t) cells * 8,
+                                     ((uint32_t) cells + 1) / 2, colours, 16, shifts, 0, KAIRO_SCAN_WIDE);
+    for (int x = 0; x < cells; x++) {
+        const uint8_t p2   = sigma->vram[base + 0x10000 + x];
+        const uint8_t p3   = sigma->vram[base + 0x18000 + x];
+        uint32_t      quad = 0;
+        uint8_t       mask = 0x80;
+        for (uint32_t c = 0; c < 4; c++) {
+            uint32_t col = ((p3 & mask) ? 2 : 0) | ((p2 & mask) ? 1 : 0);
+            mask >>= 1;
+            col |= ((p3 & mask) ? 8 : 0) | ((p2 & mask) ? 4 : 0);
+            mask >>= 1;
+            quad |= col << (4 * c);
+        }
+        if (x & 1)
+            words[x >> 1] |= quad << 16;
+        else
+            words[x >> 1] = quad;
+    }
+    kairo_gpu_scan_commit();
+    sigma->memaddr += sigma->crtc[1];
+    return true;
+}
+
 static void
 sigma_poll(void *priv)
 {
@@ -616,6 +719,9 @@ sigma_poll(void *priv)
     if (!sigma->linepos) {
         timer_advance_u64(&sigma->timer, sigma->dispofftime);
         sigma->sigmastat |= STATUS_RETR_H;
+        /* KairoX86#273: a line the GPU still has to draw is drawn before the CPU draws on it again */
+        if (kairo_gpu_on)
+            kairo_gpu_scan_touch(buffer32, (uint32_t) (buffer32->line[sigma->displine] - buffer32->dat), (uint32_t) buffer32->w);
         sigma->linepos = 1;
         scanline_old          = sigma->scanline;
         if ((sigma->crtc[8] & 3) == 3)
@@ -636,7 +742,9 @@ sigma_poll(void *priv)
                 else
                     buffer32->line[sigma->displine][c + (sigma->crtc[1] << 5) + 8] = cols[0];
             }
-            if (sigma->sigmamode & MODE_GRAPHICS) {
+            if (sigma_render_gpu(sigma))
+                ; /* KairoX86#273: the GPU draws it */
+            else if (sigma->sigmamode & MODE_GRAPHICS) {
                 if (sigma->sigmamode & MODE_640x400)
                     sigma_gfx400(sigma);
                 else if (sigma->sigmamode & MODE_HRGFX)
