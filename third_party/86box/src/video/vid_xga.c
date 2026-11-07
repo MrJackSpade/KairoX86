@@ -35,6 +35,9 @@
 #include "cpu.h"
 #include <86box/plat.h>
 #include <86box/plat_unused.h>
+#include <86box/kairo_gpu.h> /* KairoX86#280 */
+#include <86box/kairo_gpu_seg.h>
+#include <86box/kairo_gpu_xga.h>
 
 #define XGA_BIOS_PATH       "roms/video/xga/XGA_37F9576_Ver200.BIN"
 #define XGA2_BIOS_PATH      "roms/video/xga/xga2_v300.bin"
@@ -1135,15 +1138,35 @@ xga_transform_val(uint16_t val, uint8_t mode, int bits)
     return ret & ((1 << bits) - 1);
 }
 
+/* KairoX86#280: the drawing engine's batch on the GPU and its runs of 1 and 2-byte pixels */
+typedef struct xga_gpu_t {
+    kairo_seg_t     *seg;
+    kairo_seg_run_t *run[2];
+    uint32_t         record[XG_WORDS];
+    uint64_t         generation;
+    int              issued;
+    int              in_order;
+    int              dbits; /* the pixel being recorded's map bits */
+} xga_gpu_t;
+
+/* The batch drawn first where the processor, the display or the engine's own reads meet it */
+static inline void
+xga_k_touch(const xga_t *xga, uint32_t addr, uint32_t len)
+{
+    if (xga->k_gpu != NULL)
+        kairo_seg_touch(((xga_gpu_t *) xga->k_gpu)->seg, addr & xga->vram_mask, len);
+}
+
 static uint8_t
 xga_map_readb(svga_t *svga, uint32_t addr, int map)
 {
     xga_t    *xga  = (xga_t *) svga->xga;
     uint8_t   ret;
 
-    if ((addr >= xga->linear_base) && (addr <= (xga->linear_base + 0xfffff)))
+    if ((addr >= xga->linear_base) && (addr <= (xga->linear_base + 0xfffff))) {
+        xga_k_touch(xga, addr, 1); /* KairoX86#280 */
         ret = xga->vram[addr & xga->vram_mask];
-    else
+    } else
         ret = xga_transform_val(mem_readb_phys(xga_transform_addr(addr, xga->accel.px_map_format[map])),
                                 xga->accel.px_map_format[map], 8);
     return ret;
@@ -1155,9 +1178,10 @@ xga_map_readw(svga_t *svga, uint32_t addr, int map)
     xga_t    *xga  = (xga_t *) svga->xga;
     uint16_t  ret;
 
-    if ((addr >= xga->linear_base) && (addr <= (xga->linear_base + 0xfffff)))
+    if ((addr >= xga->linear_base) && (addr <= (xga->linear_base + 0xfffff))) {
+        xga_k_touch(xga, addr, 2); /* KairoX86#280 */
         ret = *(uint16_t *) &xga->vram[addr & xga->vram_mask];
-    else
+    } else
         ret = xga_transform_val(mem_readw_phys(addr), xga->accel.px_map_format[map], 16);
 
     return ret;
@@ -1169,6 +1193,7 @@ xga_map_writeb(svga_t *svga, uint32_t addr, int map, uint8_t val)
     xga_t    *xga  = (xga_t *) svga->xga;
 
     if ((addr >= xga->linear_base) && (addr <= (xga->linear_base + 0xfffff))) {
+        xga_k_touch(xga, addr, 1); /* KairoX86#280 */
         xga->vram[addr & xga->vram_mask]                = val;
         xga->changedvram[(addr & xga->vram_mask) >> 12] = svga->monitor->mon_changeframecount;
     } else
@@ -1182,7 +1207,8 @@ xga_map_writew(svga_t *svga, uint32_t addr, int map, uint16_t val)
     xga_t    *xga  = (xga_t *) svga->xga;
 
     if ((addr >= xga->linear_base) && (addr <= (xga->linear_base + 0xfffff))) {
-       *(uint16_t *) &xga->vram[addr & xga->vram_mask] = val;
+        xga_k_touch(xga, addr, 2); /* KairoX86#280 */
+        *(uint16_t *) &xga->vram[addr & xga->vram_mask] = val;
         xga->changedvram[(addr & xga->vram_mask) >> 12] = svga->monitor->mon_changeframecount;
     } else
         mem_writew_phys(addr, xga_transform_val(val, xga->accel.px_map_format[map], 16));
@@ -1349,8 +1375,90 @@ xga_accel_write_map_pixel(svga_t *svga, int x, int y, int map, uint32_t pixel)
     }
 }
 
+/* KairoX86#280: the run's operation in the batch: the record again only where it differs or the batch has been drawn */
 static void
-xga_short_stroke(svga_t *svga, uint8_t ssv)
+xga_k_op(void *priv, bool in_order)
+{
+    xga_t     *xga           = (xga_t *) priv;
+    xga_gpu_t *g             = xga->k_gpu;
+    uint32_t   rec[XG_WORDS] = { 0 };
+
+    rec[XG_FRGD_MIX]   = xga->accel.frgd_mix & 0x1f;
+    rec[XG_BKGD_MIX]   = xga->accel.bkgd_mix & 0x1f;
+    rec[XG_CC_COND]    = xga->accel.cc_cond;
+    rec[XG_CC]         = xga->accel.color_cmp;
+    rec[XG_PLANE_MASK] = xga->accel.plane_mask;
+    rec[XG_DST_BITS]   = g->dbits;
+    kairo_seg_make_room(g->seg);
+    if (g->issued && (g->in_order == in_order) && (g->generation == kairo_seg_generation(g->seg)) && !memcmp(g->record, rec, sizeof(rec)))
+        return;
+    memcpy(kairo_seg_op(g->seg, in_order), rec, sizeof(rec));
+    memcpy(g->record, rec, sizeof(rec));
+    g->generation = kairo_seg_generation(g->seg);
+    g->in_order   = in_order;
+    g->issued     = 1;
+}
+
+static void
+xga_k_flush(xga_t *xga)
+{
+    if (xga->k_gpu != NULL)
+        for (int i = 0; i < 2; i++)
+            kairo_seg_run_flush(((xga_gpu_t *) xga->k_gpu)->run[i]);
+}
+
+/* A destination pixel of the engine with Hardware acceleration on: its colour compare, mix (mix: foreground or
+   background) with src_dat and plane mask on the GPU. A destination map in system memory is the processor's, the
+   batch first. */
+static void
+xga_k_pixel(svga_t *svga, int x, int y, int mix, uint32_t src_dat)
+{
+    xga_t     *xga = (xga_t *) svga->xga;
+    xga_gpu_t *g   = xga->k_gpu;
+    const int  map = xga->accel.dst_map;
+    const int  fmt = xga->accel.px_map_format[map] & 0x07;
+
+    /* xga_accel_write_map_pixel draws no other format */
+    if (fmt > 4)
+        return;
+
+    const int      bits = (fmt <= 2) ? (1 << fmt) : (fmt == 3) ? 8 : 16;
+    const int      pos  = xga_calc_pos(x, y, xga->accel.px_map_width[map]);
+    const uint32_t addr = xga_add_to_addr(xga, xga->accel.px_map_base[map], pos, map);
+
+    if (!((addr >= xga->linear_base) && (addr <= (xga->linear_base + 0xfffff)))) {
+        uint32_t color_cmp  = xga->accel.color_cmp;
+        uint32_t plane_mask = xga->accel.plane_mask;
+        uint32_t dest_dat;
+        uint32_t old_dest_dat;
+
+        xga_k_flush(xga);
+        kairo_seg_drain(g->seg);
+        dest_dat = xga_accel_read_map_pixel(svga, x, y, map);
+        if ((xga->accel.cc_cond == 4) || ((xga->accel.cc_cond == 1) && (dest_dat > color_cmp)) || ((xga->accel.cc_cond == 2) && (dest_dat == color_cmp)) || ((xga->accel.cc_cond == 3) && (dest_dat < color_cmp)) || ((xga->accel.cc_cond == 5) && (dest_dat >= color_cmp)) || ((xga->accel.cc_cond == 6) && (dest_dat != color_cmp)) || ((xga->accel.cc_cond == 7) && (dest_dat <= color_cmp))) {
+            old_dest_dat = dest_dat;
+            ROP(mix, dest_dat, src_dat);
+            dest_dat = (dest_dat & plane_mask) | (old_dest_dat & ~plane_mask);
+            xga_accel_write_map_pixel(svga, x, y, map, dest_dat);
+        }
+        return;
+    }
+
+    const uint32_t words[XG_PIXEL_WORDS] = { (bits < 8) ? (uint32_t) ((pos & (7 / bits)) * bits) : 0, src_dat, mix ? 1 : 0 };
+    const uint32_t reads[1]              = { KAIRO_SEG_RUN_NONE };
+    const int      r                     = (bits == 16) ? 1 : 0;
+
+    /* A run is of one map format */
+    if (g->dbits != bits)
+        xga_k_flush(xga);
+    else
+        kairo_seg_run_flush(g->run[r ^ 1]);
+    g->dbits = bits;
+    kairo_seg_run_pixel(g->run[r], addr, words, reads);
+}
+
+static void
+xga_short_stroke_walk(svga_t *svga, uint8_t ssv)
 {
     xga_t   *xga = (xga_t *) svga->xga;
     uint32_t src_dat;
@@ -1419,6 +1527,54 @@ xga_short_stroke(svga_t *svga, uint8_t ssv)
                         xga_accel_read_map_pixel(svga, xga->accel.src_map_x & 0xfff,
                                                  xga->accel.src_map_y & 0xfff, xga->accel.src_map) :
                         xga->accel.frgd_color;
+                    if (xga->k_gpu != NULL) { /* KairoX86#280: the GPU draws the pixel */
+                        if ((xga->accel.command & 0x30) == 0) {
+                            if (ssv & 0x10)
+                                xga_k_pixel(svga, dx, dy, 1, src_dat);
+                        } else if (((xga->accel.command & 0x30) == 0x10) && x) {
+                            if (ssv & 0x10)
+                                xga_k_pixel(svga, dx, dy, 1, src_dat);
+                        } else if (((xga->accel.command & 0x30) == 0x20) && y) {
+                            if (ssv & 0x10)
+                                xga_k_pixel(svga, dx, dy, 1, src_dat);
+                        }
+                    } else {
+                        dest_dat = xga_accel_read_map_pixel(svga, dx, dy, xga->accel.dst_map);
+
+                        if ((xga->accel.cc_cond == 4) || ((xga->accel.cc_cond == 1) && (dest_dat > color_cmp)) || ((xga->accel.cc_cond == 2) && (dest_dat == color_cmp)) || ((xga->accel.cc_cond == 3) && (dest_dat < color_cmp)) || ((xga->accel.cc_cond == 5) && (dest_dat >= color_cmp)) || ((xga->accel.cc_cond == 6) && (dest_dat != color_cmp)) || ((xga->accel.cc_cond == 7) && (dest_dat <= color_cmp))) {
+                            old_dest_dat = dest_dat;
+                            ROP(1, dest_dat, src_dat);
+                            dest_dat = (dest_dat & plane_mask) | (old_dest_dat & ~plane_mask);
+                            if ((xga->accel.command & 0x30) == 0) {
+                                if (ssv & 0x10)
+                                    xga_accel_write_map_pixel(svga, dx, dy, xga->accel.dst_map, dest_dat);
+                            } else if (((xga->accel.command & 0x30) == 0x10) && x) {
+                                if (ssv & 0x10)
+                                    xga_accel_write_map_pixel(svga, dx, dy, xga->accel.dst_map, dest_dat);
+                            } else if (((xga->accel.command & 0x30) == 0x20) && y) {
+                                if (ssv & 0x10)
+                                    xga_accel_write_map_pixel(svga, dx, dy, xga->accel.dst_map, dest_dat);
+                            }
+                        }
+                    }
+                }
+            } else {
+                src_dat  = (((xga->accel.command >> 28) & 3) == 2) ?
+                    xga_accel_read_map_pixel(svga, xga->accel.src_map_x & 0xfff,
+                                             xga->accel.src_map_y & 0xfff, xga->accel.src_map) :
+                    xga->accel.frgd_color;
+                if (xga->k_gpu != NULL) { /* KairoX86#280: the GPU draws the pixel */
+                    if ((xga->accel.command & 0x30) == 0) {
+                        if (ssv & 0x10)
+                            xga_k_pixel(svga, dx, dy, 1, src_dat);
+                    } else if (((xga->accel.command & 0x30) == 0x10) && x) {
+                        if (ssv & 0x10)
+                            xga_k_pixel(svga, dx, dy, 1, src_dat);
+                    } else if (((xga->accel.command & 0x30) == 0x20) && y) {
+                        if (ssv & 0x10)
+                            xga_k_pixel(svga, dx, dy, 1, src_dat);
+                    }
+                } else {
                     dest_dat = xga_accel_read_map_pixel(svga, dx, dy, xga->accel.dst_map);
 
                     if ((xga->accel.cc_cond == 4) || ((xga->accel.cc_cond == 1) && (dest_dat > color_cmp)) || ((xga->accel.cc_cond == 2) && (dest_dat == color_cmp)) || ((xga->accel.cc_cond == 3) && (dest_dat < color_cmp)) || ((xga->accel.cc_cond == 5) && (dest_dat >= color_cmp)) || ((xga->accel.cc_cond == 6) && (dest_dat != color_cmp)) || ((xga->accel.cc_cond == 7) && (dest_dat <= color_cmp))) {
@@ -1435,28 +1591,6 @@ xga_short_stroke(svga_t *svga, uint8_t ssv)
                             if (ssv & 0x10)
                                 xga_accel_write_map_pixel(svga, dx, dy, xga->accel.dst_map, dest_dat);
                         }
-                    }
-                }
-            } else {
-                src_dat  = (((xga->accel.command >> 28) & 3) == 2) ?
-                    xga_accel_read_map_pixel(svga, xga->accel.src_map_x & 0xfff,
-                                             xga->accel.src_map_y & 0xfff, xga->accel.src_map) :
-                    xga->accel.frgd_color;
-                dest_dat = xga_accel_read_map_pixel(svga, dx, dy, xga->accel.dst_map);
-
-                if ((xga->accel.cc_cond == 4) || ((xga->accel.cc_cond == 1) && (dest_dat > color_cmp)) || ((xga->accel.cc_cond == 2) && (dest_dat == color_cmp)) || ((xga->accel.cc_cond == 3) && (dest_dat < color_cmp)) || ((xga->accel.cc_cond == 5) && (dest_dat >= color_cmp)) || ((xga->accel.cc_cond == 6) && (dest_dat != color_cmp)) || ((xga->accel.cc_cond == 7) && (dest_dat <= color_cmp))) {
-                    old_dest_dat = dest_dat;
-                    ROP(1, dest_dat, src_dat);
-                    dest_dat = (dest_dat & plane_mask) | (old_dest_dat & ~plane_mask);
-                    if ((xga->accel.command & 0x30) == 0) {
-                        if (ssv & 0x10)
-                            xga_accel_write_map_pixel(svga, dx, dy, xga->accel.dst_map, dest_dat);
-                    } else if (((xga->accel.command & 0x30) == 0x10) && x) {
-                        if (ssv & 0x10)
-                            xga_accel_write_map_pixel(svga, dx, dy, xga->accel.dst_map, dest_dat);
-                    } else if (((xga->accel.command & 0x30) == 0x20) && y) {
-                        if (ssv & 0x10)
-                            xga_accel_write_map_pixel(svga, dx, dy, xga->accel.dst_map, dest_dat);
                     }
                 }
             }
@@ -1477,7 +1611,7 @@ xga_short_stroke(svga_t *svga, uint8_t ssv)
 }
 
 static void
-xga_line_draw_write(svga_t *svga)
+xga_line_draw_write_walk(svga_t *svga)
 {
     xga_t   *xga = (xga_t *) svga->xga;
     uint32_t src_dat;
@@ -1550,13 +1684,17 @@ xga_line_draw_write(svga_t *svga)
                         src_dat  = (((xga->accel.command >> 28) & 3) == 2) ?
                             xga_accel_read_map_pixel(svga, cx, cy, xga->accel.src_map) :
                             xga->accel.frgd_color;
-                        dest_dat = xga_accel_read_map_pixel(svga, dx, dy, xga->accel.dst_map);
+                        if (xga->k_gpu != NULL) { /* KairoX86#280: the GPU draws the pixel */
+                            xga_k_pixel(svga, dx, dy, 1, src_dat);
+                        } else {
+                            dest_dat = xga_accel_read_map_pixel(svga, dx, dy, xga->accel.dst_map);
 
-                        if ((xga->accel.cc_cond == 4) || ((xga->accel.cc_cond == 1) && (dest_dat > color_cmp)) || ((xga->accel.cc_cond == 2) && (dest_dat == color_cmp)) || ((xga->accel.cc_cond == 3) && (dest_dat < color_cmp)) || ((xga->accel.cc_cond == 5) && (dest_dat >= color_cmp)) || ((xga->accel.cc_cond == 6) && (dest_dat != color_cmp)) || ((xga->accel.cc_cond == 7) && (dest_dat <= color_cmp))) {
-                            old_dest_dat = dest_dat;
-                            ROP(1, dest_dat, src_dat);
-                            dest_dat = (dest_dat & plane_mask) | (old_dest_dat & ~plane_mask);
-                            xga_accel_write_map_pixel(svga, dx, dy, xga->accel.dst_map, dest_dat);
+                            if ((xga->accel.cc_cond == 4) || ((xga->accel.cc_cond == 1) && (dest_dat > color_cmp)) || ((xga->accel.cc_cond == 2) && (dest_dat == color_cmp)) || ((xga->accel.cc_cond == 3) && (dest_dat < color_cmp)) || ((xga->accel.cc_cond == 5) && (dest_dat >= color_cmp)) || ((xga->accel.cc_cond == 6) && (dest_dat != color_cmp)) || ((xga->accel.cc_cond == 7) && (dest_dat <= color_cmp))) {
+                                old_dest_dat = dest_dat;
+                                ROP(1, dest_dat, src_dat);
+                                dest_dat = (dest_dat & plane_mask) | (old_dest_dat & ~plane_mask);
+                                xga_accel_write_map_pixel(svga, dx, dy, xga->accel.dst_map, dest_dat);
+                            }
                         }
                     }
                 } else {
@@ -1564,13 +1702,17 @@ xga_line_draw_write(svga_t *svga)
                         src_dat  = (((xga->accel.command >> 28) & 3) == 2) ?
                             xga_accel_read_map_pixel(svga, cx, cy, xga->accel.src_map) :
                                 xga->accel.frgd_color;
-                        dest_dat = xga_accel_read_map_pixel(svga, dx, dy, xga->accel.dst_map);
+                        if (xga->k_gpu != NULL) { /* KairoX86#280: the GPU draws the pixel */
+                            xga_k_pixel(svga, dx, dy, 1, src_dat);
+                        } else {
+                            dest_dat = xga_accel_read_map_pixel(svga, dx, dy, xga->accel.dst_map);
 
-                        if ((xga->accel.cc_cond == 4) || ((xga->accel.cc_cond == 1) && (dest_dat > color_cmp)) || ((xga->accel.cc_cond == 2) && (dest_dat == color_cmp)) || ((xga->accel.cc_cond == 3) && (dest_dat < color_cmp)) || ((xga->accel.cc_cond == 5) && (dest_dat >= color_cmp)) || ((xga->accel.cc_cond == 6) && (dest_dat != color_cmp)) || ((xga->accel.cc_cond == 7) && (dest_dat <= color_cmp))) {
-                            old_dest_dat = dest_dat;
-                            ROP(1, dest_dat, src_dat);
-                            dest_dat = (dest_dat & plane_mask) | (old_dest_dat & ~plane_mask);
-                            xga_accel_write_map_pixel(svga, dx, dy, xga->accel.dst_map, dest_dat);
+                            if ((xga->accel.cc_cond == 4) || ((xga->accel.cc_cond == 1) && (dest_dat > color_cmp)) || ((xga->accel.cc_cond == 2) && (dest_dat == color_cmp)) || ((xga->accel.cc_cond == 3) && (dest_dat < color_cmp)) || ((xga->accel.cc_cond == 5) && (dest_dat >= color_cmp)) || ((xga->accel.cc_cond == 6) && (dest_dat != color_cmp)) || ((xga->accel.cc_cond == 7) && (dest_dat <= color_cmp))) {
+                                old_dest_dat = dest_dat;
+                                ROP(1, dest_dat, src_dat);
+                                dest_dat = (dest_dat & plane_mask) | (old_dest_dat & ~plane_mask);
+                                xga_accel_write_map_pixel(svga, dx, dy, xga->accel.dst_map, dest_dat);
+                            }
                         }
                     }
                 }
@@ -1621,6 +1763,42 @@ xga_line_draw_write(svga_t *svga)
                             xga_accel_read_map_pixel(svga, xga->accel.src_map_x & 0xfff,
                                                      xga->accel.src_map_y & 0xfff, xga->accel.src_map) :
                             xga->accel.frgd_color;
+                        if (xga->k_gpu != NULL) { /* KairoX86#280: the GPU draws the pixel */
+                            if ((xga->accel.command & 0x30) == 0)
+                                xga_k_pixel(svga, dx, dy, 1, src_dat);
+                            else if (((xga->accel.command & 0x30) == 0x10) && x)
+                                xga_k_pixel(svga, dx, dy, 1, src_dat);
+                            else if (((xga->accel.command & 0x30) == 0x20) && y)
+                                xga_k_pixel(svga, dx, dy, 1, src_dat);
+                        } else {
+                            dest_dat = xga_accel_read_map_pixel(svga, dx, dy, xga->accel.dst_map);
+
+                            if ((xga->accel.cc_cond == 4) || ((xga->accel.cc_cond == 1) && (dest_dat > color_cmp)) || ((xga->accel.cc_cond == 2) && (dest_dat == color_cmp)) || ((xga->accel.cc_cond == 3) && (dest_dat < color_cmp)) || ((xga->accel.cc_cond == 5) && (dest_dat >= color_cmp)) || ((xga->accel.cc_cond == 6) && (dest_dat != color_cmp)) || ((xga->accel.cc_cond == 7) && (dest_dat <= color_cmp))) {
+                                old_dest_dat = dest_dat;
+                                ROP(1, dest_dat, src_dat);
+                                dest_dat = (dest_dat & plane_mask) | (old_dest_dat & ~plane_mask);
+                                if ((xga->accel.command & 0x30) == 0)
+                                    xga_accel_write_map_pixel(svga, dx, dy, xga->accel.dst_map, dest_dat);
+                                else if (((xga->accel.command & 0x30) == 0x10) && x)
+                                    xga_accel_write_map_pixel(svga, dx, dy, xga->accel.dst_map, dest_dat);
+                                else if (((xga->accel.command & 0x30) == 0x20) && y)
+                                    xga_accel_write_map_pixel(svga, dx, dy, xga->accel.dst_map, dest_dat);
+                            }
+                        }
+                    }
+                } else {
+                    src_dat  = (((xga->accel.command >> 28) & 3) == 2) ?
+                        xga_accel_read_map_pixel(svga, xga->accel.src_map_x & 0xfff,
+                                                 xga->accel.src_map_y & 0xfff, xga->accel.src_map) :
+                        xga->accel.frgd_color;
+                    if (xga->k_gpu != NULL) { /* KairoX86#280: the GPU draws the pixel */
+                        if ((xga->accel.command & 0x30) == 0)
+                            xga_k_pixel(svga, dx, dy, 1, src_dat);
+                        else if (((xga->accel.command & 0x30) == 0x10) && x)
+                            xga_k_pixel(svga, dx, dy, 1, src_dat);
+                        else if (((xga->accel.command & 0x30) == 0x20) && y)
+                            xga_k_pixel(svga, dx, dy, 1, src_dat);
+                    } else {
                         dest_dat = xga_accel_read_map_pixel(svga, dx, dy, xga->accel.dst_map);
 
                         if ((xga->accel.cc_cond == 4) || ((xga->accel.cc_cond == 1) && (dest_dat > color_cmp)) || ((xga->accel.cc_cond == 2) && (dest_dat == color_cmp)) || ((xga->accel.cc_cond == 3) && (dest_dat < color_cmp)) || ((xga->accel.cc_cond == 5) && (dest_dat >= color_cmp)) || ((xga->accel.cc_cond == 6) && (dest_dat != color_cmp)) || ((xga->accel.cc_cond == 7) && (dest_dat <= color_cmp))) {
@@ -1634,24 +1812,6 @@ xga_line_draw_write(svga_t *svga)
                             else if (((xga->accel.command & 0x30) == 0x20) && y)
                                 xga_accel_write_map_pixel(svga, dx, dy, xga->accel.dst_map, dest_dat);
                         }
-                    }
-                } else {
-                    src_dat  = (((xga->accel.command >> 28) & 3) == 2) ?
-                        xga_accel_read_map_pixel(svga, xga->accel.src_map_x & 0xfff,
-                                                 xga->accel.src_map_y & 0xfff, xga->accel.src_map) :
-                        xga->accel.frgd_color;
-                    dest_dat = xga_accel_read_map_pixel(svga, dx, dy, xga->accel.dst_map);
-
-                    if ((xga->accel.cc_cond == 4) || ((xga->accel.cc_cond == 1) && (dest_dat > color_cmp)) || ((xga->accel.cc_cond == 2) && (dest_dat == color_cmp)) || ((xga->accel.cc_cond == 3) && (dest_dat < color_cmp)) || ((xga->accel.cc_cond == 5) && (dest_dat >= color_cmp)) || ((xga->accel.cc_cond == 6) && (dest_dat != color_cmp)) || ((xga->accel.cc_cond == 7) && (dest_dat <= color_cmp))) {
-                        old_dest_dat = dest_dat;
-                        ROP(1, dest_dat, src_dat);
-                        dest_dat = (dest_dat & plane_mask) | (old_dest_dat & ~plane_mask);
-                        if ((xga->accel.command & 0x30) == 0)
-                            xga_accel_write_map_pixel(svga, dx, dy, xga->accel.dst_map, dest_dat);
-                        else if (((xga->accel.command & 0x30) == 0x10) && x)
-                            xga_accel_write_map_pixel(svga, dx, dy, xga->accel.dst_map, dest_dat);
-                        else if (((xga->accel.command & 0x30) == 0x20) && y)
-                            xga_accel_write_map_pixel(svga, dx, dy, xga->accel.dst_map, dest_dat);
                     }
                 }
 
@@ -1698,7 +1858,7 @@ xga_line_draw_write(svga_t *svga)
 }
 
 static void
-xga_bitblt(svga_t *svga)
+xga_bitblt_walk(svga_t *svga)
 {
     xga_t   *xga = (xga_t *) svga->xga;
     uint32_t src_dat;
@@ -1777,12 +1937,16 @@ xga_bitblt(svga_t *svga)
                     src_dat  = (((xga->accel.command >> 28) & 3) == 2) ?
                         xga_accel_read_map_pixel(svga, xga->accel.sx, xga->accel.sy, xga->accel.src_map) :
                             frgdcol;
-                    dest_dat = xga_accel_read_map_pixel(svga, dx, dy, xga->accel.dst_map);
-                    if ((xga->accel.cc_cond == 4) || ((xga->accel.cc_cond == 1) && (dest_dat > color_cmp)) || ((xga->accel.cc_cond == 2) && (dest_dat == color_cmp)) || ((xga->accel.cc_cond == 3) && (dest_dat < color_cmp)) || ((xga->accel.cc_cond == 5) && (dest_dat >= color_cmp)) || ((xga->accel.cc_cond == 6) && (dest_dat != color_cmp)) || ((xga->accel.cc_cond == 7) && (dest_dat <= color_cmp))) {
-                        old_dest_dat = dest_dat;
-                        ROP(1, dest_dat, src_dat);
-                        dest_dat = (dest_dat & plane_mask) | (old_dest_dat & ~plane_mask);
-                        xga_accel_write_map_pixel(svga, dx, dy, xga->accel.dst_map, dest_dat);
+                    if (xga->k_gpu != NULL) { /* KairoX86#280: the GPU draws the pixel */
+                        xga_k_pixel(svga, dx, dy, 1, src_dat);
+                    } else {
+                        dest_dat = xga_accel_read_map_pixel(svga, dx, dy, xga->accel.dst_map);
+                        if ((xga->accel.cc_cond == 4) || ((xga->accel.cc_cond == 1) && (dest_dat > color_cmp)) || ((xga->accel.cc_cond == 2) && (dest_dat == color_cmp)) || ((xga->accel.cc_cond == 3) && (dest_dat < color_cmp)) || ((xga->accel.cc_cond == 5) && (dest_dat >= color_cmp)) || ((xga->accel.cc_cond == 6) && (dest_dat != color_cmp)) || ((xga->accel.cc_cond == 7) && (dest_dat <= color_cmp))) {
+                            old_dest_dat = dest_dat;
+                            ROP(1, dest_dat, src_dat);
+                            dest_dat = (dest_dat & plane_mask) | (old_dest_dat & ~plane_mask);
+                            xga_accel_write_map_pixel(svga, dx, dy, xga->accel.dst_map, dest_dat);
+                        }
                     }
                 }
             } else {
@@ -1790,12 +1954,16 @@ xga_bitblt(svga_t *svga)
                     src_dat  = (((xga->accel.command >> 28) & 3) == 2) ?
                         xga_accel_read_map_pixel(svga, xga->accel.sx, xga->accel.sy, xga->accel.src_map) :
                             frgdcol;
-                    dest_dat = xga_accel_read_map_pixel(svga, dx, dy, xga->accel.dst_map);
-                    if ((xga->accel.cc_cond == 4) || ((xga->accel.cc_cond == 1) && (dest_dat > color_cmp)) || ((xga->accel.cc_cond == 2) && (dest_dat == color_cmp)) || ((xga->accel.cc_cond == 3) && (dest_dat < color_cmp)) || ((xga->accel.cc_cond == 5) && (dest_dat >= color_cmp)) || ((xga->accel.cc_cond == 6) && (dest_dat != color_cmp)) || ((xga->accel.cc_cond == 7) && (dest_dat <= color_cmp))) {
-                        old_dest_dat = dest_dat;
-                        ROP(1, dest_dat, src_dat);
-                        dest_dat = (dest_dat & plane_mask) | (old_dest_dat & ~plane_mask);
-                        xga_accel_write_map_pixel(svga, dx, dy, xga->accel.dst_map, dest_dat);
+                    if (xga->k_gpu != NULL) { /* KairoX86#280: the GPU draws the pixel */
+                        xga_k_pixel(svga, dx, dy, 1, src_dat);
+                    } else {
+                        dest_dat = xga_accel_read_map_pixel(svga, dx, dy, xga->accel.dst_map);
+                        if ((xga->accel.cc_cond == 4) || ((xga->accel.cc_cond == 1) && (dest_dat > color_cmp)) || ((xga->accel.cc_cond == 2) && (dest_dat == color_cmp)) || ((xga->accel.cc_cond == 3) && (dest_dat < color_cmp)) || ((xga->accel.cc_cond == 5) && (dest_dat >= color_cmp)) || ((xga->accel.cc_cond == 6) && (dest_dat != color_cmp)) || ((xga->accel.cc_cond == 7) && (dest_dat <= color_cmp))) {
+                            old_dest_dat = dest_dat;
+                            ROP(1, dest_dat, src_dat);
+                            dest_dat = (dest_dat & plane_mask) | (old_dest_dat & ~plane_mask);
+                            xga_accel_write_map_pixel(svga, dx, dy, xga->accel.dst_map, dest_dat);
+                        }
                     }
                 }
             }
@@ -1887,13 +2055,18 @@ xga_bitblt(svga_t *svga)
                             src_dat  = (((xga->accel.command >> 28) & 3) == 2) ?
                                 xga_accel_read_map_pixel(svga, xga->accel.sx, xga->accel.sy, xga->accel.src_map) :
                                 frgdcol;
-                            dest_dat = xga_accel_read_map_pixel(svga, dx, dy, xga->accel.dst_map);
-                            if ((xga->accel.cc_cond == 4) || ((xga->accel.cc_cond == 1) && (dest_dat > color_cmp)) || ((xga->accel.cc_cond == 2) && (dest_dat == color_cmp)) || ((xga->accel.cc_cond == 3) && (dest_dat < color_cmp)) || ((xga->accel.cc_cond == 5) && (dest_dat >= color_cmp)) || ((xga->accel.cc_cond == 6) && (dest_dat != color_cmp)) || ((xga->accel.cc_cond == 7) && (dest_dat <= color_cmp))) {
-                                old_dest_dat = dest_dat;
-                                ROP(1, dest_dat, src_dat);
-                                dest_dat = (dest_dat & plane_mask) | (old_dest_dat & ~plane_mask);
+                            if (xga->k_gpu != NULL) { /* KairoX86#280: the GPU draws the pixel */
                                 xga_log("XGA Area Fill1: Dest=%02x, Src=%02x, OldD=%02x.\n", dest_dat, src_dat, old_dest_dat);
-                                xga_accel_write_map_pixel(svga, dx, dy, xga->accel.dst_map, dest_dat);
+                                xga_k_pixel(svga, dx, dy, 1, src_dat);
+                            } else {
+                                dest_dat = xga_accel_read_map_pixel(svga, dx, dy, xga->accel.dst_map);
+                                if ((xga->accel.cc_cond == 4) || ((xga->accel.cc_cond == 1) && (dest_dat > color_cmp)) || ((xga->accel.cc_cond == 2) && (dest_dat == color_cmp)) || ((xga->accel.cc_cond == 3) && (dest_dat < color_cmp)) || ((xga->accel.cc_cond == 5) && (dest_dat >= color_cmp)) || ((xga->accel.cc_cond == 6) && (dest_dat != color_cmp)) || ((xga->accel.cc_cond == 7) && (dest_dat <= color_cmp))) {
+                                    old_dest_dat = dest_dat;
+                                    ROP(1, dest_dat, src_dat);
+                                    dest_dat = (dest_dat & plane_mask) | (old_dest_dat & ~plane_mask);
+                                    xga_log("XGA Area Fill1: Dest=%02x, Src=%02x, OldD=%02x.\n", dest_dat, src_dat, old_dest_dat);
+                                    xga_accel_write_map_pixel(svga, dx, dy, xga->accel.dst_map, dest_dat);
+                                }
                             }
                         }
                     } else {
@@ -1901,13 +2074,18 @@ xga_bitblt(svga_t *svga)
                             src_dat = (((xga->accel.command >> 28) & 3) == 2) ?
                                 xga_accel_read_map_pixel(svga, xga->accel.sx, xga->accel.sy, xga->accel.src_map) :
                                 frgdcol;
-                            dest_dat = xga_accel_read_map_pixel(svga, dx, dy, xga->accel.dst_map);
-                            if ((xga->accel.cc_cond == 4) || ((xga->accel.cc_cond == 1) && (dest_dat > color_cmp)) || ((xga->accel.cc_cond == 2) && (dest_dat == color_cmp)) || ((xga->accel.cc_cond == 3) && (dest_dat < color_cmp)) || ((xga->accel.cc_cond == 5) && (dest_dat >= color_cmp)) || ((xga->accel.cc_cond == 6) && (dest_dat != color_cmp)) || ((xga->accel.cc_cond == 7) && (dest_dat <= color_cmp))) {
-                                old_dest_dat = dest_dat;
-                                ROP(1, dest_dat, src_dat);
-                                dest_dat = (dest_dat & plane_mask) | (old_dest_dat & ~plane_mask);
+                            if (xga->k_gpu != NULL) { /* KairoX86#280: the GPU draws the pixel */
                                 xga_log("XGA Area Fill2: Dest=%02x, Src=%02x, OldD=%02x.\n", dest_dat, src_dat, old_dest_dat);
-                                xga_accel_write_map_pixel(svga, dx, dy, xga->accel.dst_map, dest_dat);
+                                xga_k_pixel(svga, dx, dy, 1, src_dat);
+                            } else {
+                                dest_dat = xga_accel_read_map_pixel(svga, dx, dy, xga->accel.dst_map);
+                                if ((xga->accel.cc_cond == 4) || ((xga->accel.cc_cond == 1) && (dest_dat > color_cmp)) || ((xga->accel.cc_cond == 2) && (dest_dat == color_cmp)) || ((xga->accel.cc_cond == 3) && (dest_dat < color_cmp)) || ((xga->accel.cc_cond == 5) && (dest_dat >= color_cmp)) || ((xga->accel.cc_cond == 6) && (dest_dat != color_cmp)) || ((xga->accel.cc_cond == 7) && (dest_dat <= color_cmp))) {
+                                    old_dest_dat = dest_dat;
+                                    ROP(1, dest_dat, src_dat);
+                                    dest_dat = (dest_dat & plane_mask) | (old_dest_dat & ~plane_mask);
+                                    xga_log("XGA Area Fill2: Dest=%02x, Src=%02x, OldD=%02x.\n", dest_dat, src_dat, old_dest_dat);
+                                    xga_accel_write_map_pixel(svga, dx, dy, xga->accel.dst_map, dest_dat);
+                                }
                             }
                         }
                     }
@@ -1957,12 +2135,16 @@ xga_bitblt(svga_t *svga)
                                  xga_accel_read_map_pixel(svga, xga->accel.sx, xga->accel.sy, xga->accel.src_map) :
                                  bkgdcol;
 
-                        dest_dat = xga_accel_read_map_pixel(svga, dx, dy, xga->accel.dst_map);
-                        if ((xga->accel.cc_cond == 4) || ((xga->accel.cc_cond == 1) && (dest_dat > color_cmp)) || ((xga->accel.cc_cond == 2) && (dest_dat == color_cmp)) || ((xga->accel.cc_cond == 3) && (dest_dat < color_cmp)) || ((xga->accel.cc_cond == 5) && (dest_dat >= color_cmp)) || ((xga->accel.cc_cond == 6) && (dest_dat != color_cmp)) || ((xga->accel.cc_cond == 7) && (dest_dat <= color_cmp))) {
-                            old_dest_dat = dest_dat;
-                            ROP(mix, dest_dat, src_dat);
-                            dest_dat = (dest_dat & plane_mask) | (old_dest_dat & ~plane_mask);
-                            xga_accel_write_map_pixel(svga, dx, dy, xga->accel.dst_map, dest_dat);
+                        if (xga->k_gpu != NULL) { /* KairoX86#280: the GPU draws the pixel */
+                            xga_k_pixel(svga, dx, dy, mix, src_dat);
+                        } else {
+                            dest_dat = xga_accel_read_map_pixel(svga, dx, dy, xga->accel.dst_map);
+                            if ((xga->accel.cc_cond == 4) || ((xga->accel.cc_cond == 1) && (dest_dat > color_cmp)) || ((xga->accel.cc_cond == 2) && (dest_dat == color_cmp)) || ((xga->accel.cc_cond == 3) && (dest_dat < color_cmp)) || ((xga->accel.cc_cond == 5) && (dest_dat >= color_cmp)) || ((xga->accel.cc_cond == 6) && (dest_dat != color_cmp)) || ((xga->accel.cc_cond == 7) && (dest_dat <= color_cmp))) {
+                                old_dest_dat = dest_dat;
+                                ROP(mix, dest_dat, src_dat);
+                                dest_dat = (dest_dat & plane_mask) | (old_dest_dat & ~plane_mask);
+                                xga_accel_write_map_pixel(svga, dx, dy, xga->accel.dst_map, dest_dat);
+                            }
                         }
                     }
                 } else {
@@ -1976,12 +2158,16 @@ xga_bitblt(svga_t *svga)
                                 xga_accel_read_map_pixel(svga, xga->accel.sx, xga->accel.sy, xga->accel.src_map) :
                                 bkgdcol;
 
-                        dest_dat = xga_accel_read_map_pixel(svga, dx, dy, xga->accel.dst_map);
-                        if ((xga->accel.cc_cond == 4) || ((xga->accel.cc_cond == 1) && (dest_dat > color_cmp)) || ((xga->accel.cc_cond == 2) && (dest_dat == color_cmp)) || ((xga->accel.cc_cond == 3) && (dest_dat < color_cmp)) || ((xga->accel.cc_cond == 5) && (dest_dat >= color_cmp)) || ((xga->accel.cc_cond == 6) && (dest_dat != color_cmp)) || ((xga->accel.cc_cond == 7) && (dest_dat <= color_cmp))) {
-                            old_dest_dat = dest_dat;
-                            ROP(mix, dest_dat, src_dat);
-                            dest_dat = (dest_dat & plane_mask) | (old_dest_dat & ~plane_mask);
-                            xga_accel_write_map_pixel(svga, dx, dy, xga->accel.dst_map, dest_dat);
+                        if (xga->k_gpu != NULL) { /* KairoX86#280: the GPU draws the pixel */
+                            xga_k_pixel(svga, dx, dy, mix, src_dat);
+                        } else {
+                            dest_dat = xga_accel_read_map_pixel(svga, dx, dy, xga->accel.dst_map);
+                            if ((xga->accel.cc_cond == 4) || ((xga->accel.cc_cond == 1) && (dest_dat > color_cmp)) || ((xga->accel.cc_cond == 2) && (dest_dat == color_cmp)) || ((xga->accel.cc_cond == 3) && (dest_dat < color_cmp)) || ((xga->accel.cc_cond == 5) && (dest_dat >= color_cmp)) || ((xga->accel.cc_cond == 6) && (dest_dat != color_cmp)) || ((xga->accel.cc_cond == 7) && (dest_dat <= color_cmp))) {
+                                old_dest_dat = dest_dat;
+                                ROP(mix, dest_dat, src_dat);
+                                dest_dat = (dest_dat & plane_mask) | (old_dest_dat & ~plane_mask);
+                                xga_accel_write_map_pixel(svga, dx, dy, xga->accel.dst_map, dest_dat);
+                            }
                         }
                     }
                 }
@@ -2027,6 +2213,28 @@ xga_bitblt(svga_t *svga)
             }
         }
     }
+}
+
+/* KairoX86#280: the engine's commands, and with Hardware acceleration on the runs they ended in recorded */
+static void
+xga_short_stroke(svga_t *svga, uint8_t ssv)
+{
+    xga_short_stroke_walk(svga, ssv);
+    xga_k_flush((xga_t *) svga->xga);
+}
+
+static void
+xga_line_draw_write(svga_t *svga)
+{
+    xga_line_draw_write_walk(svga);
+    xga_k_flush((xga_t *) svga->xga);
+}
+
+static void
+xga_bitblt(svga_t *svga)
+{
+    xga_bitblt_walk(svga);
+    xga_k_flush((xga_t *) svga->xga);
 }
 
 static void
@@ -2848,6 +3056,7 @@ xga_render_4bpp(svga_t *svga)
         (svga->monitor->target_buffer->line[xga->displine + svga->y_add] == NULL))
         return;
 
+    xga_k_touch(xga, xga->memaddr, (xga->h_disp + 16) * 2); /* KairoX86#280: the line's pixels drawn first */
     if (xga->changedvram[xga->memaddr >> 12] || xga->changedvram[(xga->memaddr >> 12) + 1] || svga->fullchange) {
         p = &buffer32->line[xga->displine + svga->y_add][svga->x_add];
 
@@ -2895,6 +3104,7 @@ xga_render_8bpp(svga_t *svga)
         (svga->monitor->target_buffer->line[xga->displine + svga->y_add] == NULL))
         return;
 
+    xga_k_touch(xga, xga->memaddr, (xga->h_disp + 16) * 2); /* KairoX86#280: the line's pixels drawn first */
     if (xga->changedvram[xga->memaddr >> 12] || xga->changedvram[(xga->memaddr >> 12) + 1] || svga->fullchange) {
         p = &buffer32->line[xga->displine + svga->y_add][svga->x_add];
 
@@ -2935,6 +3145,7 @@ xga_render_16bpp(svga_t *svga)
         (svga->monitor->target_buffer->line[xga->displine + svga->y_add] == NULL))
         return;
 
+    xga_k_touch(xga, xga->memaddr, (xga->h_disp + 16) * 2); /* KairoX86#280: the line's pixels drawn first */
     if (xga->changedvram[xga->memaddr >> 12] || xga->changedvram[(xga->memaddr >> 12) + 1] || svga->fullchange) {
         p = &buffer32->line[xga->displine + svga->y_add][svga->x_add];
 
@@ -2990,6 +3201,7 @@ xga_write_test(uint32_t addr, uint8_t val, void *priv)
                     xga_log("XGA test2 addr = %05x.\n", addr);
                 } else if ((addr == xga->mapping_base) || (addr == (xga->mapping_base + 0x0010))) {
                     addr += xga->write_bank;
+                    xga_k_touch(xga, addr, 1); /* KairoX86#280 */
                     xga->vram[addr & xga->vram_mask] = val;
                     xga_log("XGA Linear endian reverse write, val = %02x, addr = %05x, banked mask = %04x, a5test=%d.\n", val, addr, svga->banked_mask, xga->a5_test);
                 }
@@ -3012,6 +3224,7 @@ xga_write_banked(uint32_t addr, uint8_t val, void *priv)
     svga_t *svga = (svga_t *) priv;
     xga_t  *xga  = (xga_t *) svga->xga;
 
+    xga_k_touch(xga, xga_transform_addr(addr, xga->access_mode), 1); /* KairoX86#280 */
     xga->changedvram[(xga_transform_addr(addr, xga->access_mode) & xga->vram_mask) >> 12] =
         svga->monitor->mon_changeframecount;
     xga->vram[xga_transform_addr(addr, xga->access_mode) & xga->vram_mask]                =
@@ -3024,6 +3237,7 @@ xga_writew_banked(uint32_t addr, uint16_t val, void *priv)
     svga_t *svga = (svga_t *) priv;
     xga_t  *xga  = (xga_t *) svga->xga;
 
+    xga_k_touch(xga, addr, 2); /* KairoX86#280 */
     xga->changedvram[(addr & xga->vram_mask) >> 12]   = svga->monitor->mon_changeframecount;
     *(uint16_t *) &(xga->vram[addr & xga->vram_mask]) = xga_transform_val(val, xga->access_mode, 16);
 }
@@ -3101,6 +3315,7 @@ xga_read_test(uint32_t addr, void *priv)
                     } else if ((addr == xga->mapping_base) && (xga->a5_test == 1)) { /*This is required by XGAKIT to pass the memory test*/
                         xga_log("A5 test bank = %x.\n", addr);
                         addr += xga->read_bank;
+                        xga_k_touch(xga, addr, 1); /* KairoX86#280 */
                         ret = xga->vram[addr & xga->vram_mask];
                     } else
                         ret = xga->test;
@@ -3117,6 +3332,7 @@ xga_read_test(uint32_t addr, void *priv)
                     return ret;
                 } else if ((addr == xga->mapping_base) || (addr == (xga->mapping_base + 0x0010))) {
                     addr += xga->read_bank;
+                    xga_k_touch(xga, addr, 1); /* KairoX86#280 */
                     return xga->vram[addr & xga->vram_mask];
                 }
             } else {
@@ -3140,6 +3356,7 @@ xga_read_banked(uint32_t addr, void *priv)
     xga_t *xga  = (xga_t *) svga->xga;
     uint8_t      ret  = 0xff;
 
+    xga_k_touch(xga, xga_transform_addr(addr, xga->access_mode), 1); /* KairoX86#280 */
     ret = xga_transform_val(xga->vram[xga_transform_addr(addr, xga->access_mode) & xga->vram_mask],
                             xga->access_mode, 8);
 
@@ -3153,6 +3370,7 @@ xga_readw_banked(uint32_t addr, void *priv)
     xga_t *xga  = (xga_t *) svga->xga;
     uint16_t      ret  = 0xffff;
 
+    xga_k_touch(xga, addr, 2); /* KairoX86#280 */
     ret = xga_transform_val(*(uint16_t *) &(xga->vram[addr & xga->vram_mask]),
                             xga->access_mode, 16);
 
@@ -3246,6 +3464,7 @@ xga_write_linear(uint32_t addr, uint8_t val, void *priv)
 
     cycles -= svga->monitor->mon_video_timing_write_b;
 
+    xga_k_touch(xga, xga_transform_addr(addr, xga->access_mode), 1); /* KairoX86#280 */
     xga->changedvram[(xga_transform_addr(addr, xga->access_mode) & xga->vram_mask) >> 12] =
         svga->monitor->mon_changeframecount;
     xga->vram[xga_transform_addr(addr, xga->access_mode) & xga->vram_mask]                =
@@ -3273,6 +3492,7 @@ xga_writew_linear(uint32_t addr, uint16_t val, void *priv)
 
     cycles -= svga->monitor->mon_video_timing_write_b;
 
+    xga_k_touch(xga, addr, 2); /* KairoX86#280 */
     xga->changedvram[(addr & xga->vram_mask) >> 12]   = svga->monitor->mon_changeframecount;
     *(uint16_t *) &(xga->vram[addr & xga->vram_mask]) = xga_transform_val(val, xga->access_mode, 16);
 }
@@ -3305,6 +3525,7 @@ xga_read_linear(uint32_t addr, void *priv)
         if (addr < xga->vram_size) {
             cycles -= svga->monitor->mon_video_timing_read_b;
 
+            xga_k_touch(xga, xga_transform_addr(addr, xga->access_mode), 1); /* KairoX86#280 */
             ret = xga_transform_val(xga->vram[xga_transform_addr(addr, xga->access_mode) & xga->vram_mask],
                                     xga->access_mode, 8);
         }
@@ -3327,6 +3548,7 @@ xga_readw_linear(uint32_t addr, void *priv)
         if (addr < xga->vram_size) {
             cycles -= svga->monitor->mon_video_timing_read_b;
 
+            xga_k_touch(xga, addr, 2); /* KairoX86#280 */
             ret = xga_transform_val(*(uint16_t *) &(xga->vram[addr & xga->vram_mask]),
                                     xga->access_mode, 16);
         }
@@ -3801,8 +4023,19 @@ xga_init(const device_t *info)
 
     xga->vram_size             = 1024 << 10;
     xga->vram_mask             = xga->vram_size - 1;
-    xga->vram                  = calloc(xga->vram_size, 1);
+    /* KairoX86#280: with Hardware acceleration on, memory the GPU shares and the drawing engine's batch */
+    xga->vram                  = kairo_gpu_on ? kairo_gpu_alloc(xga->vram_size) : calloc(xga->vram_size, 1);
     xga->changedvram           = calloc((xga->vram_size >> 12) + 1, 1);
+    if (kairo_gpu_on) {
+        xga_gpu_t *g = calloc(1, sizeof(xga_gpu_t));
+
+        if (g == NULL)
+            fatal("XGA on the GPU: no memory\n");
+        g->seg = kairo_xga_open(xga->vram, xga->vram_mask, xga->changedvram, &svga->monitor->mon_changeframecount);
+        for (int i = 0; i < 2; i++)
+            g->run[i] = kairo_seg_run_open(g->seg, xga->vram_mask, i + 1, XG_PIXEL_WORDS, 1, xga_k_op, xga);
+        xga->k_gpu = g;
+    }
     xga->op_mode               = 0x01; /* VGA mode enabled (bit 0) for instance scan */
     xga->on                    = 0;
     xga->hwcursor.cur_xsize    = 64;
@@ -3879,7 +4112,16 @@ xga_close(void *priv)
     xga_t  *xga  = (xga_t *) svga->xga;
 
     if (svga) {
-        free(xga->vram);
+        if (xga->k_gpu != NULL) {
+            xga_gpu_t *g = xga->k_gpu; /* KairoX86#280 */
+
+            kairo_seg_close(g->seg);
+            for (int i = 0; i < 2; i++)
+                kairo_seg_run_close(g->run[i]);
+            free(g);
+            kairo_gpu_free(xga->vram);
+        } else
+            free(xga->vram);
         free(xga->changedvram);
 
         free(xga);

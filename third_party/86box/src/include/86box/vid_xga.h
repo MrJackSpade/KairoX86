@@ -249,6 +249,8 @@ typedef struct xga_t {
         uint16_t px_map_height[4];
         uint32_t px_map_base[4];
     } accel;
+
+    void *k_gpu; /* KairoX86#280: the drawing engine's batch on the GPU (vid_xga.c), NULL in software */
 } xga_t;
 
 #endif /*VIDEO_XGA_H*/

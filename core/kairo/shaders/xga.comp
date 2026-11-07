@@ -1,0 +1,90 @@
+#version 450
+#extension GL_EXT_control_flow_attributes : require
+/*
+ * The IBM XGA's drawing engine on the GPU (KairoX86#280): 86Box's per-pixel draw of xga_bitblt, xga_line_draw_write
+ * and xga_short_stroke (vid_xga.c: the colour compare, ROP, the plane mask and xga_accel_write_map_pixel) for runs of
+ * pixels (kairo_seg_run) of a map in video memory, on the drawing engines' shared batches (seg.glsl). The walk stays
+ * the CPU's, and reads each pixel's source and mix; the pixel's place in its byte, source and mix are its stream words
+ * (86box/kairo_gpu_xga.h).
+ *
+ * Copyright 2026 MrJackSpade. GPL-2.0-or-later.
+ */
+#include "seg.glsl"
+
+const uint XG_FRGD_MIX = 0u, XG_BKGD_MIX = 1u, XG_CC_COND = 2u, XG_CC = 3u, XG_PLANE_MASK = 4u, XG_DST_BITS = 5u, XG_WORDS = 8u;
+
+/* A map's pixel of bits at a byte and the shift in it (8 and 16 bits: the byte and the next) */
+uint px_read(uint a, uint shift, uint bits)
+{
+    if (bits == 16u)
+        return rd8(a) | (rd8(a + 1u) << 8);
+    if (bits == 8u)
+        return rd8(a);
+    return (rd8(a) >> shift) & ((1u << bits) - 1u);
+}
+
+/* The mixes (vid_xga.c ROP), on 32-bit values as the CPU's */
+uint mix_fn(uint m, uint d, uint s)
+{
+    switch (m) {
+        case 0x00u: return 0u;
+        case 0x01u: return s & d;
+        case 0x02u: return s & ~d;
+        case 0x03u: return s;
+        case 0x04u: return ~s & d;
+        case 0x05u: return d;
+        case 0x06u: return s ^ d;
+        case 0x07u: return s | d;
+        case 0x08u: return ~s & ~d;
+        case 0x09u: return s ^ ~d;
+        case 0x0au: return ~d;
+        case 0x0bu: return s | ~d;
+        case 0x0cu: return ~s;
+        case 0x0du: return ~s | d;
+        case 0x0eu: return ~s | ~d;
+        case 0x0fu: return 0xffffffffu;
+        case 0x10u: return max(s, d);
+        case 0x11u: return min(s, d);
+        case 0x12u: return s + d;
+        case 0x13u: return d - s;
+        case 0x14u: return s - d;
+        case 0x15u: return (s + d) >> 1;
+        default: return d;
+    }
+}
+
+bool cc_pass(uint cond, uint d, uint c)
+{
+    return (cond == 4u) || ((cond == 1u) && (d > c)) || ((cond == 2u) && (d == c)) || ((cond == 3u) && (d < c)) ||
+           ((cond == 5u) && (d >= c)) || ((cond == 6u) && (d != c)) || ((cond == 7u) && (d <= c));
+}
+
+void card_pixels(uint seg, uint op, uint row, uint first, int i0, int i1)
+{
+    const uint o     = op * XG_WORDS;
+    const uint dbits = ops[o + XG_DST_BITS];
+    const uint pb    = (dbits == 16u) ? 2u : 1u;
+    const int  dir   = int(segs[seg * KG_WORDS + KG_DIR]);
+    const uint d0    = segs[seg * KG_WORDS + KG_BIT] >> 3;
+    [[dont_unroll]] for (int n = i0; n < i1; n++) {
+        const uint w     = row + uint(n) * 3u;
+        const uint shift = stream[w];
+        const uint src   = stream[w + 1u];
+        const uint m     = stream[w + 2u];
+        const uint a     = d0 + uint((int(first) + n * dir) * int(pb));
+        const uint old   = px_read(a, shift, dbits);
+        if (!cc_pass(ops[o + XG_CC_COND], old, ops[o + XG_CC]))
+            continue;
+        const uint pm  = ops[o + XG_PLANE_MASK];
+        const uint res = (mix_fn((m != 0u) ? ops[o + XG_FRGD_MIX] : ops[o + XG_BKGD_MIX], old, src) & pm) | (old & ~pm);
+        if (dbits == 16u) {
+            wr8(a, res);
+            wr8(a + 1u, res >> 8);
+        } else if (dbits == 8u)
+            wr8(a, res);
+        else {
+            const uint mask = ((1u << dbits) - 1u) << shift;
+            wr8(a, (rd8(a) & ~mask) | ((res << shift) & mask));
+        }
+    }
+}
