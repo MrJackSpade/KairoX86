@@ -48,6 +48,7 @@
 #include "cpu.h"
 #include <86box/video.h>
 #include <86box/vid_cga.h>
+#include <86box/kairo_gpu.h> /* KairoX86#313 */
 #include <86box/m_xt_t1000.h>
 #include <86box/plat_unused.h>
 
@@ -439,6 +440,134 @@ t1000_cgaline4(t1000_t *t1000)
     }
 }
 
+/* KairoX86#313: colour c's place in a line's palette (n of them so far, up to 16), -1 when it is full */
+static int
+t1000_k_colour(uint32_t *palette, uint32_t *n, uint32_t c)
+{
+    for (uint32_t i = 0; i < *n; i++)
+        if (palette[i] == c)
+            return (int) i;
+    if (*n == 16)
+        return -1;
+    palette[*n] = c;
+    return (int) (*n)++;
+}
+
+/* KairoX86#313: the panel's line (t1000_text_row80/40's or t1000_cgaline6/4's, read as they read it) to the GPU's
+   scanout queue in the colours they draw; returns whether the GPU draws it. Not with the light pen, which reads the
+   picture back, nor (it never happens) a text line of more than 16 colours. */
+static bool
+t1000_render_gpu(t1000_t *t1000)
+{
+    if (!kairo_gpu_on || cga_lightpen_enabled)
+        return false;
+    bitmap_t      *bitmap  = buffer32;
+    const uint32_t out     = (uint32_t) (bitmap->line[t1000->displine] - bitmap->dat);
+    const uint16_t memaddr = (t1000->cga.crtc[CGA_CRTC_START_ADDR_LOW] | (t1000->cga.crtc[CGA_CRTC_START_ADDR_HIGH] << 8)) & 0x3fff;
+    const bool     enabled = (t1000->cga.cgamode & CGA_MODE_FLAG_VIDEO_ENABLE) != 0;
+
+    if (t1000->cga.cgamode & 0x02) {
+        uint16_t addr = ((t1000->displine) & 1) * 0x2000 + (t1000->displine >> 1) * 80 + ((memaddr & ~1) << 1);
+        uint32_t colours[2];
+        uint8_t *bytes;
+        if (t1000->cga.cgamode & CGA_MODE_FLAG_HIGHRES_GRAPHICS) { /* 640 x 200: the foreground or grey */
+            colours[0] = grey;
+            colours[1] = enabled ? ((t1000->cga.cgacol & 0x0F) ? blue : grey) : grey;
+            bytes      = (uint8_t *) kairo_gpu_scan(bitmap, bitmap->kairo_gpu, out, KAIRO_SCAN_BITS, 640, 20, colours, 2, 1, 0, 0);
+            for (int x = 0; x < 80; x++)
+                bytes[x] = t1000->vram[(addr + x) & 0x3FFF];
+        } else { /* 320 x 200: each pixel two dots of blue or grey, dithered by the line */
+            colours[0] = grey;
+            colours[1] = blue;
+            bytes      = (uint8_t *) kairo_gpu_scan(bitmap, bitmap->kairo_gpu, out, KAIRO_SCAN_BITS, 640, 20, colours, 2, 1, 0, 0);
+            for (int x = 0; x < 80; x++) {
+                uint8_t  dat  = t1000->vram[(addr + x) & 0x3FFF];
+                uint32_t dots = 0;
+                for (int c = 0; c < 4; c++) {
+                    const uint8_t pattern = enabled ? ((dat & 0xC0) >> 6) : 0;
+                    uint32_t      two;
+                    switch (pattern & 3) {
+                        default:
+                        case 0:
+                            two = 0;
+                            break;
+                        case 1:
+                            two = (t1000->displine & 1) ? 0 : 2;
+                            break;
+                        case 2:
+                            two = (t1000->displine & 1) ? 1 : 2;
+                            break;
+                        case 3:
+                            two = 3;
+                            break;
+                    }
+                    dots = (dots << 2) | two;
+                    dat <<= 2;
+                }
+                bytes[x] = (uint8_t) dots;
+            }
+        }
+        kairo_gpu_scan_commit();
+        return true;
+    }
+
+    /* Text, 80 or 40 columns */
+    const int      cols       = (t1000->cga.cgamode & 0x01) ? 80 : 40;
+    const uint8_t  scanline   = (t1000->displine) & 7;
+    const uint16_t addr       = ((memaddr & ~1) + (t1000->displine >> 3) * cols) * 2;
+    uint16_t       ma         = memaddr + (t1000->displine >> 3) * cols;
+    const uint16_t cursoraddr = (t1000->cga.crtc[CGA_CRTC_CURSOR_ADDR_LOW] | (t1000->cga.crtc[CGA_CRTC_CURSOR_ADDR_HIGH] << 8)) & 0x3fff;
+    int            cursorline;
+    uint32_t       palette[16];
+    uint32_t       n = 0;
+    uint32_t       cells[80];
+
+    if ((t1000->cga.crtc[CGA_CRTC_CURSOR_START] & 0x60) == 0x20)
+        cursorline = 0;
+    else
+        cursorline = ((t1000->cga.crtc[CGA_CRTC_CURSOR_START] & 0x0F) <= scanline) && ((t1000->cga.crtc[CGA_CRTC_CURSOR_END] & 0x0F) >= scanline);
+    for (int x = 0; x < cols; x++) {
+        const uint8_t chr        = t1000->vram[(addr + 2 * x) & 0x3FFF];
+        const uint8_t attr       = t1000->vram[(addr + 2 * x + 1) & 0x3FFF];
+        const int     drawcursor = ((ma == cursoraddr) && cursorline && enabled && (t1000->cga.cgablink & 16));
+        const int     blink      = ((t1000->cga.cgablink & 16) && (t1000->cga.cgamode & CGA_MODE_FLAG_BLINK) && (attr & 0x80) && !drawcursor);
+        int           bold;
+        uint32_t      fg;
+        uint32_t      bg;
+
+        if (t1000->video_options & 1)
+            bold = boldcols[attr] ? chr : chr + 256;
+        else
+            bold = boldcols[attr] ? chr + 256 : chr;
+        if (t1000->video_options & 2)
+            bold += 512;
+        if (t1000->cga.cgamode & CGA_MODE_FLAG_BLINK) {
+            fg = blinkcols[attr][1];
+            bg = blinkcols[attr][0];
+            if (blink)
+                fg = bg;
+        } else {
+            fg = normcols[attr][1];
+            bg = normcols[attr][0];
+        }
+        if (drawcursor) {
+            fg ^= (blue ^ grey);
+            bg ^= (blue ^ grey);
+        }
+        const int f = t1000_k_colour(palette, &n, fg);
+        const int b = t1000_k_colour(palette, &n, bg);
+        if ((f < 0) || (b < 0))
+            return false;
+        cells[x] = fontdat[bold][scanline] | ((uint32_t) f << 8) | ((uint32_t) b << 16);
+        ++ma;
+    }
+    uint32_t *line = kairo_gpu_scan(bitmap, bitmap->kairo_gpu, out, KAIRO_SCAN_TEXT, (uint32_t) cols * ((cols == 80) ? 8 : 16), (uint32_t) cols,
+                                    palette, n, 8, 0, (cols == 80) ? 0 : KAIRO_SCAN_WIDE);
+    memcpy(line, cells, (size_t) cols * sizeof(uint32_t));
+    kairo_gpu_scan_commit();
+    return true;
+}
+
 static void
 t1000_poll(void *priv)
 {
@@ -475,17 +604,22 @@ t1000_poll(void *priv)
                 video_wait_for_buffer();
             }
 
-            /* Graphics */
-            if (t1000->cga.cgamode & 0x02) {
-                if (t1000->cga.cgamode & CGA_MODE_FLAG_HIGHRES_GRAPHICS)
-                    t1000_cgaline6(t1000);
-                else
-                    t1000_cgaline4(t1000);
-            } else if (t1000->cga.cgamode & 0x01) /* High-res text */
-            {
-                t1000_text_row80(t1000);
-            } else {
-                t1000_text_row40(t1000);
+            /* KairoX86#313: the GPU draws the line, else the CPU, after what the GPU still has to draw there */
+            if (!t1000_render_gpu(t1000)) {
+                if (kairo_gpu_on)
+                    kairo_gpu_scan_touch(buffer32, (uint32_t) (buffer32->line[t1000->displine] - buffer32->dat), (uint32_t) buffer32->w);
+                /* Graphics */
+                if (t1000->cga.cgamode & 0x02) {
+                    if (t1000->cga.cgamode & CGA_MODE_FLAG_HIGHRES_GRAPHICS)
+                        t1000_cgaline6(t1000);
+                    else
+                        t1000_cgaline4(t1000);
+                } else if (t1000->cga.cgamode & 0x01) /* High-res text */
+                {
+                    t1000_text_row80(t1000);
+                } else {
+                    t1000_text_row40(t1000);
+                }
             }
         }
         t1000->displine++;

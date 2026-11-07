@@ -105,6 +105,10 @@
 - **`kairox86-gpu-tandy` group:** the Tandy 1000's video on the GPU (KairoX86#321), text and graphics, the SL/2's 640 x 200 x 16 too; lines scrolled left past their start stay the CPU's. Checked by `cga86.S`.
 - **`kairox86-gpu-pcjx` group:** the IBM PC JX's video on the GPU (KairoX86#320): each cell's colour codes as 4 bits a pixel. Checked by `cga86.S`.
 - **`kairox86-gpu-mcga` group:** the IBM MCGA's CRT picture on the GPU (KairoX86#318): text cells, the CGA modes and mode 13h; the LCD panel's composed picture stays the CPU's. Checked by `cga86.S` and `mcga86.S`.
+- **`kairox86-gpu-amstrad` group:** the Amstrad PC1512's video and the PPC512/PC200 LCD on the GPU (KairoX86#323); the LCD's cell renderers split into one cell description the CPU's drawing and the GPU's cells share (the CPU's pictures checked unchanged frame by frame). Checked by `cga86.S`.
+- **`kairox86-gpu-t1000` group:** the Toshiba T1000/T1200 internal panel on the GPU (KairoX86#313). Checked by `cga86.S`.
+- **`kairox86-gpu-t3100e` group:** the Toshiba T3100e plasma on the GPU (KairoX86#314). Checked by `cga86.S`.
+- **`kairox86-gpu-plasma` group:** the Compaq Portable III plasma on the GPU (KairoX86#312), each cell as the CPU's last drawing of it leaves it. Checked by `cga86.S`.
 
 ## 86Box's translations
 

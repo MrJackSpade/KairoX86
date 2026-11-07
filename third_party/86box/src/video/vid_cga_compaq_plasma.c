@@ -33,6 +33,7 @@
 #include <86box/device.h>
 #include <86box/video.h>
 #include <86box/vid_cga.h>
+#include <86box/kairo_gpu.h> /* KairoX86#312 */
 #include <86box/vid_cga_comp.h>
 #include <86box/plat_unused.h>
 
@@ -247,6 +248,174 @@ compaq_plasma_in(uint16_t addr, void *priv)
     return ret;
 }
 
+/* KairoX86#312: colour c's place in a line's palette (n of them so far, up to 16), -1 when it is full */
+static int
+plasma_k_colour(uint32_t *palette, uint32_t *n, uint32_t c)
+{
+    for (uint32_t i = 0; i < *n; i++)
+        if (palette[i] == c)
+            return (int) i;
+    if (*n == 16)
+        return -1;
+    palette[*n] = c;
+    return (int) (*n)++;
+}
+
+/* KairoX86#312: a colour at half its brightness, each channel halved (the high-intensity attribute's dimming) */
+static uint32_t
+plasma_half(uint32_t c)
+{
+    return ((c & 0xff) >> 1) | ((((c >> 8) & 0xff) >> 1) << 8) | ((((c >> 16) & 0xff) >> 1) << 16);
+}
+
+/* KairoX86#312: the plasma's line (compaq_plasma_poll's text or graphics, read as it reads it) to the GPU's scanout
+   queue in the colours it draws: each text cell's dots and two colours as the CPU's last drawing of it leaves them.
+   Returns whether the GPU draws it; when not (the light pen, which reads the picture back, or a text line of more
+   than 16 colours, which never comes), the row is touched first, for the CPU to draw it. */
+static bool
+compaq_plasma_render_gpu(compaq_plasma_t *self, uint16_t memaddr, uint16_t cursoraddr)
+{
+    bitmap_t      *bitmap  = buffer32;
+    const uint32_t out     = (uint32_t) (bitmap->line[self->cga.displine] - bitmap->dat);
+    const bool     enabled = (self->cga.cgamode & 0x08) != 0;
+
+    if (!kairo_gpu_on)
+        return false;
+    if (cga_lightpen_enabled) {
+        kairo_gpu_scan_touch(bitmap, out, (uint32_t) bitmap->w);
+        return false;
+    }
+    if (self->cga.cgamode & 0x02) { /* graphics */
+        uint16_t addr;
+        uint32_t colours[2];
+        uint8_t *bytes;
+        if (self->cga.cgamode & CGA_MODE_FLAG_HIGHRES_GRAPHICS) {
+            if (self->port_23c6 & 0x01) /* 640 x 400 */
+                addr = ((self->cga.displine) & 1) * 0x2000 + ((self->cga.displine >> 1) & 1) * 0x4000 + (self->cga.displine >> 2) * 80 + ((memaddr & ~1) << 1);
+            else
+                addr = ((self->cga.displine >> 1) & 1) * 0x2000 + (self->cga.displine >> 2) * 80 + ((memaddr & ~1) << 1);
+            colours[0] = black;
+            colours[1] = enabled ? ((self->cga.cgacol & 0x0f) ? amber : black) : black;
+            bytes      = (uint8_t *) kairo_gpu_scan(bitmap, bitmap->kairo_gpu, out, KAIRO_SCAN_BITS, 640, 20, colours, 2, 1, 0, 0);
+            for (int x = 0; x < 80; x++)
+                bytes[x] = self->cga.vram[(addr + x) & 0x7fff];
+        } else { /* 320 wide: each pixel two dots of amber or black, dithered by the line */
+            addr       = ((self->cga.displine >> 1) & 1) * 0x2000 + (self->cga.displine >> 2) * 80 + ((memaddr & ~1) << 1);
+            colours[0] = black;
+            colours[1] = amber;
+            bytes      = (uint8_t *) kairo_gpu_scan(bitmap, bitmap->kairo_gpu, out, KAIRO_SCAN_BITS, 640, 20, colours, 2, 1, 0, 0);
+            for (int x = 0; x < 80; x++) {
+                uint8_t  dat  = self->cga.vram[(addr + x) & 0x7fff];
+                uint32_t dots = 0;
+                for (int c = 0; c < 4; c++) {
+                    const uint8_t pattern = enabled ? ((dat & 0xC0) >> 6) : 0;
+                    uint32_t      two     = 0;
+                    switch (pattern & 3) {
+                        case 1:
+                            two = (self->cga.displine & 1) ? 0 : 2;
+                            break;
+                        case 2:
+                            two = (self->cga.displine & 1) ? 1 : 2;
+                            break;
+                        case 3:
+                            two = 3;
+                            break;
+                        default:
+                            break;
+                    }
+                    dots = (dots << 2) | two;
+                    dat <<= 2;
+                }
+                bytes[x] = (uint8_t) dots;
+            }
+        }
+        kairo_gpu_scan_commit();
+        return true;
+    }
+
+    /* Text: 80 columns, or 40 each dot twice across; 16 lines a row */
+    const int      cols     = (self->cga.cgamode & 0x01) ? 80 : 40;
+    const uint8_t  scanline = self->cga.displine & 0x0f;
+    const uint16_t addr     = ((memaddr & ~1) + (self->cga.displine >> 4) * cols) << 1;
+    uint16_t       ma       = memaddr + (self->cga.displine >> 4) * cols;
+    const uint32_t X        = amber ^ black;
+    const uint32_t XH       = plasma_half(amber) ^ plasma_half(black);
+    const unsigned hi_mode  = self->port_23c6 >> 5;
+    int            cursorline;
+    uint32_t       palette[16];
+    uint32_t       n = 0;
+    uint32_t       cells[80];
+
+    if ((self->cga.crtc[CGA_CRTC_CURSOR_START] & 0x60) == 0x20)
+        cursorline = 0;
+    else {
+        const int visible   = ((self->cga.crtc[CGA_CRTC_CURSOR_START] & 0x0f) > 0x07) ? (self->cga.crtc[CGA_CRTC_CURSOR_START] & 0x0f) + 1
+                                                                                    : ((self->cga.crtc[CGA_CRTC_CURSOR_START] & 0x0f) << 1);
+        const int invisible = ((self->cga.crtc[CGA_CRTC_CURSOR_END] & 0x0f) > 0x07) ? (self->cga.crtc[CGA_CRTC_CURSOR_END] & 0x0f) + 2
+                                                                                  : ((self->cga.crtc[CGA_CRTC_CURSOR_END] & 0x0f) << 1);
+        cursorline = (visible <= scanline) && (invisible >= scanline);
+    }
+    for (int x = 0; x < cols; x++) {
+        uint8_t       chr        = enabled ? self->cga.vram[(addr + (x << 1)) & 0x7fff] : 0x00;
+        uint8_t       attr       = enabled ? self->cga.vram[(addr + ((x << 1) + 1)) & 0x7fff] : 0x00;
+        const uint8_t hi_bit     = attr & 0x08;
+        const int     drawcursor = ((ma == cursoraddr) && cursorline && enabled && (self->cga.cgablink & 0x10));
+        int           underline  = ((attr & 0x07) == 0x01) || ((hi_mode == 1) && hi_bit);
+        int           blink      = 0;
+        uint32_t      c1;
+        uint32_t      c0;
+
+        if (underline)
+            attr = attr | 0x7;
+        c1 = blinkcols[attr][1];
+        if (self->cga.cgamode & CGA_MODE_FLAG_BLINK) {
+            c0 = blinkcols[attr][0];
+            if ((self->cga.cgablink & 0x08) && (attr & 0x80) && !drawcursor) {
+                c1    = c0;
+                blink = 1;
+            }
+        } else {
+            c1 = normcols[attr][1];
+            c0 = normcols[attr][0];
+        }
+        uint16_t chr_addr = ((chr * 16) + scanline) & 0x0fff;
+        if ((hi_mode == 3) && hi_bit)
+            chr_addr |= 0x1000;
+        const uint8_t font = self->font_ram[chr_addr];
+        const bool    solid = underline && (scanline == 7);
+        uint32_t      dots;
+        uint32_t      on;
+        uint32_t      off;
+
+        /* The first drawing of the cell, then (high-intensity attributes in modes 4 and 2) the one over it */
+        if (solid)
+            dots = 0xff, on = off = mdaattr[attr][blink][1];
+        else if (drawcursor)
+            dots = font, on = c1 ^ X, off = c0 ^ X;
+        else
+            dots = font, on = c1, off = c0;
+        if (hi_bit && (hi_mode == 4) && !solid) {
+            const uint32_t h1 = plasma_half(c1);
+            const uint32_t h0 = plasma_half(c0);
+            dots = font, on = drawcursor ? (h1 ^ XH) : h1, off = drawcursor ? (h0 ^ XH) : h0;
+        } else if (hi_bit && (hi_mode == 2) && !solid)
+            dots = font, on = drawcursor ? (c0 ^ X) : c0, off = drawcursor ? (c1 ^ X) : c1; /* dots set take colour 0 */
+        const int f = plasma_k_colour(palette, &n, on);
+        const int b = plasma_k_colour(palette, &n, off);
+        if ((f < 0) || (b < 0)) {
+            kairo_gpu_scan_touch(bitmap, out, (uint32_t) bitmap->w);
+            return false;
+        }
+        cells[x] = dots | ((uint32_t) f << 8) | ((uint32_t) b << 16);
+        ma++;
+    }
+    uint32_t *line = kairo_gpu_scan(bitmap, bitmap->kairo_gpu, out, KAIRO_SCAN_TEXT, (uint32_t) cols * ((cols == 80) ? 8 : 16), (uint32_t) cols,
+                                    palette, n, 8, 0, (cols == 80) ? 0 : KAIRO_SCAN_WIDE);
+    memcpy(line, cells, (size_t) cols * sizeof(uint32_t));
+    kairo_gpu_scan_commit();
+    return true;
+}
+
 static void
 compaq_plasma_poll(void *priv)
 {
@@ -297,8 +466,11 @@ compaq_plasma_poll(void *priv)
                 if (self->cga.displine == 0)
                     video_wait_for_buffer();
 
+                /* KairoX86#312: the GPU draws the line, else the CPU (the row touched for it) */
+                if (compaq_plasma_render_gpu(self, memaddr, cursoraddr)) {
+                }
                 /* 80-col */
-                if (self->cga.cgamode & 0x01) {
+                else if (self->cga.cgamode & 0x01) {
                     scanline = self->cga.displine & 0x0f;
                     addr = ((memaddr & ~1) + (self->cga.displine >> 4) * 80) << 1;
                     memaddr += (self->cga.displine >> 4) * 80;

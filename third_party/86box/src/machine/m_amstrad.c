@@ -69,6 +69,7 @@
 #include <86box/snd_speaker.h>
 #include <86box/video.h>
 #include <86box/vid_cga.h>
+#include <86box/kairo_gpu.h> /* KairoX86#323 */
 #include <86box/vid_ega.h>
 #include <86box/vid_mda.h>
 #include <86box/machine.h>
@@ -362,6 +363,84 @@ vid_read_1512(uint32_t addr, void *priv)
     return (vid->vram[addr]);
 }
 
+/* KairoX86#323: the CPU is about to draw on row [line]: what the GPU still has to draw there first */
+static void
+ams_gpu_touch(int line)
+{
+    if (kairo_gpu_on)
+        kairo_gpu_scan_touch(buffer32, (uint32_t) (buffer32->line[line] - buffer32->dat), (uint32_t) buffer32->w);
+}
+
+/* KairoX86#323: line [line]'s pixels between the borders (ams1512_render's, read as it reads them) to the GPU's
+   scanout queue, coloured as video_process_8 will colour them; returns whether the GPU draws them */
+static bool
+ams1512_render_gpu(amsvid_t *vid, int line, uint16_t cursoraddr)
+{
+    if (!kairo_gpu_on)
+        return false;
+    bitmap_t      *bitmap = buffer32;
+    const uint32_t out    = (uint32_t) (&bitmap->line[line][8] - bitmap->dat);
+
+    if (!(vid->cgamode & CGA_MODE_FLAG_GRAPHICS) || (vid->cgamode & CGA_MODE_FLAG_HIGHRES)) {
+        /* Text: 80 columns, or 40 each dot twice across (the CGA's highres bit picks 80 even with graphics set) */
+        const bool wide  = !(vid->cgamode & CGA_MODE_FLAG_HIGHRES);
+        const int  cols  = wide ? 40 : 80;
+        uint32_t  *cells = kairo_gpu_scan(bitmap, bitmap->kairo_gpu, out, KAIRO_SCAN_TEXT, (uint32_t) cols * (wide ? 16 : 8), (uint32_t) cols,
+                                          pal_lookup, 256, 8, 0, wide ? KAIRO_SCAN_WIDE : 0);
+        for (int x = 0; x < cols; x++) {
+            const uint8_t chr        = vid->vram[(vid->memaddr << 1) & 0x3fff];
+            const uint8_t attr       = vid->vram[((vid->memaddr << 1) + 1) & 0x3fff];
+            const int     drawcursor = ((vid->memaddr == cursoraddr) && vid->cursorvisible && vid->cursoron);
+            uint32_t      fg         = (attr & 15) + 16;
+            uint32_t      bg;
+            if (vid->cgamode & CGA_MODE_FLAG_BLINK) {
+                bg = ((attr >> 4) & 7) + 16;
+                /* the 80-column blink spares the cursor's cell, the 40-column one does not */
+                if ((vid->blink & 16) && (attr & 0x80) && (wide || !drawcursor))
+                    fg = bg;
+            } else
+                bg = (attr >> 4) + 16;
+            const uint32_t flip = drawcursor ? 15 : 0;
+            cells[x] = fontdat[vid->fontbase + chr][vid->scanline & 7] | ((fg ^ flip) << 8) | ((bg ^ flip) << 16);
+            vid->memaddr++;
+        }
+    } else if (!(vid->cgamode & CGA_MODE_FLAG_HIGHRES_GRAPHICS)) { /* 320 x 200 x 4: 2 bits a pixel, twice across */
+        uint32_t  colours[4];
+        const int col = (vid->cgacol & 16) ? 24 : 16;
+        int       c4[4];
+        c4[0] = (vid->cgacol & 15) | 16;
+        if (vid->cgamode & CGA_MODE_FLAG_BW)
+            c4[1] = col | 3, c4[2] = col | 4, c4[3] = col | 7;
+        else if (vid->cgacol & 32)
+            c4[1] = col | 3, c4[2] = col | 5, c4[3] = col | 7;
+        else
+            c4[1] = col | 2, c4[2] = col | 4, c4[3] = col | 6;
+        for (int v = 0; v < 4; v++)
+            colours[v] = pal_lookup[c4[v]];
+        uint8_t *bytes = (uint8_t *) kairo_gpu_scan(bitmap, bitmap->kairo_gpu, out, KAIRO_SCAN_BITS, 640, 20, colours, 4, 2, 0, KAIRO_SCAN_WIDE);
+        for (int x = 0; x < 40; x++) {
+            const uint32_t at = ((vid->memaddr << 1) & 0x1fff) + ((vid->scanline & 1) * 0x2000);
+            bytes[x * 2]      = vid->vram[at];
+            bytes[x * 2 + 1]  = vid->vram[at + 1];
+            vid->memaddr++;
+        }
+    } else { /* 640 x 200 x 16: four planes 16 KB apart, through the plane mask (the colour register) */
+        uint32_t colours[16];
+        for (int v = 0; v < 16; v++)
+            colours[v] = pal_lookup[(v & (vid->cgacol & 15)) + 16];
+        uint32_t *planes = kairo_gpu_scan(bitmap, bitmap->kairo_gpu, out, KAIRO_SCAN_PLANES, 640, 80, colours, 16, 0, 0, 0);
+        for (int x = 0; x < 40; x++) {
+            const uint32_t at = ((vid->memaddr << 1) & 0x1fff) + ((vid->scanline & 1) * 0x2000);
+            for (int b = 0; b < 2; b++)
+                planes[x * 2 + b] = vid->vram[at + b] | (vid->vram[at + b + 0x4000] << 8) | (vid->vram[at + b + 0x8000] << 16)
+                                    | ((uint32_t) vid->vram[at + b + 0xc000] << 24);
+            vid->memaddr++;
+        }
+    }
+    kairo_gpu_scan_commit();
+    return true;
+}
+
 static void
 ams1512_render(amsvid_t *vid, int line)
 {
@@ -376,6 +455,8 @@ ams1512_render(amsvid_t *vid, int line)
     int      cols[4];
     int      col;
 
+    ams_gpu_touch(line); /* KairoX86#323: the borders go on both rows */
+    ams_gpu_touch(line + 1);
     for (uint8_t c = 0; c < 8; c++) {
         if ((vid->cgamode & 0x12) == 0x12) {
             buffer32->line[line][c] = buffer32->line[(line) + 1][c] = (vid->border & 15) + 16;
@@ -393,6 +474,8 @@ ams1512_render(amsvid_t *vid, int line)
             }
         }
     }
+    if (ams1512_render_gpu(vid, line, cursoraddr))
+        return; /* KairoX86#323: the GPU draws the pixels */
     if (vid->cgamode & CGA_MODE_FLAG_HIGHRES) {
         for (uint8_t x = 0; x < 80; x++) {
             chr        = vid->vram[(vid->memaddr << 1) & 0x3fff];
@@ -496,6 +579,7 @@ ams1512_render_blank(amsvid_t *vid, int line)
 {
     int cols = ((vid->cgamode & 0x12) == 0x12) ? 0 : (vid->cgacol & 15) + 16;
 
+    ams_gpu_touch(line); /* KairoX86#323 */
     if (vid->cgamode & CGA_MODE_FLAG_HIGHRES)
         hline(buffer32, 0, line, (vid->crtc[1] << 3) + 16, cols);
     else
@@ -1318,16 +1402,23 @@ vid_out_200(uint16_t addr, uint8_t val, void *priv)
         mda_out(addr, val, mda);
 }
 
+/* KairoX86#323: an 80-column cell as the LCD shows it: its 8 dots (bit 7 the leftmost) and the colours of a dot off
+   and on, the one description the CPU's drawing (lcd_draw_char_80) and the GPU's cells take */
 static void
-lcd_draw_char_80(amsvid_t *vid, uint32_t *buffer, uint8_t chr,
-                 uint8_t attr, int drawcursor, int blink, int scanline,
-                 int mode160, uint8_t control)
+lcd_cell_80(amsvid_t *vid, uint8_t chr, uint8_t attr, int drawcursor, int blink, int scanline, int mode160, uint8_t control,
+            uint8_t *dots, uint32_t *off, uint32_t *on)
 {
     int      c;
     uint8_t  bits   = fontdat[chr + vid->cga.fontbase][scanline];
     uint8_t  bright = 0;
     uint16_t mask;
 
+    if (mode160) { /* each dot an attribute bit */
+        *dots = attr;
+        *off  = green;
+        *on   = blue;
+        return;
+    }
     if (attr & 8) { /* bright */
         /* The brightness algorithm appears to be: replace any bit sequence 011
          * with 001 (assuming an extra 0 to the left of the byte).
@@ -1343,14 +1434,39 @@ lcd_draw_char_80(amsvid_t *vid, uint32_t *buffer, uint8_t chr,
     if (drawcursor)
         bits ^= 0xFF;
 
-    for (c = 0, mask = 0x80; c < 8; c++, mask >>= 1) {
-        if (mode160)
-            buffer[c] = (attr & mask) ? blue : green;
-        else if (control & 0x20) /* blinking */
-            buffer[c] = lcdcols[attr & 0x7F][blink][(bits & mask) ? 1 : 0];
-        else
-            buffer[c] = lcdcols[attr][blink][(bits & mask) ? 1 : 0];
-    }
+    *dots = bits;
+    *off  = lcdcols[(control & 0x20) ? (attr & 0x7F) : attr][blink][0]; /* bit 5: blinking */
+    *on   = lcdcols[(control & 0x20) ? (attr & 0x7F) : attr][blink][1];
+}
+
+static void
+lcd_draw_char_80(amsvid_t *vid, uint32_t *buffer, uint8_t chr,
+                 uint8_t attr, int drawcursor, int blink, int scanline,
+                 int mode160, uint8_t control)
+{
+    uint8_t  dots;
+    uint32_t off;
+    uint32_t on;
+
+    lcd_cell_80(vid, chr, attr, drawcursor, blink, scanline, mode160, control, &dots, &off, &on);
+    for (uint8_t c = 0, mask = 0x80; c < 8; c++, mask >>= 1)
+        buffer[c] = (dots & mask) ? on : off;
+}
+
+/* KairoX86#323: a 40-column cell as the LCD shows it, each dot twice across: as lcd_cell_80 */
+static void
+lcd_cell_40(amsvid_t *vid, uint8_t chr, uint8_t attr, int drawcursor, int blink, int scanline, uint8_t control,
+            uint8_t *dots, uint32_t *off, uint32_t *on)
+{
+    uint8_t bits = fontdat[chr + vid->cga.fontbase][scanline];
+
+    if (attr & 8) /* bright */
+        bits = bits & (bits >> 1);
+    if (drawcursor)
+        bits ^= 0xFF;
+    *dots = bits;
+    *off  = lcdcols[(control & 0x20) ? (attr & 0x7F) : attr][blink][0];
+    *on   = lcdcols[(control & 0x20) ? (attr & 0x7F) : attr][blink][1];
 }
 
 static void
@@ -1358,21 +1474,79 @@ lcd_draw_char_40(amsvid_t *vid, uint32_t *buffer, uint8_t chr,
                  uint8_t attr, int drawcursor, int blink, int scanline,
                  uint8_t control)
 {
-    uint8_t bits = fontdat[chr + vid->cga.fontbase][scanline];
-    uint8_t mask = 0x80;
+    uint8_t  dots;
+    uint32_t off;
+    uint32_t on;
 
-    if (attr & 8) /* bright */
-        bits = bits & (bits >> 1);
-    if (drawcursor)
-        bits ^= 0xFF;
+    lcd_cell_40(vid, chr, attr, drawcursor, blink, scanline, control, &dots, &off, &on);
+    for (uint8_t c = 0, mask = 0x80; c < 8; c++, mask >>= 1)
+        buffer[c * 2] = buffer[c * 2 + 1] = (dots & mask) ? on : off;
+}
 
-    for (uint8_t c = 0; c < 8; c++, mask >>= 1) {
-        if (control & 0x20) {
-            buffer[c * 2] = buffer[c * 2 + 1] = lcdcols[attr & 0x7F][blink][(bits & mask) ? 1 : 0];
-        } else {
-            buffer[c * 2] = buffer[c * 2 + 1] = lcdcols[attr][blink][(bits & mask) ? 1 : 0];
-        }
+/* KairoX86#323: colour c's place in a line's palette (n of them so far, up to 16), -1 when it is full */
+static int
+lcd_k_colour(uint32_t *palette, uint32_t *n, uint32_t c)
+{
+    for (uint32_t i = 0; i < *n; i++)
+        if (palette[i] == c)
+            return (int) i;
+    if (*n == 16)
+        return -1;
+    palette[*n] = c;
+    return (int) (*n)++;
+}
+
+/* KairoX86#323: a line of LCD cells (count of them, 8 dots each, twice across when wide; their dots and colours from
+   lcd_cell_80/40) to the GPU's scanout queue on rows [row] to [row] + rows - 1; false (the CPU draws them) when the
+   line has more than 16 colours, which it never has */
+static bool
+lcd_queue_cells(int row, int rows, const uint8_t *dots, const uint32_t *off, const uint32_t *on, int count, bool wide)
+{
+    uint32_t palette[16];
+    uint32_t n = 0;
+    uint32_t cells[128];
+
+    if ((count <= 0) || (count > 128))
+        return false;
+    for (int x = 0; x < count; x++) {
+        const int f = lcd_k_colour(palette, &n, on[x]);
+        const int b = lcd_k_colour(palette, &n, off[x]);
+        if ((f < 0) || (b < 0))
+            return false;
+        cells[x] = dots[x] | ((uint32_t) f << 8) | ((uint32_t) b << 16);
     }
+    for (int r = 0; r < rows; r++) {
+        uint32_t *line = kairo_gpu_scan(buffer32, buffer32->kairo_gpu, (uint32_t) (buffer32->line[row + r] - buffer32->dat), KAIRO_SCAN_TEXT,
+                                        (uint32_t) count * (wide ? 16 : 8), (uint32_t) count, palette, n, 8, 0, wide ? KAIRO_SCAN_WIDE : 0);
+        memcpy(line, cells, (size_t) count * sizeof(uint32_t));
+        kairo_gpu_scan_commit();
+    }
+    return true;
+}
+
+/* KairoX86#323: the MDA-mode LCD's line (lcdm_poll's, read as it reads it) on the GPU; returns whether the GPU draws it */
+static bool
+lcdm_line_gpu(amsvid_t *vid, uint16_t cursoraddr)
+{
+    mda_t    *mda   = &vid->mda;
+    const int count = mda->crtc[MDA_CRTC_HDISP];
+    uint8_t   dots[128];
+    uint32_t  off[128];
+    uint32_t  on[128];
+
+    if ((count <= 0) || (count > 128))
+        return false;
+    for (int x = 0; x < count; x++) {
+        const uint8_t chr        = mda->vram[((mda->memaddr + x) << 1) & 0xfff];
+        const uint8_t attr       = mda->vram[(((mda->memaddr + x) << 1) + 1) & 0xfff];
+        const int     drawcursor = (((mda->memaddr + x) == cursoraddr) && mda->cursorvisible && mda->cursoron);
+        const int     blink      = ((mda->blink & 16) && (mda->mode & MDA_MODE_BLINK) && (attr & 0x80) && !drawcursor);
+        lcd_cell_80(vid, chr, attr, drawcursor, blink, mda->scanline, 0, mda->mode, &dots[x], &off[x], &on[x]);
+    }
+    if (!lcd_queue_cells(mda->displine, 1, dots, off, on, count, false))
+        return false;
+    mda->memaddr += count;
+    return true;
 }
 
 static void
@@ -1399,7 +1573,10 @@ lcdm_poll(amsvid_t *vid)
             if (mda->displine < mda->firstline)
                 mda->firstline = mda->displine;
             mda->lastline = mda->displine;
-            for (x = 0; x < mda->crtc[MDA_CRTC_HDISP]; x++) {
+            if (kairo_gpu_on) /* KairoX86#323 */
+                kairo_gpu_scan_touch(buffer32, (uint32_t) (buffer32->line[mda->displine] - buffer32->dat), (uint32_t) buffer32->w);
+            /* KairoX86#323: the GPU draws the line, else the CPU */
+            if (!(kairo_gpu_on && lcdm_line_gpu(vid, cursoraddr))) for (x = 0; x < mda->crtc[MDA_CRTC_HDISP]; x++) {
                 chr        = mda->vram[(mda->memaddr << 1) & 0xfff];
                 attr       = mda->vram[((mda->memaddr << 1) + 1) & 0xfff];
                 drawcursor = ((mda->memaddr == cursoraddr) && mda->cursorvisible && mda->cursoron);
@@ -1497,6 +1674,53 @@ lcdm_poll(amsvid_t *vid)
     }
 }
 
+/* KairoX86#323: the CGA-mode LCD's line (lcdc_poll's, read as it reads it) on its two rows on the GPU; returns whether
+   the GPU draws it */
+static bool
+lcdc_line_gpu(amsvid_t *vid, uint16_t cursoraddr)
+{
+    cga_t    *cga   = &vid->cga;
+    const int count = cga->crtc[CGA_CRTC_HDISP];
+    const int row   = cga->displine << 1;
+    uint8_t   dots[128];
+    uint32_t  off[128];
+    uint32_t  on[128];
+
+    if ((count <= 0) || (count > 128))
+        return false;
+    if (!(cga->cgamode & CGA_MODE_FLAG_HIGHRES) && (cga->cgamode & CGA_MODE_FLAG_GRAPHICS)) {
+        /* Graphics: 16 dots a character, blue or green */
+        const uint32_t colours[2] = { green, blue };
+        for (int r = 0; r < 2; r++) {
+            uint8_t *bytes = (uint8_t *) kairo_gpu_scan(buffer32, buffer32->kairo_gpu, (uint32_t) (buffer32->line[row + r] - buffer32->dat),
+                                                        KAIRO_SCAN_BITS, (uint32_t) count * 16, ((uint32_t) count * 2 + 3) / 4, colours, 2, 1, 0, 0);
+            for (int x = 0; x < count; x++) {
+                const uint32_t at = ((cga->memaddr + x) << 1 & 0x1fff) + ((cga->scanline & 1) * 0x2000);
+                bytes[x * 2]      = cga->vram[at];
+                bytes[x * 2 + 1]  = cga->vram[at + 1];
+            }
+            kairo_gpu_scan_commit();
+        }
+        cga->memaddr += count;
+        return true;
+    }
+    const bool highres = (cga->cgamode & CGA_MODE_FLAG_HIGHRES) != 0;
+    for (int x = 0; x < count; x++) {
+        const uint8_t chr        = highres ? cga->charbuffer[x << 1] : cga->vram[((cga->memaddr + x) << 1) & 0x3fff];
+        const uint8_t attr       = highres ? cga->charbuffer[(x << 1) + 1] : cga->vram[(((cga->memaddr + x) << 1) + 1) & 0x3fff];
+        const int     drawcursor = (((cga->memaddr + x) == cursoraddr) && cga->cursorvisible && cga->cursoron);
+        const int     blink      = ((cga->cgablink & 16) && (cga->cgamode & CGA_MODE_FLAG_BLINK) && (attr & 0x80) && !drawcursor);
+        if (highres)
+            lcd_cell_80(vid, chr, attr, drawcursor, blink, cga->scanline, cga->cgamode & 0x40, cga->cgamode, &dots[x], &off[x], &on[x]);
+        else
+            lcd_cell_40(vid, chr, attr, drawcursor, blink, cga->scanline, cga->cgamode, &dots[x], &off[x], &on[x]);
+    }
+    if (!lcd_queue_cells(row, 2, dots, off, on, count, !highres))
+        return false;
+    cga->memaddr += count;
+    return true;
+}
+
 static void
 lcdc_poll(amsvid_t *vid)
 {
@@ -1529,7 +1753,13 @@ lcdc_poll(amsvid_t *vid)
             }
             cga->lastline = cga->displine;
 
-            if (cga->cgamode & CGA_MODE_FLAG_HIGHRES) {
+            if (kairo_gpu_on) { /* KairoX86#323: the two rows the CPU draws on, what the GPU still has to draw there first */
+                kairo_gpu_scan_touch(buffer32, (uint32_t) (buffer32->line[cga->displine << 1] - buffer32->dat), (uint32_t) buffer32->w);
+                kairo_gpu_scan_touch(buffer32, (uint32_t) (buffer32->line[(cga->displine << 1) + 1] - buffer32->dat), (uint32_t) buffer32->w);
+            }
+            if (kairo_gpu_on && lcdc_line_gpu(vid, cursoraddr)) {
+                /* KairoX86#323: the GPU draws the line's two rows */
+            } else if (cga->cgamode & CGA_MODE_FLAG_HIGHRES) {
                 for (x = 0; x < cga->crtc[CGA_CRTC_HDISP]; x++) {
                     chr        = cga->charbuffer[x << 1];
                     attr       = cga->charbuffer[(x << 1) + 1];
