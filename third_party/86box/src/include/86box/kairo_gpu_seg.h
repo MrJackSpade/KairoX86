@@ -27,7 +27,8 @@ typedef struct kairo_seg kairo_seg_t;
 
 /* A card's batch: its kernel (SPIR-V of a shader including seg.glsl), its operation records' words, its video
    memory (shared with the GPU, kairo_gpu_alloc), and the display's changed pages (a byte per 4K, set to *stamp for
-   every page a recorded segment draws on, as the CPU's writes set them) */
+   every page a recorded segment draws on, as the CPU's writes set them; NULL for a card whose display keeps no such
+   map, the 3dfx Voodoo Graphics and Voodoo2's) */
 kairo_seg_t *kairo_seg_open(const char *name, const uint32_t *spirv, size_t spirv_bytes, uint8_t *vram, uint32_t vram_mask,
                             uint32_t op_words, uint8_t *changed, const int *stamp);
 void         kairo_seg_close(kairo_seg_t *s);

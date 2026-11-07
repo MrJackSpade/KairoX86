@@ -286,7 +286,10 @@ kairo_seg_add(kairo_seg_t *s, uint32_t row, uint32_t first, uint32_t count, uint
     kairo_gpu_pages_mark(&s->writes, lo & s->vram_mask, hi - lo);
     kairo_gpu_pages_mark(&s->touched, lo & s->vram_mask, hi - lo);
     pthread_mutex_unlock(&s->lock);
-    /* The display redraws the lines it shows from these pages (the CPU's writes mark them as they go) */
+    /* The display redraws the lines it shows from these pages (the CPU's writes mark them as they go); a card with no
+       map redraws its own way */
+    if (s->changed == NULL)
+        return;
     const uint8_t stamp = (uint8_t) *s->stamp;
     for (uint32_t pg = lo >> 12; pg <= ((hi - 1) >> 12); pg++)
         s->changed[(pg << 12 & s->vram_mask) >> 12] = stamp;

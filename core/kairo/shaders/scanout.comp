@@ -4,6 +4,7 @@
 //   8      vid_svga_render.c's packed 8bpp (svga_render_indexed_gfx's fast path): palette[byte & DAC mask]
 //   15, 16 svga_render_15bpp/16bpp_*: through 86Box's own tables (video_15to32, video_16to32, which
 //          round through doubles: the formula is not repeated here)
+//   16CLUT the 3dfx Voodoo's display: 565 pixels, each channel through its own column of the palette
 //   32     svga_render_32bpp_*: the low 24 bits, or with the RAMDAC's LUT each channel through the palette
 //   TEXT   svga_render_text_80/40 and the MDA, CGA and Hercules text: each cell's font byte and ninth
 //          dot, its colours resolved by the CPU
@@ -38,6 +39,7 @@ const uint SCAN_24 = 9u;
 const uint SCAN_NIBBLES = 10u;
 const uint SCAN_NIBBLES8 = 11u;
 const uint SCAN_15MIX = 12u;
+const uint SCAN_16CLUT = 13u;
 const uint SCAN_WIDE = 1u;
 const uint SCAN_WIDE4 = 2u;
 
@@ -77,6 +79,11 @@ void main() {
                 v = colour(palette, c & 0xffu);
             else
                 v = kind == SCAN_16 ? table16[c] : table15[c];
+        } else if (kind == SCAN_16CLUT) {
+            const uint word = words[src + (s >> 1)];
+            const uint c = (s & 1u) != 0u ? (word >> 16) : (word & 0xffffu);
+            v = (colour(palette, (c >> 8) & 0xf8u) & 0xff0000u) | (colour(palette, (c >> 3) & 0xfcu) & 0xff00u)
+                | (colour(palette, (c << 3) & 0xf8u) & 0xffu);
         } else if (kind == SCAN_32 || kind == SCAN_24) {
             if (kind == SCAN_32)
                 v = words[src + s] & 0xffffffu;

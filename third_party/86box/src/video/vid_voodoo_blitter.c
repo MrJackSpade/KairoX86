@@ -38,6 +38,8 @@
 #include <86box/vid_voodoo_dither.h>
 #include <86box/vid_voodoo_regs.h>
 #include <86box/vid_voodoo_render.h>
+#include <86box/kairo_gpu_banshee2d.h> /* KairoX86#277 */
+#include <86box/vid_voodoo_k2d.h>
 
 enum {
     BLIT_COMMAND_SCREEN_TO_SCREEN = 0,
@@ -146,8 +148,83 @@ voodooblt_log(const char *fmt, ...)
             break;                          \
     }
 
+/* KairoX86#277: whether a 565 colour lies in the source (or destination) chroma range, in each channel */
+static int
+voodoo_v2_keyed(voodoo_t *voodoo, uint16_t c, int dst)
+{
+    const int r = c >> 11;
+    const int g = (c >> 5) & 0x3f;
+    const int b = c & 0x1f;
+
+    if (dst)
+        return r >= voodoo->bltDstChromaMinR && r <= voodoo->bltDstChromaMaxR && g >= voodoo->bltDstChromaMinG &&
+               g <= voodoo->bltDstChromaMaxG && b >= voodoo->bltDstChromaMinB && b <= voodoo->bltDstChromaMaxB;
+    return r >= voodoo->bltSrcChromaMinR && r <= voodoo->bltSrcChromaMaxR && g >= voodoo->bltSrcChromaMinG &&
+           g <= voodoo->bltSrcChromaMaxG && b >= voodoo->bltSrcChromaMinB && b <= voodoo->bltSrcChromaMaxB;
+}
+
+/* KairoX86#277: one pixel of a walk at p: with mix, MIX with src through the raster operation the command's chroma
+   keys choose; without, src stored (a fill). With Hardware acceleration on, recorded for the GPU: the Banshee 2D
+   kernel's raster operation of the pattern, source and destination with the pattern left out (bltRop[n] in both
+   halves), its 16-bit destination key the chroma range. */
+static void
+voodoo_v2_px(voodoo_t *voodoo, uint16_t *p, uint16_t src, int mix)
+{
+    if (voodoo->k2d != NULL) {
+        uint32_t rec[B2_WORDS] = { 0 };
+
+        if (mix) {
+            for (int n = 0; n < 4; n++)
+                rec[B2_ROPS] |= (uint32_t) (voodoo->bltRop[n] * 0x11) << (8 * n);
+            if (voodoo->bltCommand & BLIT_DST_CHROMA) {
+                rec[B2_DKEY]     = B2_KEY_16;
+                rec[B2_DKEY_MIN] = (voodoo->bltDstChromaMinR << 11) | (voodoo->bltDstChromaMinG << 5) | voodoo->bltDstChromaMinB;
+                rec[B2_DKEY_MAX] = (voodoo->bltDstChromaMaxR << 11) | (voodoo->bltDstChromaMaxG << 5) | voodoo->bltDstChromaMaxB;
+            }
+        } else
+            rec[B2_ROPS] = 0xccccccccu;
+        rec[B2_BYTES] = 2;
+        voodoo_k2d_pixel(voodoo, (uint32_t) ((uint8_t *) p - voodoo->fb_mem), 2, rec, src, 0,
+                         mix && (voodoo->bltCommand & BLIT_SRC_CHROMA) && voodoo_v2_keyed(voodoo, src, 0));
+        return;
+    }
+    if (!mix) {
+        *p = src;
+        return;
+    }
+    uint16_t dst_dat = *p;
+    int      rop     = 0;
+
+    if ((voodoo->bltCommand & BLIT_SRC_CHROMA) && voodoo_v2_keyed(voodoo, src, 0))
+        rop |= BLIT_ROP_SRC_PASS;
+    if ((voodoo->bltCommand & BLIT_DST_CHROMA) && voodoo_v2_keyed(voodoo, dst_dat, 1))
+        rop |= BLIT_ROP_DST_PASS;
+    MIX(src, dst_dat, voodoo->bltRop[rop]);
+    *p = dst_dat;
+}
+
+static void voodoo_v2_blit_start_walk(voodoo_t *voodoo);
+static void voodoo_v2_blit_data_walk(voodoo_t *voodoo, uint32_t data);
+
+/* KairoX86#277: the blitter's walks hold the 2D batch's lock (the machine's thread touches the frame buffer) */
 void
 voodoo_v2_blit_start(voodoo_t *voodoo)
+{
+    voodoo_k2d_lock(voodoo);
+    voodoo_v2_blit_start_walk(voodoo);
+    voodoo_k2d_unlock(voodoo);
+}
+
+void
+voodoo_v2_blit_data(voodoo_t *voodoo, uint32_t data)
+{
+    voodoo_k2d_lock(voodoo);
+    voodoo_v2_blit_data_walk(voodoo, data);
+    voodoo_k2d_unlock(voodoo);
+}
+
+static void
+voodoo_v2_blit_start_walk(voodoo_t *voodoo)
 {
     uint64_t dat64;
     int      size_x = ABS(voodoo->bltSizeX);
@@ -177,35 +254,15 @@ voodoo_v2_blit_start(voodoo_t *voodoo)
                 int             dst_x = voodoo->bltDstX;
 
                 for (int x = 0; x <= size_x; x++) {
+                    voodoo_k2d_read(voodoo, (const uint8_t *) &src[src_x], 2); /* KairoX86#277 */
                     uint16_t src_dat = src[src_x];
-                    uint16_t dst_dat = dst[dst_x];
-                    int      rop     = 0;
 
                     if (voodoo->bltCommand & BLIT_CLIPPING_ENABLED) {
                         if (dst_x < voodoo->bltClipLeft || dst_x >= voodoo->bltClipRight || dst_y < voodoo->bltClipLowY || dst_y >= voodoo->bltClipHighY)
                             goto skip_pixel_blit;
                     }
 
-                    if (voodoo->bltCommand & BLIT_SRC_CHROMA) {
-                        int r = (src_dat >> 11);
-                        int g = (src_dat >> 5) & 0x3f;
-                        int b = src_dat & 0x1f;
-
-                        if (r >= voodoo->bltSrcChromaMinR && r <= voodoo->bltSrcChromaMaxR && g >= voodoo->bltSrcChromaMinG && g <= voodoo->bltSrcChromaMaxG && b >= voodoo->bltSrcChromaMinB && b <= voodoo->bltSrcChromaMaxB)
-                            rop |= BLIT_ROP_SRC_PASS;
-                    }
-                    if (voodoo->bltCommand & BLIT_DST_CHROMA) {
-                        int r = (dst_dat >> 11);
-                        int g = (dst_dat >> 5) & 0x3f;
-                        int b = dst_dat & 0x1f;
-
-                        if (r >= voodoo->bltDstChromaMinR && r <= voodoo->bltDstChromaMaxR && g >= voodoo->bltDstChromaMinG && g <= voodoo->bltDstChromaMaxG && b >= voodoo->bltDstChromaMinB && b <= voodoo->bltDstChromaMaxB)
-                            rop |= BLIT_ROP_DST_PASS;
-                    }
-
-                    MIX(src_dat, dst_dat, voodoo->bltRop[rop]);
-
-                    dst[dst_x] = dst_dat;
+                    voodoo_v2_px(voodoo, &dst[dst_x], src_dat, 1); /* KairoX86#277 */
 skip_pixel_blit:
                     src_x += x_dir;
                     dst_x += x_dir;
@@ -238,7 +295,7 @@ skip_pixel_blit:
                             goto skip_pixel_fill;
                     }
 
-                    dst[dst_x] = voodoo->bltColorFg;
+                    voodoo_v2_px(voodoo, &dst[dst_x], voodoo->bltColorFg, 0); /* KairoX86#277 */
 skip_pixel_fill:
                     dst_x += x_dir;
                 }
@@ -260,6 +317,7 @@ skip_line_fill:
             for (int y = 0; y <= size_y; y++) {
                 uint64_t *dst = (uint64_t *) &voodoo->fb_mem[(dst_y * sgram_page_words * 8) & voodoo->fb_mask];
 
+                voodoo_k2d_read(voodoo, (const uint8_t *) dst, sgram_page_words * 8); /* KairoX86#277 */
                 for (int x = 0; x < sgram_page_words; x++)
                     dst[x] = dat64;
 
@@ -273,8 +331,8 @@ skip_line_fill:
     }
 }
 
-void
-voodoo_v2_blit_data(voodoo_t *voodoo, uint32_t data)
+static void
+voodoo_v2_blit_data_walk(voodoo_t *voodoo, uint32_t data)
 {
     int       src_bits  = 32;
     uint32_t  base_addr = (voodoo->bltCommand & BLTCMD_DST_TILED) ? ((voodoo->bltDstBaseAddr & 0x3ff) << 12) : (voodoo->bltDstBaseAddr & 0x3ffff8);
@@ -315,9 +373,7 @@ voodoo_v2_blit_data(voodoo_t *voodoo, uint32_t data)
         int      g       = 0;
         int      b       = 0;
         uint16_t src_dat = 0;
-        uint16_t dst_dat;
         int      x       = (voodoo->blt.x_dir > 0) ? (voodoo->blt.dst_x + voodoo->blt.cur_x) : (voodoo->blt.dst_x - voodoo->blt.cur_x);
-        int      rop     = 0;
 
         switch (voodoo->bltCommand & BLIT_SRC_FORMAT) {
             case BLIT_SRC_1BPP:
@@ -408,28 +464,7 @@ voodoo_v2_blit_data(voodoo_t *voodoo, uint32_t data)
                 goto skip_pixel;
         }
 
-        dst_dat = dst[x];
-
-        if (voodoo->bltCommand & BLIT_SRC_CHROMA) {
-            r = (src_dat >> 11);
-            g = (src_dat >> 5) & 0x3f;
-            b = src_dat & 0x1f;
-
-            if (r >= voodoo->bltSrcChromaMinR && r <= voodoo->bltSrcChromaMaxR && g >= voodoo->bltSrcChromaMinG && g <= voodoo->bltSrcChromaMaxG && b >= voodoo->bltSrcChromaMinB && b <= voodoo->bltSrcChromaMaxB)
-                rop |= BLIT_ROP_SRC_PASS;
-        }
-        if (voodoo->bltCommand & BLIT_DST_CHROMA) {
-            r = (dst_dat >> 11);
-            g = (dst_dat >> 5) & 0x3f;
-            b = dst_dat & 0x1f;
-
-            if (r >= voodoo->bltDstChromaMinR && r <= voodoo->bltDstChromaMaxR && g >= voodoo->bltDstChromaMinG && g <= voodoo->bltDstChromaMaxG && b >= voodoo->bltDstChromaMinB && b <= voodoo->bltDstChromaMaxB)
-                rop |= BLIT_ROP_DST_PASS;
-        }
-
-        MIX(src_dat, dst_dat, voodoo->bltRop[rop]);
-
-        dst[x] = dst_dat;
+        voodoo_v2_px(voodoo, &dst[x], src_dat, 1); /* KairoX86#277 */
 
 skip_pixel:
         voodoo->blt.cur_x++;

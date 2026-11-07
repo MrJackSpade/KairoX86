@@ -38,6 +38,7 @@
 #include <86box/vid_voodoo_fifo.h> /* KairoX86#291: voodoo_settle() */
 #include <86box/vid_voodoo_regs.h>
 #include <86box/vid_voodoo_render.h>
+#include <86box/kairo_gpu.h> /* KairoX86#277 */
 
 #ifdef ENABLE_VOODOODISP_LOG
 int voodoodisp_do_log = ENABLE_VOODOODISP_LOG;
@@ -568,6 +569,20 @@ voodoo_callback(void *priv)
                     for (x = 0; x < voodoo->h_disp; x++) {
                         p[x] = (voodoo->clutData256[fil[x * 3]].b << 0 | voodoo->clutData256[fil[x * 3 + 1]].g << 8 | voodoo->clutData256[fil[x * 3 + 2]].r << 16);
                     }
+                } else if (kairo_gpu_on && (voodoo->h_disp > 0) && (voodoo->h_disp <= 2048)) {
+                    /* KairoX86#277: with the machine's Hardware acceleration on, the line to the GPU, through the card's
+                       colour table (its CLUT's channels, as video_16to32 is made) */
+                    bitmap_t *bitmap = monitor->target_buffer;
+                    uint32_t  clut[256];
+                    for (x = 0; x < 256; x++)
+                        clut[x] = (draw_voodoo->clutData256[x].r << 16) | (draw_voodoo->clutData256[x].g << 8)
+                            | draw_voodoo->clutData256[x].b;
+                    const uint32_t words = ((uint32_t) voodoo->h_disp + 1) / 2;
+                    uint32_t      *line  = kairo_gpu_scan(bitmap, bitmap->kairo_gpu, (uint32_t) (p - bitmap->dat),
+                                                          KAIRO_SCAN_16CLUT, (uint32_t) voodoo->h_disp, words, clut, 256, 0,
+                                                          0, 0);
+                    memcpy(line, src, words * 4);
+                    kairo_gpu_scan_commit();
                 } else {
                     for (x = 0; x < voodoo->h_disp; x++) {
                         p[x] = draw_voodoo->video_16to32[src[x]];

@@ -4,8 +4,8 @@
  * series of passes through the engine over a cleared memory: fills and copies through every mix (the arithmetic
  * ones among them), colour compares and plane masks; blits through 1 bpp pattern maps; area fill; copies between maps
  * of 1, 4, 8 and 16 bits a pixel; Bresenham lines in every octant; short-stroke vectors. After each pass the XGA's
- * whole memory is copied into the guest's RAM (2 MB on, 1 MB a pass), which the batch's end state covers: the XGA's
- * own picture is not set up. The engine's status is never read: it finishes at once. Any other card returns at once.
+ * whole memory is copied into the guest's RAM (2 MB on, 1 MB a pass), which the batch's end state covers. Then the
+ * XGA's own picture of it, 640 x 480 at 8, 16 and 4 bits a pixel, and at 8 bits with its sprite cursor. The engine's status is never read: it finishes at once. Any other card returns at once.
  *
  * Copyright 2026 MrJackSpade. GPL-2.0-or-later.
  */
@@ -17,6 +17,12 @@
    7C80h in the INMOS card's 32 KB one */
 static volatile u32 *COP;
 #define MAPS     0x00400000u                      /* the maps' addresses: instance 1's 4 MB window */
+
+/* An index register (the display's, the palette's, the cursor's) */
+static void xreg(u8 index, u8 value) {
+    outb(IO + 0x0a, index);
+    outb(IO + 0x0b, value);
+}
 
 static void cop(u32 off, u32 v) { COP[off / 4] = v; }
 static void cop8(u32 off, u8 v) { ((volatile u8 *) COP)[off] = v; }
@@ -175,4 +181,36 @@ void test_main(void) {
         passes[p](p);
         keep(p);
     }
+
+    /* The XGA's own picture of what the last pass left: 640 x 480 (an 800 x 525 frame at 25.175 MHz) at 8, 16 and 4
+       bits a pixel, the palette a ramp, each held eight ticks of the BIOS clock; then 8 bits with the sprite cursor */
+    static const u8 timing[][2] = { { 0x10, 99 }, { 0x11, 0 }, { 0x12, 79 }, { 0x13, 0 }, { 0x20, 0x0c }, { 0x21, 2 },
+                                    { 0x22, 0xdf }, { 0x23, 1 }, { 0x24, 0xdf }, { 0x25, 1 }, { 0x28, 0xe9 },
+                                    { 0x29, 1 }, { 0x2c, 0xff }, { 0x2d, 7 }, { 0x40, 0 }, { 0x41, 0 }, { 0x42, 0 },
+                                    { 0x50, 0 }, { 0x54, 0 }, { 0x64, 0xff } };
+    for (u32 i = 0; i < sizeof(timing) / sizeof(timing[0]); i++)
+        xreg(timing[i][0], timing[i][1]);
+    xreg(0x60, 0);
+    for (u32 i = 0; i < 256; i++) {
+        const u32 v = pattern(i, 0, 0x6a);
+        xreg(0x65, (u8) v);
+        xreg(0x65, (u8) (v >> 8));
+        xreg(0x65, (u8) (v >> 16));
+    }
+    static const u8 modes[3][2] = { { 3, 80 }, { 4, 160 }, { 2, 40 } }; /* display control 2, the row in 8 bytes */
+    for (u32 m = 0; m < 3; m++) {
+        xreg(0x43, modes[m][1]);
+        xreg(0x44, 0);
+        xreg(0x51, modes[m][0]);
+        wait_ticks(8);
+    }
+    xreg(0x43, 80);
+    xreg(0x51, 3);
+    xreg(0x30, 200);
+    xreg(0x31, 0);
+    xreg(0x33, 150);
+    xreg(0x34, 0);
+    xreg(0x36, 1);
+    wait_ticks(8);
+    xreg(0x36, 0);
 }

@@ -156,6 +156,10 @@ enum {
     /* 15 bits a pixel, 2 a dword, each through the palette (its low byte) when its top bit is set, else
        through 86Box's 15-bit table (svga_render_15bpp_mix_*) */
     KAIRO_SCAN_15MIX,
+    /* 16 bits a pixel (565), 2 a dword, each channel through its own column of the palette (256 colours): red from
+       palette[(c >> 8) & F8h], green from palette[(c >> 3) & FCh], blue from palette[(c << 3) & F8h], no alpha (the
+       3dfx Voodoo's display table, vid_voodoo_display.c voodoo_calc_clutData) */
+    KAIRO_SCAN_16CLUT,
 };
 
 /* Each pixel drawn twice across */

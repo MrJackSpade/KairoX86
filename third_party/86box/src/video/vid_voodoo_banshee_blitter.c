@@ -43,6 +43,7 @@
 #include <86box/vid_svga.h>
 #include <86box/vid_voodoo_common.h>
 #include <86box/vid_voodoo_banshee_blitter.h>
+#include <86box/vid_voodoo_k2d.h> /* KairoX86#277 */
 #include <86box/kairo_gpu.h> /* KairoX86#278 */
 #include <86box/kairo_gpu_seg.h>
 #include <86box/kairo_gpu_banshee2d.h>
@@ -209,74 +210,6 @@ MIX(voodoo_t *voodoo, uint32_t dest, uint32_t src, uint32_t pattern, int colour_
     return result;
 }
 
-/* KairoX86#278: the 2D engine's batch on the GPU, with Hardware acceleration on. The engine walks on the FIFO's thread
-   while the machine's thread touches video memory: both hold lock, so one run is flushed at a time. */
-typedef struct banshee_k2d_t {
-    kairo_seg_t     *seg;
-    kairo_seg_run_t *run[4];           /* 1 to 4-byte pixels */
-    mutex_t         *lock;
-    uint32_t         record[B2_WORDS]; /* the operation last put in the batch */
-    uint32_t         next[B2_WORDS];   /* the operation of the pixels being recorded */
-    uint64_t         generation;
-    int              issued;
-    int              in_order;
-} banshee_k2d_t;
-
-static void
-banshee_k2d_op(void *priv, bool in_order)
-{
-    banshee_k2d_t *g = (banshee_k2d_t *) priv;
-
-    kairo_seg_make_room(g->seg);
-    if (g->issued && (g->in_order == in_order) && (g->generation == kairo_seg_generation(g->seg)) &&
-        !memcmp(g->record, g->next, sizeof(g->record)))
-        return;
-    memcpy(kairo_seg_op(g->seg, in_order), g->next, sizeof(g->next));
-    memcpy(g->record, g->next, sizeof(g->record));
-    g->generation = kairo_seg_generation(g->seg);
-    g->in_order   = in_order;
-    g->issued     = 1;
-}
-
-static void
-banshee_k2d_flush(banshee_k2d_t *g)
-{
-    for (int i = 0; i < 4; i++)
-        kairo_seg_run_flush(g->run[i]);
-}
-
-/* voodoo->k2d_touch: the processor's, the display's or the 3D engine's access (the card's lock taken) */
-static void
-banshee_k2d_touch(voodoo_t *voodoo, uint32_t addr, uint32_t len)
-{
-    banshee_k2d_t *g = (banshee_k2d_t *) voodoo->k2d;
-
-    thread_wait_mutex(g->lock);
-    kairo_seg_touch(g->seg, addr & voodoo->fb_mask, len);
-    thread_release_mutex(g->lock);
-}
-
-/* voodoo->k2d_drain: the batch drawn before the 3D engine draws (the card's lock taken) */
-static void
-banshee_k2d_drain(voodoo_t *voodoo)
-{
-    banshee_k2d_t *g = (banshee_k2d_t *) voodoo->k2d;
-
-    thread_wait_mutex(g->lock);
-    banshee_k2d_flush(g);
-    kairo_seg_drain(g->seg);
-    thread_release_mutex(g->lock);
-}
-
-/* The walk reads len bytes at p, in video memory: what the batch, the walk's own run too, draws there first (the
-   card's lock held) */
-static __inline void
-banshee_k2d_read(voodoo_t *voodoo, const uint8_t *p, uint32_t len)
-{
-    if (voodoo->k2d != NULL)
-        kairo_seg_touch(((banshee_k2d_t *) voodoo->k2d)->seg, (uint32_t) (p - voodoo->vram) & voodoo->fb_mask, len);
-}
-
 /* One pixel of the walk at addr, pb bytes: the destination read, MIX with the source src and pattern pattern (the
    colour keys in their formats), the write; a 3-byte pixel keeps the byte after it. With Hardware acceleration on,
    recorded for the GPU. */
@@ -286,8 +219,7 @@ banshee_px(voodoo_t *voodoo, uint32_t addr, int pb, uint32_t src, uint32_t patte
     uint32_t dest;
 
     if (voodoo->k2d != NULL) {
-        banshee_k2d_t *g             = (banshee_k2d_t *) voodoo->k2d;
-        uint32_t       rec[B2_WORDS] = { 0 };
+        uint32_t rec[B2_WORDS] = { 0 };
 
         rec[B2_ROPS] = voodoo->banshee_blt.rops[0] | (voodoo->banshee_blt.rops[1] << 8) | (voodoo->banshee_blt.rops[2] << 16) |
                        ((uint32_t) voodoo->banshee_blt.rops[3] << 24);
@@ -297,15 +229,7 @@ banshee_px(voodoo_t *voodoo, uint32_t addr, int pb, uint32_t src, uint32_t patte
             rec[B2_DKEY_MAX] = voodoo->banshee_blt.dstColorkeyMax;
         }
         rec[B2_BYTES] = (uint32_t) pb;
-        /* A run is of one operation */
-        if (memcmp(rec, g->next, sizeof(rec))) {
-            banshee_k2d_flush(g);
-            memcpy(g->next, rec, sizeof(rec));
-        }
-
-        const uint32_t words[B2_PIXEL_WORDS] = { src, pattern, colorkey(voodoo, src, 1, fmt_src) ? B2K_SRC_KEY : 0 };
-
-        kairo_seg_run_pixel(g->run[pb - 1], addr, words, NULL);
+        voodoo_k2d_pixel(voodoo, addr, pb, rec, src, pattern, colorkey(voodoo, src, 1, fmt_src));
         return;
     }
     switch (pb) {
@@ -327,40 +251,6 @@ banshee_px(voodoo_t *voodoo, uint32_t addr, int pb, uint32_t src, uint32_t patte
             break;
     }
     voodoo->changedvram[addr >> 12] = changeframecount;
-}
-
-void
-banshee_k2d_open(voodoo_t *voodoo)
-{
-    banshee_k2d_t *g;
-
-    if (!kairo_gpu_on)
-        return;
-    g = calloc(1, sizeof(*g));
-    if (g == NULL)
-        fatal("Banshee 2D on the GPU: no memory\n");
-    g->seg  = kairo_banshee2d_open(voodoo->vram, voodoo->fb_mask, voodoo->changedvram, &changeframecount);
-    g->lock = thread_create_mutex();
-    for (int i = 0; i < 4; i++)
-        g->run[i] = kairo_seg_run_open(g->seg, voodoo->fb_mask, i + 1, B2_PIXEL_WORDS, 0, banshee_k2d_op, g);
-    voodoo->k2d       = g;
-    voodoo->k2d_touch = banshee_k2d_touch;
-    voodoo->k2d_drain = banshee_k2d_drain;
-}
-
-void
-banshee_k2d_close(voodoo_t *voodoo)
-{
-    banshee_k2d_t *g = (banshee_k2d_t *) voodoo->k2d;
-
-    if (g == NULL)
-        return;
-    kairo_seg_close(g->seg);
-    for (int i = 0; i < 4; i++)
-        kairo_seg_run_close(g->run[i]);
-    thread_close_mutex(g->lock);
-    free(g);
-    voodoo->k2d = NULL;
 }
 
 static uint32_t
@@ -750,7 +640,7 @@ do_screen_to_screen_line(voodoo_t *voodoo, uint8_t *src_p, const uintptr_t src_a
                         case DST_FORMAT_COL_8_BPP:
                             {
                                 uint32_t dst_addr = get_addr(voodoo, dst_x, dst_y, 0, 0); //(voodoo->banshee_blt.dstBaseAddr + dst_x + dst_y*voodoo->banshee_blt.dst_stride) & voodoo->fb_mask;
-                                banshee_k2d_read(voodoo, &src_p[src_x_real], 1); /* KairoX86#278 */
+                                voodoo_k2d_read(voodoo, &src_p[src_x_real], 1); /* KairoX86#278 */
                                 uint32_t src      = src_p[src_x_real];
                                 uint32_t pattern  = (voodoo->banshee_blt.command & COMMAND_PATTERN_MONO) ? ((pattern_mask & (1 << (7 - (pat_x & 7)))) ? voodoo->banshee_blt.colorFore : voodoo->banshee_blt.colorBack) : voodoo->banshee_blt.colorPattern8[(pat_x & 7) + (pat_y & 7) * 8];
 
@@ -763,7 +653,7 @@ do_screen_to_screen_line(voodoo_t *voodoo, uint8_t *src_p, const uintptr_t src_a
                         case DST_FORMAT_COL_16_BPP:
                             {
                                 uint32_t dst_addr = get_addr(voodoo, dst_x * 2, dst_y, 0, 0); // dst_addr = (voodoo->banshee_blt.dstBaseAddr + dst_x*2 + dst_y*voodoo->banshee_blt.dst_stride) & voodoo->fb_mask;
-                                banshee_k2d_read(voodoo, &src_p[src_x_real], 2); /* KairoX86#278 */
+                                voodoo_k2d_read(voodoo, &src_p[src_x_real], 2); /* KairoX86#278 */
                                 uint32_t src      = *(uint16_t *) &src_p[src_x_real];
                                 uint32_t pattern  = (voodoo->banshee_blt.command & COMMAND_PATTERN_MONO) ? ((pattern_mask & (1 << (7 - (pat_x & 7)))) ? voodoo->banshee_blt.colorFore : voodoo->banshee_blt.colorBack) : voodoo->banshee_blt.colorPattern16[(pat_x & 7) + (pat_y & 7) * 8];
 
@@ -776,7 +666,7 @@ do_screen_to_screen_line(voodoo_t *voodoo, uint8_t *src_p, const uintptr_t src_a
                         case DST_FORMAT_COL_24_BPP:
                             {
                                 uint32_t dst_addr = get_addr(voodoo, dst_x * 3, dst_y, 0, 0); // dst_addr = (voodoo->banshee_blt.dstBaseAddr + dst_x*3 + dst_y*voodoo->banshee_blt.dst_stride) & voodoo->fb_mask;
-                                banshee_k2d_read(voodoo, &src_p[src_x_real], 4); /* KairoX86#278 */
+                                voodoo_k2d_read(voodoo, &src_p[src_x_real], 4); /* KairoX86#278 */
                                 uint32_t src      = *(uint32_t *) &src_p[src_x_real];
                                 uint32_t pattern  = (voodoo->banshee_blt.command & COMMAND_PATTERN_MONO) ? ((pattern_mask & (1 << (7 - (pat_x & 7)))) ? voodoo->banshee_blt.colorFore : voodoo->banshee_blt.colorBack) : voodoo->banshee_blt.colorPattern24[(pat_x & 7) + (pat_y & 7) * 8];
 
@@ -789,7 +679,7 @@ do_screen_to_screen_line(voodoo_t *voodoo, uint8_t *src_p, const uintptr_t src_a
                         case DST_FORMAT_COL_32_BPP:
                             {
                                 uint32_t dst_addr = get_addr(voodoo, dst_x * 4, dst_y, 0, 0); // dst_addr = (voodoo->banshee_blt.dstBaseAddr + dst_x*4 + dst_y*voodoo->banshee_blt.dst_stride) & voodoo->fb_mask;
-                                banshee_k2d_read(voodoo, &src_p[src_x_real], 4); /* KairoX86#278 */
+                                voodoo_k2d_read(voodoo, &src_p[src_x_real], 4); /* KairoX86#278 */
                                 uint32_t src      = *(uint32_t *) &src_p[src_x_real];
                                 uint32_t pattern  = (voodoo->banshee_blt.command & COMMAND_PATTERN_MONO) ? ((pattern_mask & (1 << (7 - (pat_x & 7)))) ? voodoo->banshee_blt.colorFore : voodoo->banshee_blt.colorBack) : voodoo->banshee_blt.colorPattern[(pat_x & 7) + (pat_y & 7) * 8];
 
@@ -842,7 +732,7 @@ do_screen_to_screen_line(voodoo_t *voodoo, uint8_t *src_p, const uintptr_t src_a
                     switch (voodoo->banshee_blt.srcFormat & SRC_FORMAT_COL_MASK) {
                         case SRC_FORMAT_COL_1_BPP:
                             {
-                                banshee_k2d_read(voodoo, &src_p[src_x_real], 1); /* KairoX86#278 */
+                                voodoo_k2d_read(voodoo, &src_p[src_x_real], 1); /* KairoX86#278 */
                                 uint8_t src_byte = src_p[src_x_real];
                                 src_data         = (src_byte & (0x80 >> (src_x & 7))) ? voodoo->banshee_blt.colorFore : voodoo->banshee_blt.colorBack;
                                 if (voodoo->banshee_blt.command & COMMAND_TRANS_MONO)
@@ -854,13 +744,13 @@ do_screen_to_screen_line(voodoo_t *voodoo, uint8_t *src_p, const uintptr_t src_a
                             }
                         case SRC_FORMAT_COL_8_BPP:
                             {
-                                banshee_k2d_read(voodoo, &src_p[src_x_real], 1); /* KairoX86#278 */
+                                voodoo_k2d_read(voodoo, &src_p[src_x_real], 1); /* KairoX86#278 */
                                 src_data = src_p[src_x_real];
                                 break;
                             }
                         case SRC_FORMAT_COL_16_BPP:
                             {
-                                banshee_k2d_read(voodoo, &src_p[src_x_real], 2); /* KairoX86#278 */
+                                voodoo_k2d_read(voodoo, &src_p[src_x_real], 2); /* KairoX86#278 */
                                 uint16_t src_16 = *(uint16_t *) &src_p[src_x_real];
                                 int      r      = (src_16 >> 11);
                                 int      g      = (src_16 >> 5) & 0x3f;
@@ -874,25 +764,25 @@ do_screen_to_screen_line(voodoo_t *voodoo, uint8_t *src_p, const uintptr_t src_a
                             }
                         case SRC_FORMAT_COL_24_BPP:
                             {
-                                banshee_k2d_read(voodoo, &src_p[src_x_real], 4); /* KairoX86#278 */
+                                voodoo_k2d_read(voodoo, &src_p[src_x_real], 4); /* KairoX86#278 */
                                 src_data = *(uint32_t *) &src_p[src_x_real];
                                 break;
                             }
                         case SRC_FORMAT_COL_32_BPP:
                             {
-                                banshee_k2d_read(voodoo, &src_p[src_x_real], 4); /* KairoX86#278 */
+                                voodoo_k2d_read(voodoo, &src_p[src_x_real], 4); /* KairoX86#278 */
                                 src_data = *(uint32_t *) &src_p[src_x_real];
                                 break;
                             }
                         case SRC_FORMAT_COL_YUYV:
                             {
-                                banshee_k2d_read(voodoo, &src_p[src_x_real], 4); /* KairoX86#278 */
+                                voodoo_k2d_read(voodoo, &src_p[src_x_real], 4); /* KairoX86#278 */
                                 src_data_yuv = *(uint32_t *) &src_p[src_x_real];
                                 break;
                             }
                         case SRC_FORMAT_COL_UYVY:
                             {
-                                banshee_k2d_read(voodoo, &src_p[src_x_real], 4); /* KairoX86#278 */
+                                voodoo_k2d_read(voodoo, &src_p[src_x_real], 4); /* KairoX86#278 */
                                 src_data_yuv = *(uint32_t *) &src_p[src_x_real];
                                 src_data_yuv = ((src_data_yuv & 0xFF00) >> 8) | ((src_data_yuv & 0xFF) << 8) |
                                                 ((src_data_yuv & 0xFF000000) >> 8) | ((src_data_yuv & 0xFF0000) << 8);
@@ -1111,7 +1001,7 @@ do_screen_to_screen_stretch_line(voodoo_t *voodoo, uint8_t *src_p, int src_x, in
                         case DST_FORMAT_COL_8_BPP:
                             {
                                 uint32_t dst_addr = get_addr(voodoo, dst_x, dst_y, 0, 0); //(voodoo->banshee_blt.dstBaseAddr + dst_x + dst_y*voodoo->banshee_blt.dst_stride) & voodoo->fb_mask;
-                                banshee_k2d_read(voodoo, &src_p[src_x], 1); /* KairoX86#278 */
+                                voodoo_k2d_read(voodoo, &src_p[src_x], 1); /* KairoX86#278 */
                                 uint32_t src      = src_p[src_x];
                                 uint32_t pattern  = (voodoo->banshee_blt.command & COMMAND_PATTERN_MONO) ? ((pattern_mask & (1 << (7 - (pat_x & 7)))) ? voodoo->banshee_blt.colorFore : voodoo->banshee_blt.colorBack) : colorPattern[(pat_x & 7) + (pat_y & 7) * 8];
 
@@ -1124,7 +1014,7 @@ do_screen_to_screen_stretch_line(voodoo_t *voodoo, uint8_t *src_p, int src_x, in
                         case DST_FORMAT_COL_16_BPP:
                             {
                                 uint32_t dst_addr = get_addr(voodoo, dst_x * 2, dst_y, 0, 0); //(voodoo->banshee_blt.dstBaseAddr + dst_x*2 + dst_y*voodoo->banshee_blt.dst_stride) & voodoo->fb_mask;
-                                banshee_k2d_read(voodoo, &src_p[src_x * 2], 2); /* KairoX86#278 */
+                                voodoo_k2d_read(voodoo, &src_p[src_x * 2], 2); /* KairoX86#278 */
                                 uint32_t src      = *(uint16_t *) &src_p[src_x * 2];
                                 uint32_t pattern  = (voodoo->banshee_blt.command & COMMAND_PATTERN_MONO) ? ((pattern_mask & (1 << (7 - (pat_x & 7)))) ? voodoo->banshee_blt.colorFore : voodoo->banshee_blt.colorBack) : colorPattern[(pat_x & 7) + (pat_y & 7) * 8];
 
@@ -1137,7 +1027,7 @@ do_screen_to_screen_stretch_line(voodoo_t *voodoo, uint8_t *src_p, int src_x, in
                         case DST_FORMAT_COL_24_BPP:
                             {
                                 uint32_t dst_addr = get_addr(voodoo, dst_x * 3, dst_y, 0, 0); //(voodoo->banshee_blt.dstBaseAddr + dst_x*3 + dst_y*voodoo->banshee_blt.dst_stride) & voodoo->fb_mask;
-                                banshee_k2d_read(voodoo, &src_p[src_x * 3], 4); /* KairoX86#278 */
+                                voodoo_k2d_read(voodoo, &src_p[src_x * 3], 4); /* KairoX86#278 */
                                 uint32_t src      = *(uint32_t *) &src_p[src_x * 3];
                                 uint32_t pattern  = (voodoo->banshee_blt.command & COMMAND_PATTERN_MONO) ? ((pattern_mask & (1 << (7 - (pat_x & 7)))) ? voodoo->banshee_blt.colorFore : voodoo->banshee_blt.colorBack) : colorPattern[(pat_x & 7) + (pat_y & 7) * 8];
 
@@ -1150,7 +1040,7 @@ do_screen_to_screen_stretch_line(voodoo_t *voodoo, uint8_t *src_p, int src_x, in
                         case DST_FORMAT_COL_32_BPP:
                             {
                                 uint32_t dst_addr = get_addr(voodoo, dst_x * 4, dst_y, 0, 0); //(voodoo->banshee_blt.dstBaseAddr + dst_x*4 + dst_y*voodoo->banshee_blt.dst_stride) & voodoo->fb_mask;
-                                banshee_k2d_read(voodoo, &src_p[src_x * 4], 4); /* KairoX86#278 */
+                                voodoo_k2d_read(voodoo, &src_p[src_x * 4], 4); /* KairoX86#278 */
                                 uint32_t src      = *(uint32_t *) &src_p[src_x * 4];
                                 uint32_t pattern  = (voodoo->banshee_blt.command & COMMAND_PATTERN_MONO) ? ((pattern_mask & (1 << (7 - (pat_x & 7)))) ? voodoo->banshee_blt.colorFore : voodoo->banshee_blt.colorBack) : colorPattern[(pat_x & 7) + (pat_y & 7) * 8];
 
@@ -1195,7 +1085,7 @@ do_screen_to_screen_stretch_line(voodoo_t *voodoo, uint8_t *src_p, int src_x, in
                     switch (voodoo->banshee_blt.srcFormat & SRC_FORMAT_COL_MASK) {
                         case SRC_FORMAT_COL_1_BPP:
                             {
-                                banshee_k2d_read(voodoo, &src_p[src_x_real], 1); /* KairoX86#278 */
+                                voodoo_k2d_read(voodoo, &src_p[src_x_real], 1); /* KairoX86#278 */
                                 uint8_t src_byte = src_p[src_x_real];
                                 src_data         = (src_byte & (0x80 >> (src_x & 7))) ? voodoo->banshee_blt.colorFore : voodoo->banshee_blt.colorBack;
                                 if (voodoo->banshee_blt.command & COMMAND_TRANS_MONO)
@@ -1207,13 +1097,13 @@ do_screen_to_screen_stretch_line(voodoo_t *voodoo, uint8_t *src_p, int src_x, in
                             }
                         case SRC_FORMAT_COL_8_BPP:
                             {
-                                banshee_k2d_read(voodoo, &src_p[src_x_real], 1); /* KairoX86#278 */
+                                voodoo_k2d_read(voodoo, &src_p[src_x_real], 1); /* KairoX86#278 */
                                 src_data = src_p[src_x_real];
                                 break;
                             }
                         case SRC_FORMAT_COL_16_BPP:
                             {
-                                banshee_k2d_read(voodoo, &src_p[src_x_real], 2); /* KairoX86#278 */
+                                voodoo_k2d_read(voodoo, &src_p[src_x_real], 2); /* KairoX86#278 */
                                 uint16_t src_16 = *(uint16_t *) &src_p[src_x_real];
                                 int      r      = (src_16 >> 11);
                                 int      g      = (src_16 >> 5) & 0x3f;
@@ -1227,25 +1117,25 @@ do_screen_to_screen_stretch_line(voodoo_t *voodoo, uint8_t *src_p, int src_x, in
                             }
                         case SRC_FORMAT_COL_24_BPP:
                             {
-                                banshee_k2d_read(voodoo, &src_p[src_x_real], 4); /* KairoX86#278 */
+                                voodoo_k2d_read(voodoo, &src_p[src_x_real], 4); /* KairoX86#278 */
                                 src_data = *(uint32_t *) &src_p[src_x_real];
                                 break;
                             }
                         case SRC_FORMAT_COL_32_BPP:
                             {
-                                banshee_k2d_read(voodoo, &src_p[src_x_real], 4); /* KairoX86#278 */
+                                voodoo_k2d_read(voodoo, &src_p[src_x_real], 4); /* KairoX86#278 */
                                 src_data = *(uint32_t *) &src_p[src_x_real];
                                 break;
                             }
                         case SRC_FORMAT_COL_YUYV:
                             {
-                                banshee_k2d_read(voodoo, &src_p[src_x_real], 4); /* KairoX86#278 */
+                                voodoo_k2d_read(voodoo, &src_p[src_x_real], 4); /* KairoX86#278 */
                                 src_data_yuv = *(uint32_t *) &src_p[src_x_real];
                                 break;
                             }
                         case SRC_FORMAT_COL_UYVY:
                             {
-                                banshee_k2d_read(voodoo, &src_p[src_x_real], 4); /* KairoX86#278 */
+                                voodoo_k2d_read(voodoo, &src_p[src_x_real], 4); /* KairoX86#278 */
                                 src_data_yuv = *(uint32_t *) &src_p[src_x_real];
                                 src_data_yuv = ((src_data_yuv & 0xFF00) >> 8) | ((src_data_yuv & 0xFF) << 8) |
                                                 ((src_data_yuv & 0xFF000000) >> 8) | ((src_data_yuv & 0xFF0000) << 8);
@@ -1663,11 +1553,9 @@ voodoo_2d_reg_writel(voodoo_t *voodoo, uint32_t addr, uint32_t val)
         voodoo_2d_reg_writel_walk(voodoo, addr, val);
         return;
     }
-    thread_wait_mutex(((banshee_k2d_t *) voodoo->k2d)->lock);
-    if (voodoo->k_gpu != NULL)
-        kairo_voodoo_gpu_drain(voodoo);
+    voodoo_k2d_lock(voodoo);
     voodoo_2d_reg_writel_walk(voodoo, addr, val);
-    thread_release_mutex(((banshee_k2d_t *) voodoo->k2d)->lock);
+    voodoo_k2d_unlock(voodoo);
 }
 
 static void

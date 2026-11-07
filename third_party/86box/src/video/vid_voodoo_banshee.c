@@ -44,6 +44,7 @@
 #include <86box/vid_svga_render.h>
 #include <86box/vid_voodoo_common.h>
 #include <86box/vid_voodoo_banshee_blitter.h> /* KairoX86#278 */
+#include <86box/vid_voodoo_k2d.h>              /* KairoX86#278 */
 #include <86box/vid_voodoo_display.h>
 #include <86box/vid_voodoo_fb.h>
 #include <86box/vid_voodoo_fifo.h>
@@ -549,6 +550,31 @@ banshee_render_16bpp_tiled(svga_t *svga)
 
     if (addr >= svga->vram_max)
         return;
+
+    /* KairoX86#278: the line's tiles are 128 * 32 bytes apart, so the queued GPU work over all of them is drawn
+       first (the svga core touched the line as if it were linear) */
+    if (svga->kairo_touch != NULL)
+        svga->kairo_touch(svga, addr & svga->vram_display_mask, (uint32_t) ((svga->hdisp + 63) / 64) * 128 * 32);
+
+    /* KairoX86#278: with the machine's Hardware acceleration on, a line nothing else draws on (no cursor, no
+       overlay) and converted by the plain table goes to the GPU as a 16-bit line, its tiles' pixels gathered */
+    if (kairo_gpu_on && svga->render_async && !svga->lut_map && !(svga->hdisp & 63) && (svga->hdisp > 0)
+        && (svga->hdisp <= 2048) && !((svga->vram_display_mask + 1) & svga->vram_display_mask)) {
+        bitmap_t *bitmap = svga->monitor->target_buffer;
+        uint32_t *words  = kairo_gpu_scan(bitmap, bitmap->kairo_gpu, (uint32_t) (p - bitmap->dat), KAIRO_SCAN_16,
+                                          (uint32_t) svga->hdisp, (uint32_t) svga->hdisp / 2, NULL, 0, 0, 0, 0);
+        for (int x = 0; x < svga->hdisp; x += 64) {
+            memcpy(words, &svga->vram[addr & svga->vram_display_mask], 128);
+            words += 32;
+            addr += 128 * 32;
+        }
+        kairo_gpu_scan_commit();
+        if (svga->firstline_draw == 2000)
+            svga->firstline_draw = svga->displine;
+        svga->lastline_draw = svga->displine;
+        banshee->desktop_y++;
+        return;
+    }
 
     for (int x = 0; x < svga->hdisp; x += 64) {
         if (svga->hwcursor_on || svga->overlay_on)
@@ -3531,7 +3557,7 @@ banshee_init_common(const device_t *info, const char *fn, const int has_sgram,
     banshee->voodoo->texture_mask = banshee->svga.vram_mask;
     if (kairo_gpu_on) /* KairoX86#278 */
         banshee->voodoo->k_gpu = kairo_voodoo_gpu_open(banshee->voodoo);
-    banshee_k2d_open(banshee->voodoo); /* KairoX86#278: its 2D engine's */
+    voodoo_k2d_open(banshee->voodoo); /* KairoX86#278: its 2D engine's */
     banshee->voodoo->cmd_status   = (1 << 28);
     banshee->voodoo->cmd_status_2 = (1 << 28);
     voodoo_generate_filter_v1(banshee->voodoo);

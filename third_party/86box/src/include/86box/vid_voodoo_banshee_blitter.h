@@ -17,8 +17,4 @@
 
 void voodoo_2d_reg_writel(voodoo_t *voodoo, uint32_t addr, uint32_t val);
 
-/* KairoX86#278: the 2D engine's batch on the GPU, with Hardware acceleration on */
-void banshee_k2d_open(voodoo_t *voodoo);
-void banshee_k2d_close(voodoo_t *voodoo);
-
 #endif /*VIDEO_VOODOO_BANSHEE_BLITTER_H*/

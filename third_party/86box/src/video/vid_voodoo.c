@@ -38,6 +38,7 @@
 #include <86box/vid_svga.h>
 #include <86box/vid_voodoo_common.h>
 #include <86box/vid_voodoo_banshee_blitter.h> /* KairoX86#278 */
+#include <86box/vid_voodoo_k2d.h>              /* KairoX86#277 */
 #include <86box/vid_voodoo_blitter.h>
 #include <86box/vid_voodoo_display.h>
 #include <86box/vid_voodoo_dither.h>
@@ -1334,6 +1335,8 @@ voodoo_card_init(const device_t *info)
     voodoo_alloc_texture_caches(voodoo); /* KairoX86#278 */
     if (kairo_gpu_on)
         voodoo->k_gpu = kairo_voodoo_gpu_open(voodoo);
+    if (voodoo->type == VOODOO_2)
+        voodoo_k2d_open(voodoo); /* KairoX86#277: its blitter's batch */
 
     timer_add(&voodoo->timer, voodoo_callback, voodoo, 1);
 
@@ -1755,7 +1758,7 @@ voodoo_card_close(voodoo_t *voodoo)
     }
 
     kairo_voodoo_gpu_close(voodoo); /* KairoX86#278 */
-    banshee_k2d_close(voodoo);      /* the Banshee's 2D engine's batch */
+    voodoo_k2d_close(voodoo);       /* KairoX86#277: the Banshee's 2D engine's or the Voodoo2's blitter's batch */
     voodoo_free_texture_caches(voodoo);
 #ifndef NO_CODEGEN
     voodoo_codegen_close(voodoo);

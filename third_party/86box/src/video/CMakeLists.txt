@@ -290,6 +290,7 @@ add_library(voodoo OBJECT
     vid_voodoo_display.c
     vid_voodoo_fb.c
     vid_voodoo_fifo.c
+    vid_voodoo_k2d.c
     vid_voodoo_reg.c
     vid_voodoo_render.c
     vid_voodoo_setup.c
