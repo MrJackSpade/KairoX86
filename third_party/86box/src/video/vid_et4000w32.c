@@ -36,6 +36,9 @@
 #include <86box/video.h>
 #include <86box/vid_svga.h>
 #include <86box/vid_svga_render.h>
+#include <86box/kairo_gpu.h> /* KairoX86#254 */
+#include <86box/kairo_gpu_seg.h>
+#include <86box/kairo_gpu_et4000w32.h>
 
 #define BIOS_ROM_PATH_W32_MACHSPEED_VGA_GUI_2400S   "roms/video/et4000w32/ET4000W32VLB_bios_MX27C512.BIN"
 #define BIOS_ROM_PATH_W32I_REVB_AXIS_MICRODEVICE    "roms/video/et4000w32/ET4KW32I.VBI"
@@ -142,7 +145,23 @@ typedef struct et4000w32p_t {
     } mmu;
 
     volatile int busy;
+
+    struct et4000w32_gpu_t *k_gpu; /* KairoX86#254: the accelerator's batch on the GPU, NULL in software */
 } et4000w32p_t;
+
+/* KairoX86#254: the run of destination bytes the walk is drawing, recorded when it ends */
+#define ET_RUN_MAX 4096
+typedef struct et4000w32_gpu_t {
+    kairo_seg_t *seg;
+    uint32_t     record[ET_WORDS];
+    uint64_t     generation; /* the batch's drains when the record went in */
+    int          issued;
+    int          in_order;
+    uint32_t     start; /* the run's first byte */
+    int          dir;
+    int          count;
+    uint32_t     words[ET_RUN_MAX * ET_BYTE_WORDS];
+} et4000w32_gpu_t;
 
 static int et4000w32_vbus[4] = { 1, 2, 4, 4 };
 
@@ -989,6 +1008,8 @@ et4000w32p_mmu_write(uint32_t addr, uint8_t val, void *priv)
                 et4000w32p_accel_write_mmu(et4000, addr & 0x7fff, val, et4000->bank);
             else {
                 if (((addr & 0x1fff) + et4000->mmu.base[et4000->bank]) < svga->vram_max) {
+                    if (et4000->k_gpu != NULL) /* KairoX86#254 */
+                        kairo_seg_touch(et4000->k_gpu->seg, ((addr & 0x1fff) + et4000->mmu.base[et4000->bank]) & et4000->vram_mask, 1);
                     svga->vram[((addr & 0x1fff) + et4000->mmu.base[et4000->bank]) & et4000->vram_mask]                = val;
                     svga->changedvram[(((addr & 0x1fff) + et4000->mmu.base[et4000->bank]) & et4000->vram_mask) >> 12] = changeframecount;
                 }
@@ -1084,6 +1105,8 @@ et4000w32p_mmu_read(uint32_t addr, void *priv)
 
             if ((addr & 0x1fff) + et4000->mmu.base[et4000->bank] >= svga->vram_max)
                 return 0xff;
+            if (et4000->k_gpu != NULL) /* KairoX86#254 */
+                kairo_seg_touch(et4000->k_gpu->seg, ((addr & 0x1fff) + et4000->mmu.base[et4000->bank]) & et4000->vram_mask, 1);
 
             return svga->vram[(addr & 0x1fff) + et4000->mmu.base[et4000->bank]];
 
@@ -2165,16 +2188,154 @@ et4000w32_decy(et4000w32p_t *et4000)
         }                                          \
     }
 
+/* KairoX86#254: an operation in the batch: the record again only where it differs or the batch has been drawn */
 static void
-et4000w32_blit(int count, int cpu_input, uint32_t src_dat, uint32_t mix_dat, et4000w32p_t *et4000)
+et4000w32_k_op(et4000w32p_t *et4000, int in_order)
 {
-    svga_t *svga = &et4000->svga;
-    uint8_t pattern;
-    uint8_t source;
-    uint8_t dest;
-    uint8_t rop;
-    uint8_t out = 0;
-    int     mixmap;
+    et4000w32_gpu_t *g = et4000->k_gpu;
+    uint32_t         rec[ET_WORDS] = { 0 };
+
+    rec[ET_ROP_FG] = et4000->acl.internal.rop_fg;
+    rec[ET_ROP_BG] = et4000->acl.internal.rop_bg;
+    kairo_seg_make_room(g->seg);
+    if (g->issued && (g->in_order == in_order) && (g->generation == kairo_seg_generation(g->seg)) && !memcmp(g->record, rec, sizeof(rec)))
+        return;
+    memcpy(kairo_seg_op(g->seg, in_order), rec, sizeof(rec));
+    memcpy(g->record, rec, sizeof(rec));
+    g->generation = kairo_seg_generation(g->seg);
+    g->in_order   = in_order;
+    g->issued     = 1;
+}
+
+/* The bytes [lo, hi) of video memory the run's n bytes read of one kind (0 pattern, 1 source, 2 mix), none: lo = hi */
+static void
+et4000w32_k_reads(const et4000w32_gpu_t *g, int n, int kind, uint32_t *lo, uint32_t *hi)
+{
+    *lo = UINT32_MAX;
+    *hi = 0;
+    for (int i = 0; i < n; i++) {
+        uint32_t w = g->words[i * ET_BYTE_WORDS + kind];
+
+        if ((kind != 0) && (w & ET_IMMEDIATE))
+            continue;
+        if (kind == 2)
+            w >>= 3;
+        *lo = MIN(*lo, w);
+        *hi = MAX(*hi, w + 1);
+    }
+    if (*lo > *hi)
+        *lo = *hi = 0;
+}
+
+/* The run so far into the batch: drawn first what it reads or draws over; in order where it reads what it draws */
+static void
+et4000w32_k_flush(et4000w32p_t *et4000)
+{
+    et4000w32_gpu_t *g = et4000->k_gpu;
+    const int        n = g->count;
+
+    if (n == 0)
+        return;
+    g->count = 0;
+
+    const uint32_t d_lo     = (g->dir > 0) ? g->start : (g->start - (n - 1));
+    const uint32_t d_hi     = d_lo + n;
+    int            in_order = 0;
+
+    kairo_seg_draws(g->seg, d_lo, n);
+    for (int kind = 0; kind < 3; kind++) {
+        uint32_t lo, hi;
+
+        et4000w32_k_reads(g, n, kind, &lo, &hi);
+        if (lo == hi)
+            continue;
+        if (kairo_seg_reads_pending(g->seg, lo, hi - lo))
+            kairo_seg_drain(g->seg);
+        if ((lo < d_hi) && (d_lo < hi))
+            in_order = 1;
+        kairo_seg_reads(g->seg, lo, hi - lo);
+    }
+    et4000w32_k_op(et4000, in_order);
+    kairo_seg_add(g->seg, kairo_seg_stream(g->seg, g->words, n * ET_BYTE_WORDS), 0, n, g->start * 8, 8, g->dir);
+}
+
+/* Before every drain of the batch: the run being walked */
+static void
+et4000w32_k_flush_cb(void *priv)
+{
+    et4000w32_k_flush((et4000w32p_t *) priv);
+}
+
+/* One byte of an operation at the walk's place: its pattern and source (source >= 0: the host's byte) and its mix
+   (mix >= 0: the host's bit, else the mix map's at the mix address), drawn through the raster operation it selects,
+   or with Hardware acceleration on recorded for the GPU. A result routed to the processor (ctrl_routing 40h) is
+   the processor's at once. */
+static void
+et4000w32_draw_byte(et4000w32p_t *et4000, int source, int mix)
+{
+    svga_t        *svga = &et4000->svga;
+    const uint32_t mask = et4000->vram_mask;
+    const uint32_t p_at = (et4000->acl.pattern_addr + et4000->acl.pattern_x) & mask;
+    const uint32_t s_at = (et4000->acl.source_addr + et4000->acl.source_x) & mask;
+    const uint32_t d_at = et4000->acl.dest_addr & mask;
+    uint8_t        pattern;
+    uint8_t        src;
+    uint8_t        dest;
+    uint8_t        rop;
+    uint8_t        out = 0;
+    int            mixdat;
+
+    if (et4000->k_gpu != NULL) {
+        et4000w32_gpu_t *g = et4000->k_gpu;
+
+        if (!(et4000->acl.internal.ctrl_routing & 0x40)) {
+            if (g->count != 0) {
+                int dir = g->dir;
+
+                if (g->count == 1)
+                    dir = (d_at == g->start + 1) ? 1 : ((d_at + 1) == g->start) ? -1 : 0;
+                if ((dir != 0) && (g->count < ET_RUN_MAX) && ((int64_t) d_at == (int64_t) g->start + (int64_t) g->count * dir))
+                    g->dir = dir;
+                else
+                    et4000w32_k_flush(et4000);
+            }
+            if (g->count == 0) {
+                g->start = d_at;
+                g->dir   = 1;
+            }
+            uint32_t *w = &g->words[g->count * ET_BYTE_WORDS];
+            w[0] = p_at;
+            w[1] = (source >= 0) ? (ET_IMMEDIATE | (uint32_t) source) : s_at;
+            w[2] = (mix >= 0) ? (ET_IMMEDIATE | (mix ? 1u : 0u)) : (et4000->acl.mix_addr & ((mask << 3) | 7));
+            g->count++;
+            return;
+        }
+        /* The processor takes the result: the batch drawn first */
+        et4000w32_k_flush(et4000);
+        kairo_seg_drain(g->seg);
+    }
+
+    pattern = svga->vram[p_at];
+    src     = (source >= 0) ? source : svga->vram[s_at];
+    dest    = svga->vram[d_at];
+    mixdat  = (mix >= 0) ? mix : (svga->vram[(et4000->acl.mix_addr >> 3) & mask] & (1 << (et4000->acl.mix_addr & 7)));
+    rop     = mixdat ? et4000->acl.internal.rop_fg : et4000->acl.internal.rop_bg;
+
+    ROPMIX(rop, dest, pattern, src, out);
+
+    if (!(et4000->acl.internal.ctrl_routing & 0x40)) {
+        svga->vram[d_at]             = out;
+        svga->changedvram[d_at >> 12] = changeframecount;
+    } else {
+        et4000->acl.cpu_dat |= ((uint64_t) out << (et4000->acl.cpu_dat_pos * 8));
+        et4000->acl.cpu_dat_pos++;
+    }
+}
+
+static void
+et4000w32_blit_walk(int count, int cpu_input, uint32_t src_dat, uint32_t mix_dat, et4000w32p_t *et4000)
+{
+    int mixmap;
 
     if (!(et4000->acl.status & ACL_XYST) && !et4000->acl.mmu_start) {
         et4000w32_log("XY Block not started\n");
@@ -2183,21 +2344,10 @@ et4000w32_blit(int count, int cpu_input, uint32_t src_dat, uint32_t mix_dat, et4
 
     if (cpu_input == 3) {
         while (1) {
-            pattern = svga->vram[(et4000->acl.pattern_addr + et4000->acl.pattern_x) & et4000->vram_mask];
-            source = svga->vram[(et4000->acl.source_addr + et4000->acl.source_x) & et4000->vram_mask];
-
-            dest   = svga->vram[et4000->acl.dest_addr & et4000->vram_mask];
             mixmap = mix_dat & 1;
-
-            rop = mixmap ? et4000->acl.internal.rop_fg : et4000->acl.internal.rop_bg;
             mix_dat >>= 1;
             mix_dat |= 0x80000000;
-
-            ROPMIX(rop, dest, pattern, source, out);
-
-            /*Write the data*/
-            svga->vram[et4000->acl.dest_addr & et4000->vram_mask]                = out;
-            svga->changedvram[(et4000->acl.dest_addr & et4000->vram_mask) >> 12] = changeframecount;
+            et4000w32_draw_byte(et4000, -1, mixmap);
 
             if (et4000->acl.internal.xy_dir & 1)
                 et4000w32_decx(1, et4000);
@@ -2232,21 +2382,10 @@ et4000w32_blit(int count, int cpu_input, uint32_t src_dat, uint32_t mix_dat, et4
         }
     } else if (cpu_input == 4) {
         while (1) {
-            pattern = svga->vram[(et4000->acl.pattern_addr + et4000->acl.pattern_x) & et4000->vram_mask];
-            source = svga->vram[(et4000->acl.source_addr + et4000->acl.source_x) & et4000->vram_mask];
-
-            dest   = svga->vram[et4000->acl.dest_addr & et4000->vram_mask];
             mixmap = mix_dat & 1;
-
-            rop = mixmap ? et4000->acl.internal.rop_fg : et4000->acl.internal.rop_bg;
             mix_dat >>= 1;
             mix_dat |= 0x80000000;
-
-            ROPMIX(rop, dest, pattern, source, out);
-
-            /*Write the data*/
-            svga->vram[et4000->acl.dest_addr & et4000->vram_mask]                = out;
-            svga->changedvram[(et4000->acl.dest_addr & et4000->vram_mask) >> 12] = changeframecount;
+            et4000w32_draw_byte(et4000, -1, mixmap);
 
             if (et4000->acl.internal.xy_dir & 1)
                 et4000w32_decx(1, et4000);
@@ -2281,27 +2420,17 @@ et4000w32_blit(int count, int cpu_input, uint32_t src_dat, uint32_t mix_dat, et4
         }
     } else {
         while (count-- && (et4000->acl.y_count >= 0)) {
-            pattern = svga->vram[(et4000->acl.pattern_addr + et4000->acl.pattern_x) & et4000->vram_mask];
+            /*The source data is from the display memory if the Control Routing register is not set to 1*/
+            int source = -1;
 
             if (cpu_input == 1) {
                 source = src_dat & 0xff;
                 src_dat >>= 8;
-            } else /*The source data is from the display memory if the Control Routing register is not set to 1*/
-                source = svga->vram[(et4000->acl.source_addr + et4000->acl.source_x) & et4000->vram_mask];
-
-            dest   = svga->vram[et4000->acl.dest_addr & et4000->vram_mask];
+            }
             mixmap = mix_dat & 1;
-
-            /*Now determine the Raster Operation*/
-            rop = mixmap ? et4000->acl.internal.rop_fg : et4000->acl.internal.rop_bg;
             mix_dat >>= 1;
             mix_dat |= 0x80000000;
-
-            ROPMIX(rop, dest, pattern, source, out);
-
-            /*Write the data*/
-            svga->vram[et4000->acl.dest_addr & et4000->vram_mask]                = out;
-            svga->changedvram[(et4000->acl.dest_addr & et4000->vram_mask) >> 12] = changeframecount;
+            et4000w32_draw_byte(et4000, source, mixmap);
 
             if (et4000->acl.internal.xy_dir & 1)
                 et4000w32_decx(1, et4000);
@@ -2342,15 +2471,9 @@ et4000w32_blit(int count, int cpu_input, uint32_t src_dat, uint32_t mix_dat, et4
 }
 
 static void
-et4000w32p_blit(int count, uint32_t mix, uint32_t sdat, int cpu_input, et4000w32p_t *et4000)
+et4000w32p_blit_walk(int count, uint32_t mix, uint32_t sdat, int cpu_input, et4000w32p_t *et4000)
 {
-    svga_t *svga = &et4000->svga;
-    uint8_t pattern;
-    uint8_t source;
-    uint8_t dest;
-    uint8_t out = 0;
-    uint8_t rop;
-    int     mixdat;
+    int mixdat;
 
     if (!(et4000->acl.status & ACL_XYST)) {
         et4000w32_log("XY Block not started\n");
@@ -2361,38 +2484,21 @@ et4000w32p_blit(int count, uint32_t mix, uint32_t sdat, int cpu_input, et4000w32
         et4000w32_log("Line draw\n");
         while (count--) {
             et4000w32_log("%i,%i : ", et4000->acl.internal.pos_x, et4000->acl.internal.pos_y);
-            pattern = svga->vram[(et4000->acl.pattern_addr + et4000->acl.pattern_x) & et4000->vram_mask];
+            int source = -1;
 
-            et4000w32_log("%06X %06X ", (et4000->acl.pattern_addr + et4000->acl.pattern_x) & et4000->vram_mask, (et4000->acl.source_addr + et4000->acl.source_x) & et4000->vram_mask);
             if (cpu_input == 2) {
                 source = sdat & 0xff;
                 sdat >>= 8;
-            } else
-                source  = svga->vram[(et4000->acl.source_addr + et4000->acl.source_x) & et4000->vram_mask];
-
-            dest = svga->vram[et4000->acl.dest_addr & et4000->vram_mask];
-            et4000w32_log("%06X   ", et4000->acl.dest_addr);
-            if ((et4000->acl.internal.ctrl_routing & 0xa) == 8) {
-                mixdat = svga->vram[(et4000->acl.mix_addr >> 3) & et4000->vram_mask] & (1 << (et4000->acl.mix_addr & 7));
-                et4000w32_log("%06X %02X  ", et4000->acl.mix_addr, svga->vram[(et4000->acl.mix_addr >> 3) & et4000->vram_mask]);
-            } else {
+            }
+            /* The mix from the mix map (-1), or the host's */
+            mixdat = -1;
+            if ((et4000->acl.internal.ctrl_routing & 0xa) != 8) {
                 mixdat = mix & 1;
                 mix >>= 1;
                 mix |= 0x80000000;
             }
+            et4000w32_draw_byte(et4000, source, mixdat);
             et4000->acl.mix_addr++;
-            rop = mixdat ? et4000->acl.internal.rop_fg : et4000->acl.internal.rop_bg;
-
-            ROPMIX(rop, dest, pattern, source, out);
-
-            et4000w32_log("%06X = %02X\n", et4000->acl.dest_addr & et4000->vram_mask, out);
-            if (!(et4000->acl.internal.ctrl_routing & 0x40)) {
-                svga->vram[et4000->acl.dest_addr & et4000->vram_mask]                = out;
-                svga->changedvram[(et4000->acl.dest_addr & et4000->vram_mask) >> 12] = changeframecount;
-            } else {
-                et4000->acl.cpu_dat |= ((uint64_t) out << (et4000->acl.cpu_dat_pos * 8));
-                et4000->acl.cpu_dat_pos++;
-            }
 
             et4000->acl.pix_pos++;
             et4000->acl.internal.pos_x++;
@@ -2473,34 +2579,20 @@ et4000w32p_blit(int count, uint32_t mix, uint32_t sdat, int cpu_input, et4000w32
     } else {
         et4000w32_log("BitBLT: count = %i\n", count);
         while (count-- && (et4000->acl.y_count >= 0)) {
-            pattern = svga->vram[(et4000->acl.pattern_addr + et4000->acl.pattern_x) & et4000->vram_mask];
+            int source = -1;
 
             if (cpu_input == 2) {
                 source = sdat & 0xff;
                 sdat >>= 8;
-            } else
-                source = svga->vram[(et4000->acl.source_addr + et4000->acl.source_x) & et4000->vram_mask];
-
-            dest = svga->vram[et4000->acl.dest_addr & et4000->vram_mask];
-            if ((et4000->acl.internal.ctrl_routing & 0xa) == 8) {
-                mixdat = svga->vram[(et4000->acl.mix_addr >> 3) & et4000->vram_mask] & (1 << (et4000->acl.mix_addr & 7));
-            } else {
+            }
+            /* The mix from the mix map (-1), or the host's */
+            mixdat = -1;
+            if ((et4000->acl.internal.ctrl_routing & 0xa) != 8) {
                 mixdat = mix & 1;
                 mix >>= 1;
                 mix |= 0x80000000;
             }
-
-            rop = mixdat ? et4000->acl.internal.rop_fg : et4000->acl.internal.rop_bg;
-
-            ROPMIX(rop, dest, pattern, source, out);
-
-            if (!(et4000->acl.internal.ctrl_routing & 0x40)) {
-                svga->vram[et4000->acl.dest_addr & et4000->vram_mask]                = out;
-                svga->changedvram[(et4000->acl.dest_addr & et4000->vram_mask) >> 12] = changeframecount;
-            } else {
-                et4000->acl.cpu_dat |= ((uint64_t) out << (et4000->acl.cpu_dat_pos * 8));
-                et4000->acl.cpu_dat_pos++;
-            }
+            et4000w32_draw_byte(et4000, source, mixdat);
 
             if (et4000->acl.internal.xy_dir & 1)
                 et4000w32_decx(1, et4000);
@@ -2542,6 +2634,23 @@ et4000w32p_blit(int count, uint32_t mix, uint32_t sdat, int cpu_input, et4000w32
             }
         }
     }
+}
+
+/* The walks, and with Hardware acceleration on the run they ended in recorded: the processor may meet it next */
+static void
+et4000w32_blit(int count, int cpu_input, uint32_t src_dat, uint32_t mix_dat, et4000w32p_t *et4000)
+{
+    et4000w32_blit_walk(count, cpu_input, src_dat, mix_dat, et4000);
+    if (et4000->k_gpu != NULL)
+        et4000w32_k_flush(et4000);
+}
+
+static void
+et4000w32p_blit(int count, uint32_t mix, uint32_t sdat, int cpu_input, et4000w32p_t *et4000)
+{
+    et4000w32p_blit_walk(count, mix, sdat, cpu_input, et4000);
+    if (et4000->k_gpu != NULL)
+        et4000w32_k_flush(et4000);
 }
 
 static void
@@ -2762,6 +2871,15 @@ et4000w32p_pci_write(UNUSED(int func), int addr, UNUSED(int len), uint8_t val, v
     }
 }
 
+/* KairoX86#254: the SVGA core's memory handlers and display (svga->kairo_touch) */
+static void
+et4000w32p_svga_touch(svga_t *svga, uint32_t addr, uint32_t len)
+{
+    const et4000w32p_t *et4000 = (const et4000w32p_t *) svga->priv;
+
+    kairo_seg_touch(et4000->k_gpu->seg, addr & et4000->vram_mask, len);
+}
+
 static void *
 et4000w32p_init(const device_t *info)
 {
@@ -2800,6 +2918,17 @@ et4000w32p_init(const device_t *info)
 
     et4000->vram_mask        = (et4000->vram_size << 20) - 1;
     et4000->svga.decode_mask = (et4000->vram_size << 20) - 1;
+
+    /* KairoX86#254: with Hardware acceleration on, the accelerator's bytes drawn on the GPU */
+    if (kairo_gpu_on) {
+        et4000->k_gpu = calloc(1, sizeof(et4000w32_gpu_t));
+        if (et4000->k_gpu == NULL)
+            fatal("ET4000/W32 on the GPU: no memory\n");
+        et4000->k_gpu->seg = kairo_et4000w32_open(et4000->svga.vram, et4000->vram_mask, et4000->svga.changedvram,
+                                                  &et4000->svga.monitor->mon_changeframecount);
+        kairo_seg_set_flush(et4000->k_gpu->seg, et4000w32_k_flush_cb, et4000);
+        et4000->svga.kairo_touch = et4000w32p_svga_touch;
+    }
 
     et4000->ramdac_type = BUILT_IN;
     et4000->svga.crtc[0x31] = 0x40;
@@ -3002,6 +3131,10 @@ et4000w32p_close(void *priv)
 {
     et4000w32p_t *et4000 = (et4000w32p_t *) priv;
 
+    if (et4000->k_gpu != NULL) {
+        kairo_seg_close(et4000->k_gpu->seg); /* KairoX86#254 */
+        free(et4000->k_gpu);
+    }
     svga_close(&et4000->svga);
 
     free(et4000);

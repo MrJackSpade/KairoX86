@@ -1,0 +1,45 @@
+#version 450
+#extension GL_EXT_control_flow_attributes : require
+/*
+ * The Tseng Labs ET4000/W32's accelerator on the GPU (KairoX86#254): 86Box's per-byte draw of et4000w32_blit and
+ * et4000w32p_blit (vid_et4000w32.c), on the drawing engines' shared batches (seg.glsl, 86box/kairo_gpu_seg.h).
+ *
+ * The engine's walk stays the CPU's; a segment is a run of destination bytes it walked one after the other, and its
+ * row word the place of its bytes' three stream words each: the pattern byte's address; the source, the host's byte
+ * (bit 31 set) or its address; the mix, the host's bit (bit 31 set) or the bit address of the mix map.
+ *
+ * The operation record (86box/kairo_gpu_et4000w32.h, ET_*): its foreground and background raster operations.
+ *
+ * Copyright 2026 MrJackSpade. GPL-2.0-or-later.
+ */
+#include "seg.glsl"
+
+const uint ET_ROP_FG = 0u, ET_ROP_BG = 1u, ET_WORDS = 4u;
+
+/* The Windows ternary raster operation: bit (P << 2 | S << 1 | D) of the code, for every bit of the bytes */
+uint rop3(uint code, uint p, uint s, uint d)
+{
+    uint r = 0u;
+    for (uint b = 0u; b < 8u; b++) {
+        const uint idx = (((p >> b) & 1u) << 2) | (((s >> b) & 1u) << 1) | ((d >> b) & 1u);
+        r |= ((code >> idx) & 1u) << b;
+    }
+    return r;
+}
+
+void card_pixels(uint seg, uint op, uint row, uint first, int i0, int i1)
+{
+    const uint o   = op * ET_WORDS;
+    const int  dir = int(segs[seg * KG_WORDS + KG_DIR]);
+    const uint d0  = (segs[seg * KG_WORDS + KG_BIT] >> 3);
+    [[dont_unroll]] for (int n = i0; n < i1; n++) {
+        const uint w = row + uint(n) * 3u;
+        const uint p = rd8(stream[w]);
+        const uint ws = stream[w + 1u];
+        const uint s = ((ws & 0x80000000u) != 0u) ? (ws & 0xffu) : rd8(ws);
+        const uint wm = stream[w + 2u];
+        const uint m = ((wm & 0x80000000u) != 0u) ? (wm & 1u) : ((rd8(wm >> 3) >> (wm & 7u)) & 1u);
+        const uint a = d0 + uint(int(first) + n * dir);
+        wr8(a, rop3(ops[o + ((m != 0u) ? ET_ROP_FG : ET_ROP_BG)], p, s, rd8(a)));
+    }
+}
