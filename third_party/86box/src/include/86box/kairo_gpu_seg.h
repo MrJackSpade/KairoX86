@@ -38,8 +38,11 @@ bool kairo_seg_reads_pending(kairo_seg_t *s, uint32_t addr, uint32_t len);
 void kairo_seg_reads(kairo_seg_t *s, uint32_t addr, uint32_t len);
 /* Memory the next operation draws on: a parallel batch with an operation reading there is drawn first */
 void kairo_seg_draws(kairo_seg_t *s, uint32_t addr, uint32_t len);
+/* A card that goes on adding to an operation already in the batch, its segments unbounded, calls this first: a full
+   batch is drawn (its generation changes, so the card starts the operation again) */
+void kairo_seg_make_room(kairo_seg_t *s);
 /* Starts an operation: the words of its record to fill (op_words), valid until the next call. A batch of the other
-   way (parallel, in order) is drawn first. */
+   way (parallel, in order), or a full one, is drawn first. */
 uint32_t *kairo_seg_op(kairo_seg_t *s, bool in_order);
 /* A segment of the operation started last */
 void kairo_seg_add(kairo_seg_t *s, uint32_t row, uint32_t first, uint32_t count, uint32_t bit, uint32_t bits, int dir);

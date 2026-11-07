@@ -87,6 +87,9 @@
 #include <86box/timer.h>
 #include <86box/video.h>
 #include <86box/vid_svga.h>
+#include <86box/kairo_gpu.h>       /* KairoX86#266 */
+#include <86box/kairo_gpu_seg.h>
+#include <86box/kairo_gpu_p9100.h>
 #include <86box/vid_svga_render.h>
 #include <86box/plat_unused.h>
 #include "cpu.h"
@@ -132,6 +135,15 @@ enum {
 #define STATUS_QUAD_HIDDEN     0x00000004
 #define STATUS_QUAD_VISIBLE    0x00000002
 #define STATUS_QUAD_INTERSECTS 0x00000001
+
+/* KairoX86#266: the drawing engines' batch on the GPU */
+typedef struct p9100_gpu_t {
+    kairo_seg_t *seg;
+    uint32_t     record[P9_WORDS];
+    uint64_t     generation; /* the batch's drains when the record went in */
+    int          issued;
+    int          in_order;
+} p9100_gpu_t;
 
 typedef struct p9100_t {
     svga_t svga;
@@ -188,6 +200,8 @@ typedef struct p9100_t {
     uint32_t b_w_min;
     uint32_t b_w_max;
     uint32_t pattern[8];
+
+    p9100_gpu_t *k_gpu; /* KairoX86#266: NULL in software */
 } p9100_t;
 
 static video_timings_t timing_p9100_pci = { .type = VIDEO_PCI, .write_b = 2, .write_w = 2, .write_l = 1, .read_b = 10, .read_w = 10, .read_l = 10 };
@@ -226,6 +240,61 @@ static uint32_t p9100_pitch(const p9100_t *p9100);
 #define GHA_PLANAR   0
 #define GHA_PACKED8  1
 #define GHA_PACKED16 3
+
+/* KairoX86#266: an operation in the batch: the record again only where it differs or the batch has been drawn */
+static void
+p9100_k_op(p9100_t *p9100, const uint32_t *rec, int in_order)
+{
+    p9100_gpu_t *g = p9100->k_gpu;
+
+    kairo_seg_make_room(g->seg);
+    if (g->issued && (g->in_order == in_order) && (g->generation == kairo_seg_generation(g->seg)) && !memcmp(g->record, rec, sizeof(g->record)))
+        return;
+    memcpy(kairo_seg_op(g->seg, in_order), rec, sizeof(g->record));
+    memcpy(g->record, rec, sizeof(g->record));
+    g->generation = kairo_seg_generation(g->seg);
+    g->in_order   = in_order;
+    g->issued     = 1;
+}
+
+/* Segments of a run from addr, each a stretch video memory does not wrap in: units of size bytes (a power of 2),
+   pixel numbers first + i */
+static void
+p9100_k_run(p9100_t *p9100, uint32_t row, int first, int count, uint32_t addr, int size, int dir)
+{
+    const uint32_t units = (p9100->vram_mask + 1) / size;
+
+    while (count > 0) {
+        const uint32_t lo = (addr & p9100->vram_mask) / size;
+        const int      n  = MIN((uint32_t) count, (dir > 0) ? (units - lo) : (lo + 1));
+
+        kairo_seg_add(p9100->k_gpu->seg, row, (uint32_t) first, (uint32_t) n, lo * size * 8, size * 8, dir);
+        first += (size == 1) ? (n * dir) : n; /* a byte run's numbers follow memory; a GHA row's count its longwords */
+        addr += (uint32_t) (n * dir * size);
+        count -= n;
+    }
+}
+
+/* Whole video memory when a range runs outside it */
+static void
+p9100_k_range(const p9100_t *p9100, int64_t *lo, int64_t *hi)
+{
+    if ((*lo < 0) || (*hi > ((int64_t) p9100->vram_mask + 1))) {
+        *lo = 0;
+        *hi = (int64_t) p9100->vram_mask + 1;
+    }
+}
+
+/* What an operation reads and draws: a batch meeting either is drawn first */
+static void
+p9100_k_reads(p9100_t *p9100, int64_t lo, int64_t hi)
+{
+    kairo_seg_t *seg = p9100->k_gpu->seg;
+
+    if (kairo_seg_reads_pending(seg, (uint32_t) lo, (uint32_t) (hi - lo)))
+        kairo_seg_drain(seg);
+    kairo_seg_reads(seg, (uint32_t) lo, (uint32_t) (hi - lo));
+}
 
 static int
 p9100_gha_mode(p9100_t *p9100)
@@ -447,6 +516,80 @@ p9100_gha_blit(p9100_t *p9100, const uint8_t *ins)
     if ((mode == GHA_PACKED8) && !is_move)
         bitmask = svga->gdcreg[0x0d] * 0x01010101;
 
+    if (p9100->k_gpu != NULL) {
+        /* KairoX86#266: the record, what its rows read and draw, then its rows' places */
+        kairo_seg_t *seg = p9100->k_gpu->seg;
+        uint32_t     rec[P9_WORDS];
+        int64_t      s_lo = INT64_MAX, s_hi = INT64_MIN, d_lo = INT64_MAX, d_hi = INT64_MIN;
+        uint32_t     rs = src, rd = dst;
+
+        memset(rec, 0, sizeof(rec));
+        rec[P9_KIND]    = P9K_GHA_BLIT;
+        memcpy(&rec[P9_INS], ins, 16);
+        rec[P9_MODE]    = mode;
+        rec[P9_BG]      = bg;
+        rec[P9_HT]      = ht;
+        rec[P9_STEP]    = (uint32_t) step;
+        rec[P9_ROT]     = rotcnt;
+        rec[P9_RMASK]   = rmask;
+        rec[P9_GPMASK]  = pmask;
+        rec[P9_BITMASK] = bitmask;
+        rec[P9_EXPAND]  = expand;
+        rec[P9_PPL]     = ppl;
+        for (int y = 0; y < vt; y++) {
+            const uint32_t bits = (rs << 5) + (((ins[0x0f] >> 3) & 1) << 4);
+            const int64_t  far  = (int64_t) (ht + 1) * step;
+            int64_t        lo, hi;
+
+            if (packed_expand && (expand == 3))
+                lo = hi = rs;
+            else if (packed_expand) {
+                lo = bits >> 5;
+                hi = (bits + (ht + 1) * ppl) >> 5;
+            } else {
+                lo = (int64_t) rs;
+                hi = (int64_t) rs + far + (is_long ? step : 0);
+            }
+            s_lo = MIN(s_lo, MIN(lo, hi));
+            s_hi = MAX(s_hi, MAX(lo, hi));
+            d_lo = MIN(d_lo, MIN((int64_t) rd, (int64_t) rd + far));
+            d_hi = MAX(d_hi, MAX((int64_t) rd, (int64_t) rd + far));
+            rd = rd + (uint32_t) far + dpitch;
+            if (packed_expand && (expand == 3))
+                rs = (rs & ~0x1f) | ((rs + step) & 0x1f);
+            else if (packed_expand)
+                rs = ((bits + (ht + 1) * ppl + 31) >> 5) + spitch;
+            else
+                rs = rs + (uint32_t) far + (is_long ? step : 0) + spitch;
+        }
+        s_lo *= 4;
+        s_hi = (s_hi + 1) * 4;
+        d_lo *= 4;
+        d_hi = (d_hi + 1) * 4;
+        if (vt <= 0)
+            return;
+        p9100_k_range(p9100, &s_lo, &s_hi);
+        p9100_k_range(p9100, &d_lo, &d_hi);
+        kairo_seg_draws(seg, (uint32_t) d_lo, (uint32_t) (d_hi - d_lo));
+        p9100_k_reads(p9100, s_lo, s_hi);
+        p9100_k_op(p9100, rec, (s_lo < d_hi) && (d_lo < s_hi));
+        for (int y = 0; y < vt; y++) {
+            const uint32_t bits     = (src << 5) + (((ins[0x0f] >> 3) & 1) << 4);
+            const uint32_t words[3] = { src, bits, dst };
+            const uint32_t at       = kairo_seg_stream(seg, words, 3);
+
+            p9100_k_run(p9100, at, 0, ht + 1, dst << 2, 4, step);
+            dst = dst + (uint32_t) ((ht + 1) * step) + dpitch;
+            if (packed_expand && (expand == 3))
+                src = (src & ~0x1f) | ((src + step) & 0x1f);
+            else if (packed_expand)
+                src = ((bits + (ht + 1) * ppl + 31) >> 5) + spitch;
+            else
+                src = src + (uint32_t) ((ht + 1) * step) + (is_long ? step : 0) + spitch;
+        }
+        return;
+    }
+
     for (int y = 0; y < vt; y++) {
         uint32_t s      = src;
         uint32_t d      = dst;
@@ -556,13 +699,31 @@ p9100_gha_line(p9100_t *p9100, const uint8_t *ins)
        boundaries they cross, then end inside the next longword at the
        last pixel the end mask takes in. */
     for (int n = 0; steep ? (n < count) : (lw <= count); n++) {
-        uint32_t old = p9100_gha_read(p9100, addr);
         int      minor;
 
         if (!steep && (lw == count) && !(m & ins[6]))
             break;
 
-        p9100_gha_write(p9100, addr, p9100_gha_rop(mode, ins, src, old), p9100_gha_nmask(mode, m) & pmask);
+        if (p9100->k_gpu != NULL) {
+            /* KairoX86#266: the point, its longword and mask */
+            kairo_seg_t   *seg      = p9100->k_gpu->seg;
+            const uint32_t off      = (addr << 2) & p9100->vram_mask;
+            const uint32_t words[2] = { addr, p9100_gha_nmask(mode, m) & pmask };
+            uint32_t       rec[P9_WORDS];
+
+            memset(rec, 0, sizeof(rec));
+            rec[P9_KIND]  = P9K_GHA_LINE;
+            rec[P9_COLOR] = src;
+            rec[P9_MODE]  = mode;
+            memcpy(&rec[P9_INS], ins, 16);
+            kairo_seg_draws(seg, off, 4);
+            p9100_k_op(p9100, rec, 0);
+            kairo_seg_add(seg, kairo_seg_stream(seg, words, 2), 0, 1, off * 8, 32, 1);
+        } else {
+            uint32_t old = p9100_gha_read(p9100, addr);
+
+            p9100_gha_write(p9100, addr, p9100_gha_rop(mode, ins, src, old), p9100_gha_nmask(mode, m) & pmask);
+        }
 
         /* Every step along the major axis adds the increment, a step along
            the minor axis as well adds the decrement, which the drivers
@@ -608,6 +769,9 @@ p9100_gha_run(p9100_t *p9100)
         uint32_t base = (svga->gdcreg[0x09] << 10) | (p9100->gha_exec << 2);
         uint8_t  ins[16];
 
+        /* KairoX86#266: the queue is video memory */
+        if (p9100->k_gpu != NULL)
+            kairo_seg_touch(p9100->k_gpu->seg, (base << 2) & p9100->vram_mask, 16);
         for (int w = 0; w < 4; w++) {
             uint32_t lw = p9100_gha_read(p9100, base + w);
 
@@ -1351,6 +1515,24 @@ p9100_pixel(p9100_t *p9100, const p9100_draw_t *d, int x, int y, uint32_t src)
 
 #define P9100_MAX_LINES 8192
 
+/* KairoX86#266: a native operation's record from the engine's state */
+static void
+p9100_k_record(const p9100_t *p9100, const p9100_draw_t *d, uint32_t *rec, int kind)
+{
+    memset(rec, 0, P9_WORDS * sizeof(uint32_t));
+    rec[P9_KIND]   = kind;
+    rec[P9_RASTER] = p9100->raster;
+    rec[P9_PMASK]  = p9100->pmask;
+    rec[P9_BPP]    = d->bpp;
+    rec[P9_PITCH]  = d->pitch;
+    for (int i = 0; i < 4; i++)
+        rec[P9_COLOR + i] = p9100->color[i];
+    rec[P9_PAT_X] = p9100->pat_originx;
+    rec[P9_PAT_Y] = p9100->pat_originy;
+    for (int i = 0; i < 8; i++)
+        rec[P9_PATTERN + i] = p9100->pattern[i];
+}
+
 /* Quads are filled scan line by scan line. In X11 mode a pixel is touched
    when its centre is inside, or on a left or top edge; oversized mode also
    touches the Bresenham outline, which is what makes points and lines
@@ -1373,11 +1555,13 @@ p9100_quad_outline(int *lo, int *hi, int ymin, int ymax, int x0, int y0, int x1,
         }
         if ((x0 == x1) && (y0 == y1))
             break;
-        if ((2 * err) >= dy) {
+        /* KairoX86#296: both tests take the error as the step began, or the walk can miss its end and run away */
+        const int e2 = 2 * err;
+        if (e2 >= dy) {
             err += dy;
             x0 += sx;
         }
-        if ((2 * err) <= dx) {
+        if (e2 <= dx) {
             err += dx;
             y0 += sy;
         }
@@ -1539,6 +1723,17 @@ p9100_cmd_quad(p9100_t *p9100)
             p9100_quad_outline(lo, hi, ymin, ymax, vx[i], vy[i], vx[(i + 1) & 3], vy[(i + 1) & 3]);
     }
 
+    if (p9100->k_gpu != NULL) {
+        /* KairoX86#266 */
+        uint32_t rec[P9_WORDS];
+        int64_t  m_lo = (int64_t) ymin * d.pitch;
+        int64_t  m_hi = ((int64_t) ymax + 1) * d.pitch;
+
+        p9100_k_record(p9100, &d, rec, P9K_COLOR);
+        p9100_k_range(p9100, &m_lo, &m_hi);
+        kairo_seg_draws(p9100->k_gpu->seg, (uint32_t) m_lo, (uint32_t) (m_hi - m_lo));
+        p9100_k_op(p9100, rec, 0);
+    }
     for (int y = ymin; y <= ymax; y++) {
         int xs = lo[y - ymin];
         int xe = hi[y - ymin];
@@ -1547,6 +1742,11 @@ p9100_cmd_quad(p9100_t *p9100)
             xs = d.xmin;
         if (xe > d.xmax)
             xe = d.xmax;
+        if (p9100->k_gpu != NULL) {
+            if (xs <= xe)
+                p9100_k_run(p9100, (uint32_t) y | (1u << 16), xs * d.bpp, (xe - xs + 1) * d.bpp, ((uint32_t) y * d.pitch) + (xs * d.bpp), 1, 1);
+            continue;
+        }
         for (int x = xs; x <= xe; x++)
             p9100_pixel(p9100, &d, x, y, p9100->color[1]);
     }
@@ -1586,6 +1786,45 @@ p9100_cmd_blit(p9100_t *p9100)
     rmax = MIN(h - 1, d.ymax - dy);
     cmin = MAX(0, d.xmin - dx);
     cmax = MIN(w - 1, d.xmax - dx);
+
+    if (p9100->k_gpu != NULL) {
+        /* KairoX86#266: the rectangles it reads and draws meet only where their lines and columns both do */
+        kairo_seg_t *seg = p9100->k_gpu->seg;
+        uint32_t     rec[P9_WORDS];
+        int64_t      s_lo, s_hi, d_lo, d_hi;
+        int          meet;
+
+        if ((rmin > rmax) || (cmin > cmax))
+            return;
+        s_lo = (((int64_t) sy + rmin) * d.pitch) + sx + cmin;
+        s_hi = (((int64_t) sy + rmax) * d.pitch) + sx + cmax + 1;
+        d_lo = (((int64_t) dy + rmin) * d.pitch) + dx + cmin;
+        d_hi = (((int64_t) dy + rmax) * d.pitch) + dx + cmax + 1;
+        meet = ((sy + rmin) <= (dy + rmax)) && ((dy + rmin) <= (sy + rmax)) && ((sx + cmin) <= (dx + cmax)) && ((dx + cmin) <= (sx + cmax));
+        /* Rectangles wider than a line, or out of video memory: only their memory can say */
+        if ((s_lo < 0) || (s_hi > ((int64_t) p9100->vram_mask + 1)) || (d_hi > ((int64_t) p9100->vram_mask + 1)) ||
+            ((uint32_t) MAX(sx + cmax, dx + cmax) >= d.pitch) || (MIN(sx + cmin, dx + cmin) < 0))
+            meet = 1;
+        p9100_k_range(p9100, &s_lo, &s_hi);
+        p9100_k_range(p9100, &d_lo, &d_hi);
+        kairo_seg_draws(seg, (uint32_t) d_lo, (uint32_t) (d_hi - d_lo));
+        p9100_k_reads(p9100, s_lo, s_hi);
+        p9100_k_record(p9100, &d, rec, P9K_BLIT);
+        rec[P9_SX]       = (uint32_t) sx;
+        rec[P9_SY]       = (uint32_t) sy;
+        rec[P9_DX]       = (uint32_t) dx;
+        rec[P9_DY]       = (uint32_t) dy;
+        rec[P9_USES_PAT] = pat;
+        p9100_k_op(p9100, rec, meet);
+        for (int r = rmin; r <= rmax; r++) {
+            int row = (ydir > 0) ? r : (rmax + rmin - r);
+            int ty  = dy + row;
+            int tx  = dx + ((xdir > 0) ? cmin : cmax);
+
+            p9100_k_run(p9100, (uint32_t) ty, tx, cmax - cmin + 1, ((uint32_t) ty * d.pitch) + tx, 1, xdir);
+        }
+        return;
+    }
 
     for (int r = rmin; r <= rmax; r++) {
         int row = (ydir > 0) ? r : (rmax + rmin - r);
@@ -1627,7 +1866,17 @@ p9100_cmd_pixel8(p9100_t *p9100, uint32_t val)
         uint32_t pcol = p9100->color[0];
         int      i    = (x >= 0) ? (x % d.bpp) : 0;
 
-        if (!p9100_clipped(&d, x, y) && p9100_pattern(p9100, x / d.bpp, y, &pcol))
+        if (p9100->k_gpu != NULL) {
+            /* KairoX86#266 */
+            if (!p9100_clipped(&d, x, y)) {
+                uint32_t rec[P9_WORDS];
+
+                p9100_k_record(p9100, &d, rec, P9K_PIXEL8);
+                kairo_seg_draws(p9100->k_gpu->seg, addr & p9100->vram_mask, 1);
+                p9100_k_op(p9100, rec, 0);
+                p9100_k_run(p9100, (uint32_t) y | (((val >> (24 - (b << 3))) & 0xff) << 16), x, 1, addr, 1, 1);
+            }
+        } else if (!p9100_clipped(&d, x, y) && p9100_pattern(p9100, x / d.bpp, y, &pcol))
             p9100_write_byte(p9100, addr, p9100_reg_byte(&d, pcol, addr - i, i), val >> (24 - (b << 3)),
                              p9100_reg_byte(&d, p9100->pmask, addr - i, i));
 
@@ -1659,8 +1908,19 @@ p9100_cmd_pixel1(p9100_t *p9100, uint32_t val, int count)
         int y   = p9100->y[1];
 
         if ((bit || !(p9100->raster & RASTER_PIX1_TRANSP)) && !p9100_clipped(&d, x, y) &&
-            !p9100_clipped(&db, x * d.bpp, y) && !p9100_clipped(&db, (x * d.bpp) + d.bpp - 1, y))
-            p9100_pixel(p9100, &d, x, y, p9100->color[bit]);
+            !p9100_clipped(&db, x * d.bpp, y) && !p9100_clipped(&db, (x * d.bpp) + d.bpp - 1, y)) {
+            if (p9100->k_gpu != NULL) {
+                /* KairoX86#266 */
+                const uint32_t addr = ((uint32_t) y * d.pitch) + (x * d.bpp);
+                uint32_t       rec[P9_WORDS];
+
+                p9100_k_record(p9100, &d, rec, P9K_COLOR);
+                kairo_seg_draws(p9100->k_gpu->seg, addr & p9100->vram_mask, d.bpp);
+                p9100_k_op(p9100, rec, 0);
+                p9100_k_run(p9100, (uint32_t) y | ((uint32_t) bit << 16), x * d.bpp, d.bpp, addr, 1, 1);
+            } else
+                p9100_pixel(p9100, &d, x, y, p9100->color[bit]);
+        }
 
         p9100->x[1]++;
         if (p9100->x[1] >= p9100->x[2]) {
@@ -2156,6 +2416,8 @@ p9100_fb_readl(p9100_t *p9100, uint32_t addr)
     uint32_t val;
 
     /* An empty bank leaves the bus to the power-up pull-ups. */
+    if ((off >= 0) && (p9100->k_gpu != NULL))
+        kairo_seg_touch(p9100->k_gpu->seg, (uint32_t) off, 4); /* KairoX86#266 */
     if (off < 0)
         val = PU_CONFIG_DEFAULT;
     else
@@ -2172,6 +2434,8 @@ p9100_fb_writel(p9100_t *p9100, uint32_t addr, uint32_t val, uint32_t mask)
 
     if (off < 0)
         return;
+    if (p9100->k_gpu != NULL)
+        kairo_seg_touch(p9100->k_gpu->seg, (uint32_t) off, 4); /* KairoX86#266 */
     val  = p9100_bswap(p9100_swap(val, !!(p9100->sysconfig & 0x2000), !!(p9100->sysconfig & 0x1000), !!(p9100->sysconfig & 0x0800)));
     mask = p9100_bswap(p9100_swap(mask, !!(p9100->sysconfig & 0x2000), !!(p9100->sysconfig & 0x1000), 0));
     old  = *(uint32_t *) &svga->vram[off];
@@ -2639,6 +2903,15 @@ p9100_pci_write(UNUSED(int func), int addr, UNUSED(int len), uint8_t val, void *
     }
 }
 
+/* KairoX86#266: the SVGA core's memory handlers and display (svga->kairo_touch) */
+static void
+p9100_svga_touch(svga_t *svga, uint32_t addr, uint32_t len)
+{
+    const p9100_t *p9100 = (const p9100_t *) svga->priv;
+
+    kairo_seg_touch(p9100->k_gpu->seg, addr & p9100->vram_mask, len);
+}
+
 static void *
 p9100_init(const device_t *info)
 {
@@ -2676,6 +2949,15 @@ p9100_init(const device_t *info)
     svga->dac_hwcursor_draw = ibm_rgb528_hwcursor_draw;
     svga->decode_mask       = p9100->vram_mask;
     svga->vblank_start      = p9100_vblank_start;
+
+    /* KairoX86#266: with Hardware acceleration on, the drawing engines on the GPU */
+    if (kairo_gpu_on) {
+        p9100->k_gpu = calloc(1, sizeof(p9100_gpu_t));
+        if (p9100->k_gpu == NULL)
+            fatal("P9100 on the GPU: no memory\n");
+        p9100->k_gpu->seg = kairo_p9100_open(svga->vram, p9100->vram_mask, svga->changedvram, &svga->monitor->mon_changeframecount);
+        svga->kairo_touch = p9100_svga_touch;
+    }
 
     mem_mapping_set_handler(&svga->mapping, p9100_vga_read, p9100_vga_readw, p9100_vga_readl,
                             p9100_vga_write, p9100_vga_writew, p9100_vga_writel);
@@ -2733,6 +3015,10 @@ p9100_close(void *priv)
 {
     p9100_t *p9100 = (p9100_t *) priv;
 
+    if (p9100->k_gpu != NULL) {
+        kairo_seg_close(p9100->k_gpu->seg); /* KairoX86#266 */
+        free(p9100->k_gpu);
+    }
     svga_close(&p9100->svga);
 
     free(p9100);

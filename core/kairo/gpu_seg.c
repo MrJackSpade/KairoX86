@@ -24,6 +24,11 @@
 #define SEGS_MAX    262144
 #define STREAM_MAX  (1u << 20)
 #define BLOCK_SHIFT 8
+/* Room left for an operation's rows, every operation's rows being fewer than a card's 32K lines (and their entries,
+   each a block a row meets) */
+#define SEGS_ROOM    65536
+#define ENTRIES_MAX  (SEGS_MAX * 8)
+#define ENTRIES_ROOM (ENTRIES_MAX / 2)
 
 struct kairo_seg {
     pthread_mutex_t     lock;
@@ -33,7 +38,7 @@ struct kairo_seg {
     size_t              spirv_bytes;
     kairo_gpu_buffer_t *ops, *segs, *lists, *stream, *vram;
     uint32_t            vram_mask, op_words;
-    uint32_t            n_ops, n_segs, n_stream;
+    uint32_t            n_ops, n_segs, n_stream, n_entries;
     bool                in_order;
     int32_t            *block_slot; /* each block's place in the drain's list, -1 none */
     uint32_t           *block_ids;  /* the blocks listed */
@@ -69,7 +74,7 @@ kairo_seg_open(const char *name, const uint32_t *spirv, size_t spirv_bytes, uint
     const uint32_t blocks = (vram_mask >> BLOCK_SHIFT) + 1;
     /* The lists: three words a listed block (its id, its first entry, its entries), then the entries; a segment
        spans at most a few blocks of a row, so the entries are bounded by the segments' blocks */
-    s->lists       = kairo_gpu_buffer(((size_t) blocks * 3 + (size_t) SEGS_MAX * 8) * 4);
+    s->lists       = kairo_gpu_buffer(((size_t) blocks * 3 + (size_t) ENTRIES_MAX) * 4);
     s->block_slot  = malloc((size_t) blocks * sizeof(int32_t));
     s->block_ids   = malloc((size_t) blocks * sizeof(uint32_t));
     s->block_count = malloc((size_t) blocks * sizeof(uint32_t));
@@ -126,7 +131,7 @@ drain_locked(kairo_seg_t *s)
             lists[k * 3 + 2] = 0;
             entry += s->block_count[k];
         }
-        if (entry > SEGS_MAX * 8)
+        if (entry > ENTRIES_MAX)
             fatal("%s on the GPU: %u block entries\n", s->name, entry);
         uint32_t *entries = lists + n_blocks * 3;
         for (uint32_t i = 0; i < s->n_segs; i++) {
@@ -150,6 +155,7 @@ drain_locked(kairo_seg_t *s)
     s->n_ops    = 0;
     s->n_segs   = 0;
     s->n_stream = 0;
+    s->n_entries = 0;
     kairo_gpu_pages_clear(&s->writes);
     kairo_gpu_pages_clear(&s->reads);
     kairo_gpu_pages_clear(&s->touched);
@@ -211,12 +217,27 @@ kairo_seg_draws(kairo_seg_t *s, uint32_t addr, uint32_t len)
         kairo_seg_drain(s);
 }
 
+static bool
+no_room(const kairo_seg_t *s)
+{
+    return (s->n_ops != 0) && ((s->n_ops == OPS_MAX) || (s->n_segs + SEGS_ROOM > SEGS_MAX) || (s->n_entries > ENTRIES_ROOM)
+                               || (s->n_stream > STREAM_MAX / 2));
+}
+
+void
+kairo_seg_make_room(kairo_seg_t *s)
+{
+    pthread_mutex_lock(&s->lock);
+    if (no_room(s))
+        drain_locked(s);
+    pthread_mutex_unlock(&s->lock);
+}
+
 uint32_t *
 kairo_seg_op(kairo_seg_t *s, bool in_order)
 {
     pthread_mutex_lock(&s->lock);
-    if ((s->n_ops != 0) && ((s->in_order != in_order) || (s->n_ops == OPS_MAX) || (s->n_segs + 4096 > SEGS_MAX)
-                          || (s->n_stream > STREAM_MAX / 2)))
+    if ((s->n_ops != 0) && ((s->in_order != in_order) || no_room(s)))
         drain_locked(s);
     s->in_order   = in_order;
     uint32_t *op = (uint32_t *) s->ops->data + (size_t) s->n_ops * s->op_words;
@@ -249,6 +270,7 @@ kairo_seg_add(kairo_seg_t *s, uint32_t row, uint32_t first, uint32_t count, uint
     /* In parallel a block's words are video memory's own: a segment running past its end must run in order */
     if (!s->in_order && (hi > s->vram_mask + 1))
         fatal("%s on the GPU: a segment past the end of video memory in a parallel operation\n", s->name);
+    s->n_entries += ((hi - 1) >> BLOCK_SHIFT) - (lo >> BLOCK_SHIFT) + 1;
     kairo_gpu_pages_mark(&s->writes, lo & s->vram_mask, hi - lo);
     kairo_gpu_pages_mark(&s->touched, lo & s->vram_mask, hi - lo);
     pthread_mutex_unlock(&s->lock);

@@ -1,0 +1,314 @@
+#version 450
+#extension GL_EXT_control_flow_attributes : require
+/*
+ * The Weitek Power 9100's drawing engines on the GPU (KairoX86#266): 86Box's native engine (p9100_cmd_quad, _blit,
+ * _pixel8, _pixel1) and the W5286 GHA's (p9100_gha_blit, _line) in vid_p9100.c, on the drawing engines' shared batches
+ * (seg.glsl, 86box/kairo_gpu_seg.h).
+ *
+ * The native engine's segments are runs of bytes along a row, so every pixel size runs in parallel: a segment's pixel
+ * number is its byte's place in the row, and its row word is the line (with, above bit 16, a pixel1's colour number
+ * or a pixel8's byte). The GHA's segments are runs of longwords: the row word is the place of the row's words in the
+ * stream (a blit's source, bit position and destination; a line's longword and mask, its source P9_COLOR).
+ *
+ * The operation record's layout is 86box/kairo_gpu_p9100.h's (P9_*), as words.
+ *
+ * Copyright 2026 MrJackSpade. GPL-2.0-or-later.
+ */
+#include "seg.glsl"
+
+const uint P9_KIND = 0u, P9_RASTER = 1u, P9_PMASK = 2u, P9_BPP = 3u, P9_PITCH = 4u, P9_SX = 5u, P9_SY = 6u, P9_DX = 7u,
+           P9_DY = 8u, P9_COLOR = 9u, P9_PAT_X = 13u, P9_PAT_Y = 14u, P9_PATTERN = 15u, P9_USES_PAT = 23u,
+           P9_INS = 24u, P9_MODE = 28u, P9_BG = 29u, P9_HT = 30u, P9_STEP = 31u, P9_ROT = 32u, P9_RMASK = 33u,
+           P9_GPMASK = 34u, P9_BITMASK = 35u, P9_EXPAND = 36u, P9_PPL = 37u, P9_WORDS = 40u;
+const uint KIND_COLOR = 0u, KIND_BLIT = 1u, KIND_PIXEL8 = 2u, KIND_GHA_BLIT = 3u, KIND_GHA_LINE = 4u;
+const uint RASTER_TRANSPARENT = 0x20000u, RASTER_PAT_4COLOR = 0x04000u, RASTER_PAT_ENABLE = 0x02000u;
+const uint GHA_PLANAR = 0u, GHA_PACKED16 = 3u;
+
+uint o; /* the operation's record */
+
+uint ow(uint i) { return ops[o + i]; }
+int  oi(uint i) { return int(ops[o + i]); }
+
+/* ---- the native engine ---- */
+
+uint rop(uint m, uint p, uint s, uint d)
+{
+    uint r = 0u;
+    if ((m & 0x01u) != 0u) r |= ~p & ~s & ~d;
+    if ((m & 0x02u) != 0u) r |= ~p & ~s & d;
+    if ((m & 0x04u) != 0u) r |= ~p & s & ~d;
+    if ((m & 0x08u) != 0u) r |= ~p & s & d;
+    if ((m & 0x10u) != 0u) r |= p & ~s & ~d;
+    if ((m & 0x20u) != 0u) r |= p & ~s & d;
+    if ((m & 0x40u) != 0u) r |= p & s & ~d;
+    if ((m & 0x80u) != 0u) r |= p & s & d;
+    return r & 0xffu;
+}
+
+/* p9100_reg_byte */
+uint reg_byte(uint val, uint addr, uint i, uint bpp)
+{
+    uint k = (bpp == 3u) ? i : ((addr + i) & 3u);
+    return (val >> (24u - (k << 3))) & 0xffu;
+}
+
+/* p9100_pattern: false if a transparent pattern leaves the pixel alone */
+bool pattern_col(int x, int y, out uint col)
+{
+    uint raster = ow(P9_RASTER);
+    if ((raster & RASTER_PAT_ENABLE) == 0u) {
+        col = ow(P9_COLOR);
+        return true;
+    }
+    uint px  = uint(x - oi(P9_PAT_X)) & 7u;
+    uint py  = uint(y - oi(P9_PAT_Y)) & 7u;
+    uint reg = ow(P9_PATTERN + (py >> 1));
+    uint sh  = ((py & 1u) != 0u) ? 0u : 16u;
+    uint idx = (((reg >> sh) & (0x80u >> px)) != 0u) ? 1u : 0u;
+    if ((raster & RASTER_PAT_4COLOR) != 0u) {
+        if (((reg >> (sh + 8u)) & (0x80u >> px)) != 0u)
+            idx |= 2u;
+    } else if ((idx == 0u) && ((raster & RASTER_TRANSPARENT) != 0u))
+        return false;
+    col = ow(P9_COLOR + idx);
+    return true;
+}
+
+void native_pixels(uint seg, uint row, uint first, int i0, int i1)
+{
+    const uint kind  = ow(P9_KIND);
+    const uint bpp   = ow(P9_BPP);
+    const uint pitch = ow(P9_PITCH);
+    const int  dir   = int(segs[seg * KG_WORDS + KG_DIR]);
+    const uint y     = row & 0xffffu;
+    [[dont_unroll]] for (int n = i0; n < i1; n++) {
+        const uint b    = uint(int(first) + n * dir); /* the byte's place along the row */
+        const uint addr = y * pitch + b;
+        const uint i    = b % bpp;
+        const uint base = addr - i;
+        uint       pcol = ow(P9_COLOR);
+        uint       src;
+        /* A blit's pattern only where the raster uses one */
+        if (((kind != KIND_BLIT) || (ow(P9_USES_PAT) != 0u)) && !pattern_col(int(b / bpp), int(y), pcol))
+            continue;
+        if (kind == KIND_COLOR)
+            src = reg_byte(ow(P9_COLOR + (row >> 16)), base, i, bpp); /* p9100_pixel: a pixel's bytes from its own address */
+        else if (kind == KIND_BLIT)
+            src = rd8(uint(oi(P9_SY) + int(y) - oi(P9_DY)) * pitch + uint(oi(P9_SX) + int(b) - oi(P9_DX)));
+        else
+            src = row >> 16;
+        const uint pm = reg_byte(ow(P9_PMASK), base, i, bpp);
+        const uint d  = rd8(addr);
+        wr8(addr, (rop(ow(P9_RASTER) & 0xffu, reg_byte(pcol, base, i, bpp), src, d) & pm) | (d & ~pm & 0xffu));
+    }
+}
+
+/* ---- the GHA ---- */
+
+uint ins(uint i) { return (ops[o + P9_INS + (i >> 2)] >> ((i & 3u) << 3)) & 0xffu; }
+
+uint gha_read(uint addr) { return vram[(addr & (pc.vram_mask >> 2))]; }
+
+uint gha_nmask(uint mode, uint m)
+{
+    if (mode == GHA_PLANAR)
+        return m * 0x01010101u;
+    uint ret = 0u;
+    for (uint j = 0u; j < 4u; j++) {
+        if ((m & (0x80u >> (j << 1))) != 0u)
+            ret |= 0xf0u << (j << 3);
+        if ((m & (0x40u >> (j << 1))) != 0u)
+            ret |= 0x0fu << (j << 3);
+    }
+    return ret;
+}
+
+uint gha_bswap(uint v) { return ((v & 0xffu) << 24) | ((v & 0xff00u) << 8) | ((v >> 8) & 0xff00u) | (v >> 24); }
+
+uint gha_rotate(uint mode, uint val, uint cnt)
+{
+    if (cnt == 0u)
+        return val;
+    if (mode == GHA_PLANAR) {
+        uint ret = 0u;
+        for (uint p = 0u; p < 4u; p++) {
+            uint b = (val >> (p << 3)) & 0xffu;
+            b      = ((b >> cnt) | (b << (8u - cnt))) & 0xffu;
+            ret |= b << (p << 3);
+        }
+        return ret;
+    }
+    val = gha_bswap(val);
+    val = (val >> (cnt << 2)) | (val << (32u - (cnt << 2)));
+    return gha_bswap(val);
+}
+
+uint gha_rop(uint mode, uint src, uint dst)
+{
+    uint sinv, dinv, lop0, lop1;
+    if (mode == GHA_PLANAR) {
+        sinv = ins(4u) & 0x0fu;
+        dinv = ins(4u) >> 4;
+        lop0 = ins(5u) & 0x0fu;
+        lop1 = ins(5u) >> 4;
+    } else {
+        const uint i0 = ins(0u);
+        sinv = ((i0 & 0x04u) != 0u) ? 0x0fu : 0u;
+        dinv = ((i0 & 0x08u) != 0u) ? 0x0fu : 0u;
+        lop0 = ((i0 & 0x01u) != 0u) ? 0x0fu : 0u;
+        lop1 = ((i0 & 0x02u) != 0u) ? 0x0fu : 0u;
+    }
+    uint ret = 0u;
+    for (uint p = 0u; p < 4u; p++) {
+        uint s = (src >> (p << 3)) & 0xffu;
+        uint d = (dst >> (p << 3)) & 0xffu;
+        uint r;
+        if ((sinv & (1u << p)) != 0u)
+            s = ~s & 0xffu;
+        if ((dinv & (1u << p)) != 0u)
+            d = ~d & 0xffu;
+        switch ((((lop1 >> p) & 1u) << 1) | ((lop0 >> p) & 1u)) {
+            case 1u: r = s & d; break;
+            case 2u: r = s | d; break;
+            case 3u: r = s ^ d; break;
+            default: r = s; break;
+        }
+        ret |= r << (p << 3);
+    }
+    return ret;
+}
+
+uint gha_expand_bits(uint bitpos, uint ppl)
+{
+    uint ret = 0u;
+    for (uint j = 0u; j < ppl; j++) {
+        uint b  = bitpos + j;
+        uint lw = gha_read(b >> 5);
+        uint v  = (lw >> (((b >> 3) & 3u) << 3)) & 0xffu;
+        if ((v & (0x80u >> (b & 7u))) != 0u)
+            ret |= 1u << j;
+    }
+    return ret;
+}
+
+uint gha_expand_color(uint mode, uint bits, uint fg, uint bg, out uint pixmask)
+{
+    uint ret = 0u;
+    pixmask  = 0u;
+    if (mode == GHA_PACKED16) {
+        for (uint j = 0u; j < 2u; j++) {
+            ret |= (((bits & (1u << j)) != 0u) ? fg : bg) << (j << 4);
+            if ((bits & (1u << j)) != 0u)
+                pixmask |= 0xf0u >> (j << 2);
+        }
+    } else {
+        for (uint j = 0u; j < 4u; j++) {
+            ret |= (((bits & (1u << j)) != 0u) ? (fg & 0xffu) : (bg & 0xffu)) << (j << 3);
+            if ((bits & (1u << j)) != 0u)
+                pixmask |= 0xc0u >> (j << 1);
+        }
+    }
+    return ret;
+}
+
+/* A blit's row of longwords (p9100_gha_blit; the stream holds the row's source, bit position and destination), or a
+   line's point (p9100_gha_line; its longword and mask) */
+void gha_words(uint kind, uint row, uint first, int i0, int i1)
+{
+    const uint mode    = ow(P9_MODE);
+    const uint ht      = ow(P9_HT);
+    const uint step    = ow(P9_STEP);
+    const uint opcode  = ins(0u) >> 5;
+    const bool is_line = kind == KIND_GHA_LINE;
+    const bool is_long = (opcode & 1u) != 0u;
+    const bool is_move = (opcode & 2u) != 0u;
+    const uint expand  = ow(P9_EXPAND);
+    const uint ppl     = ow(P9_PPL);
+    const bool packed_expand = !is_line && (mode != GHA_PLANAR) && (expand >= 2u);
+    const uint src     = stream[row];
+    const uint bitpos  = stream[row + 1u];
+    const uint dst     = stream[row + 2u];
+    const uint fg      = ins(4u) | (ins(5u) << 8);
+    const uint fgl     = (mode == GHA_PACKED16) ? (fg | (fg << 16)) : ((fg & 0xffu) * 0x01010101u);
+    const uint shift   = ((ins(0x0fu) >> 3) & 3u) << 3;
+    uint       last    = 0u; /* the last source read: an in-order run may have drawn over it since */
+    [[dont_unroll]] for (int n = i0; n < i1; n++) {
+        const uint x = first + uint(n);
+        const uint d = is_line ? src : (dst + x * step);
+        const uint old = gha_read(d);
+        uint       m    = 0xffu;
+        uint       data = 0u;
+        uint       mask;
+        uint       rs   = ow(P9_COLOR); /* the operation's source and destination, for a line as they are */
+        uint       rd   = old;
+        bool       rops = true;
+        if (is_line)
+            mask = bitpos;
+        else {
+            if (x == 0u)
+                m &= ins(1u);
+            if ((x == ht) && (ht != 0u))
+                m &= ins(6u);
+            if (packed_expand) {
+                const uint bits = gha_expand_bits((expand == 3u) ? ((src << 5) + ((d * ppl) & 31u)) : (bitpos + x * ppl), ppl);
+                uint       pixmask;
+                data = gha_expand_color(mode, bits, fg, ow(P9_BG), pixmask);
+                rops = !is_move;
+                if (!is_move) {
+                    m &= pixmask;
+                    rs = fgl;
+                }
+            } else {
+                const uint at  = src + step * (x + (is_long ? 1u : 0u));
+                uint       cur = gha_read(at);
+                uint       prev = 0u;
+                if (expand != 0u)
+                    cur = ((cur >> shift) & 0xffu) * 0x01010101u;
+                if (n != i0)
+                    prev = last;
+                else if (is_long && (x == 0u))
+                    prev = gha_read(src); /* unexpanded, as the row's first read */
+                else if (is_long || (x != 0u)) {
+                    prev = gha_read(at - step);
+                    if (expand != 0u)
+                        prev = ((prev >> shift) & 0xffu) * 0x01010101u;
+                }
+                last = cur;
+                uint rotated[2];
+                rotated[0] = cur;
+                rotated[1] = prev;
+                [[dont_unroll]] for (uint t = 0u; t < 2u; t++)
+                    rotated[t] = gha_rotate(mode, rotated[t], ow(P9_ROT));
+                const uint rmask = ow(P9_RMASK);
+                data = (rotated[0] & ~rmask) | (rotated[1] & rmask);
+                rs   = data;
+                if (is_move) {
+                    if (mode == GHA_PLANAR) {
+                        const uint planes = ins(4u) >> 4;
+                        uint       pm     = 0u;
+                        for (uint p = 0u; p < 4u; p++)
+                            if ((planes & (1u << p)) != 0u)
+                                pm |= 0xffu << (p << 3);
+                        rs = data & ~pm;
+                        rd = 0u;
+                    } else
+                        rops = false;
+                }
+            }
+            mask = gha_nmask(mode, m) & ow(P9_GPMASK) & ow(P9_BITMASK);
+        }
+        if (rops)
+            data = gha_rop(mode, rs, rd);
+        vram[d & (pc.vram_mask >> 2)] = (old & ~mask) | (data & mask);
+    }
+}
+
+void card_pixels(uint seg, uint op, uint row, uint first, int i0, int i1)
+{
+    o = op * P9_WORDS;
+    switch (ow(P9_KIND)) {
+        case KIND_GHA_BLIT:
+        case KIND_GHA_LINE: gha_words(ow(P9_KIND), row, first, i0, i1); break;
+        default: native_pixels(seg, row, first, i0, i1); break;
+    }
+}
