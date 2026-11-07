@@ -3042,6 +3042,28 @@ xga_render_overscan_right(xga_t *xga, svga_t *svga)
     right              = (overscan_x >> 1);
     for (int i = 0; i < right; i++)
         *line_ptr++ = svga->overscan_color;
+    /* KairoX86#280: a queued line's pixels under the border stay the border's */
+    if (kairo_gpu_on && (right > 0))
+        kairo_gpu_scan_cut(buffer32, (uint32_t) (&buffer32->line[xga->displine + svga->y_add][svga->x_add + xga->h_disp] - buffer32->dat),
+                           (uint32_t) right);
+}
+
+/* KairoX86#280: with the machine's Hardware acceleration on and no cursor on the line, the line to the GPU: pixels
+   pixels at p of kind, words dwords from xga->memaddr on (each read as the processor's drawing reads it, the address
+   masked); returns whether it went (xga->memaddr is left to the caller, which moves it as its drawing does) */
+static int
+xga_render_gpu(UNUSED(svga_t *svga), xga_t *xga, uint32_t *p, uint32_t kind, uint32_t pixels, uint32_t words,
+               const uint32_t *palette, uint32_t colours, uint32_t a)
+{
+    if (!kairo_gpu_on || xga->hwcursor_on || (pixels > 2048))
+        return 0;
+    bitmap_t *bitmap = buffer32; /* the bitmap the renderers draw in (p is in it) */
+    uint32_t *line   = kairo_gpu_scan(bitmap, bitmap->kairo_gpu, (uint32_t) (p - bitmap->dat), kind, pixels, words, palette,
+                                      colours, a, 0, 0);
+    for (uint32_t i = 0; i < words; i++)
+        memcpy(&line[i], &xga->vram[(xga->memaddr + i * 4) & xga->vram_mask], 4);
+    kairo_gpu_scan_commit();
+    return 1;
 }
 
 static void
@@ -3064,6 +3086,14 @@ xga_render_4bpp(svga_t *svga)
             xga->firstline_draw = xga->displine;
         xga->lastline_draw = xga->displine;
 
+        const uint32_t pixels4 = (uint32_t) ((xga->h_disp / 16) + 1) * 16;
+        uint32_t       shifts  = 0;
+        for (uint32_t k = 0; k < 8; k++)
+            shifts |= (4u * k) << (3u * k);
+        if (xga_render_gpu(svga, xga, p, KAIRO_SCAN_NIBBLES, pixels4, pixels4 / 8, xga->pallook, 16, shifts)) {
+            xga->memaddr = (xga->memaddr + pixels4 / 2) & xga->vram_mask;
+            return;
+        }
         for (int x = 0; x <= xga->h_disp; x += 16) {
             dat  = *(uint32_t *) (&xga->vram[xga->memaddr & xga->vram_mask]);
             p[0] = xga->pallook[dat & 0x0f];
@@ -3112,6 +3142,11 @@ xga_render_8bpp(svga_t *svga)
             xga->firstline_draw = xga->displine;
         xga->lastline_draw = xga->displine;
 
+        const uint32_t pixels8 = (uint32_t) ((xga->h_disp / 8) + 1) * 8;
+        if (xga_render_gpu(svga, xga, p, KAIRO_SCAN_8, pixels8, pixels8 / 4, xga->pallook, 256, 0xff)) {
+            xga->memaddr = (xga->memaddr + pixels8) & xga->vram_mask;
+            return;
+        }
         for (int x = 0; x <= xga->h_disp; x += 8) {
             dat  = *(uint32_t *) (&xga->vram[xga->memaddr & xga->vram_mask]);
             p[0] = xga->pallook[dat & 0xff];
@@ -3153,6 +3188,11 @@ xga_render_16bpp(svga_t *svga)
             xga->firstline_draw = xga->displine;
         xga->lastline_draw = xga->displine;
 
+        const uint32_t pixels16 = (uint32_t) ((xga->h_disp / 8) + 1) * 8;
+        if (xga_render_gpu(svga, xga, p, KAIRO_SCAN_16, pixels16, pixels16 / 2, NULL, 0, 0)) {
+            xga->memaddr = (xga->memaddr + (pixels16 << 1)) & xga->vram_mask;
+            return;
+        }
         for (x = 0; x <= xga->h_disp; x += 8) {
             dat      = *(uint32_t *) (&xga->vram[(xga->memaddr + (x << 1)) & xga->vram_mask]);
             p[x]     = video_16to32[dat & 0xffff];
@@ -3622,6 +3662,11 @@ xga_poll(void *priv)
                     if (xga->hwcursor_on)
                         xga->changedvram[xga->memaddr >> 12] = xga->changedvram[(xga->memaddr >> 12) + 1] = xga->interlace ? 3 : 2;
 
+                    /* KairoX86#280: the row's queued GPU drawing, if any, before it is drawn again */
+                    if (kairo_gpu_on && (buffer32 != NULL) && ((xga->displine + svga->y_add) >= 0)
+                        && ((xga->displine + svga->y_add) < buffer32->h))
+                        kairo_gpu_scan_touch(buffer32, (uint32_t) (buffer32->line[xga->displine + svga->y_add] - buffer32->dat),
+                                             (uint32_t) buffer32->w);
                     svga->render_xga(svga);
 
                     svga->x_add = svga->left_overscan;

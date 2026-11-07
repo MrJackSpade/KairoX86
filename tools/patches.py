@@ -4874,6 +4874,28 @@ KAIROX86_VOODOO_K2D = [
      '    vid_voodoo_fifo.c\n    vid_voodoo_k2d.c\n    vid_voodoo_reg.c\n'),
 ]
 
+# KairoX86#280: the IBM XGA's own display on the GPU: with the machine's Hardware acceleration on and no cursor on the
+# line, its 4, 8 and 16-bit renderers send a changed line to the GPU as a scanout line (NIBBLES low nibble first, 8 with
+# its palette, 16 through the table), moving memaddr as their drawing does; the line loop draws a row's queued line
+# before drawing the row again, and the right border keeps its pixels over a queued line's.
+KAIROX86_XGA_DISPLAY_SCAN = [
+    ('86box/src/video/vid_xga.c',
+     '    for (int i = 0; i < right; i++)\n        *line_ptr++ = svga->overscan_color;\n}\n\n',
+     "    for (int i = 0; i < right; i++)\n        *line_ptr++ = svga->overscan_color;\n    /* KairoX86#280: a queued line's pixels under the border stay the border's */\n    if (kairo_gpu_on && (right > 0))\n        kairo_gpu_scan_cut(buffer32, (uint32_t) (&buffer32->line[xga->displine + svga->y_add][svga->x_add + xga->h_disp] - buffer32->dat),\n                           (uint32_t) right);\n}\n\n/* KairoX86#280: with the machine's Hardware acceleration on and no cursor on the line, the line to the GPU: pixels\n   pixels at p of kind, words dwords from xga->memaddr on (each read as the processor's drawing reads it, the address\n   masked); returns whether it went (xga->memaddr is left to the caller, which moves it as its drawing does) */\nstatic int\nxga_render_gpu(UNUSED(svga_t *svga), xga_t *xga, uint32_t *p, uint32_t kind, uint32_t pixels, uint32_t words,\n               const uint32_t *palette, uint32_t colours, uint32_t a)\n{\n    if (!kairo_gpu_on || xga->hwcursor_on || (pixels > 2048))\n        return 0;\n    bitmap_t *bitmap = buffer32; /* the bitmap the renderers draw in (p is in it) */\n    uint32_t *line   = kairo_gpu_scan(bitmap, bitmap->kairo_gpu, (uint32_t) (p - bitmap->dat), kind, pixels, words, palette,\n                                      colours, a, 0, 0);\n    for (uint32_t i = 0; i < words; i++)\n        memcpy(&line[i], &xga->vram[(xga->memaddr + i * 4) & xga->vram_mask], 4);\n    kairo_gpu_scan_commit();\n    return 1;\n}\n\n"),
+    ('86box/src/video/vid_xga.c',
+     '\n        for (int x = 0; x <= xga->h_disp; x += 16) {\n',
+     '\n        const uint32_t pixels4 = (uint32_t) ((xga->h_disp / 16) + 1) * 16;\n        uint32_t       shifts  = 0;\n        for (uint32_t k = 0; k < 8; k++)\n            shifts |= (4u * k) << (3u * k);\n        if (xga_render_gpu(svga, xga, p, KAIRO_SCAN_NIBBLES, pixels4, pixels4 / 8, xga->pallook, 16, shifts)) {\n            xga->memaddr = (xga->memaddr + pixels4 / 2) & xga->vram_mask;\n            return;\n        }\n        for (int x = 0; x <= xga->h_disp; x += 16) {\n'),
+    ('86box/src/video/vid_xga.c',
+     '\n        for (int x = 0; x <= xga->h_disp; x += 8) {\n',
+     '\n        const uint32_t pixels8 = (uint32_t) ((xga->h_disp / 8) + 1) * 8;\n        if (xga_render_gpu(svga, xga, p, KAIRO_SCAN_8, pixels8, pixels8 / 4, xga->pallook, 256, 0xff)) {\n            xga->memaddr = (xga->memaddr + pixels8) & xga->vram_mask;\n            return;\n        }\n        for (int x = 0; x <= xga->h_disp; x += 8) {\n'),
+    ('86box/src/video/vid_xga.c',
+     '\n        for (x = 0; x <= xga->h_disp; x += 8) {\n',
+     '\n        const uint32_t pixels16 = (uint32_t) ((xga->h_disp / 8) + 1) * 8;\n        if (xga_render_gpu(svga, xga, p, KAIRO_SCAN_16, pixels16, pixels16 / 2, NULL, 0, 0)) {\n            xga->memaddr = (xga->memaddr + (pixels16 << 1)) & xga->vram_mask;\n            return;\n        }\n        for (x = 0; x <= xga->h_disp; x += 8) {\n'),
+    ('86box/src/video/vid_xga.c',
+     '\n                    svga->render_xga(svga);\n',
+     "\n                    /* KairoX86#280: the row's queued GPU drawing, if any, before it is drawn again */\n                    if (kairo_gpu_on && (buffer32 != NULL) && ((xga->displine + svga->y_add) >= 0)\n                        && ((xga->displine + svga->y_add) < buffer32->h))\n                        kairo_gpu_scan_touch(buffer32, (uint32_t) (buffer32->line[xga->displine + svga->y_add] - buffer32->dat),\n                                             (uint32_t) buffer32->w);\n                    svga->render_xga(svga);\n"),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -4948,6 +4970,7 @@ PATCHES = {
     'kairox86-banshee-tiled-scan': KAIROX86_BANSHEE_TILED_SCAN,
     'kairox86-voodoo-display-scan': KAIROX86_VOODOO_DISPLAY_SCAN,
     'kairox86-voodoo-k2d': KAIROX86_VOODOO_K2D,
+    'kairox86-xga-display-scan': KAIROX86_XGA_DISPLAY_SCAN,
     'kairox86-gpu-cga': KAIROX86_GPU_CGA,
     'kairox86-whole-frames': KAIROX86_WHOLE_FRAMES,
     'kairox86-gpu-mda': KAIROX86_GPU_MDA,
