@@ -1,0 +1,54 @@
+#version 450
+#extension GL_EXT_control_flow_attributes : require
+/*
+ * The Trident TGUI's graphics engine on the GPU (KairoX86#274): 86Box's per-pixel draw of tgui_accel_command
+ * (vid_tgui9440.c: READ, MIX, WRITE) for runs of pixels (kairo_seg_run), on the drawing engines' shared batches
+ * (seg.glsl). The walk stays the CPU's; each pixel's source and pattern are its stream words
+ * (86box/kairo_gpu_tgui.h).
+ *
+ * Copyright 2026 MrJackSpade. GPL-2.0-or-later.
+ */
+#include "seg.glsl"
+
+const uint TG_ROP = 0u, TG_TRANS = 1u, TG_BYTES = 2u, TG_WORDS = 4u;
+const uint TGK_ADDR = 1u, TGK_CMP = 2u;
+
+uint rd_px(uint a, uint pb)
+{
+    uint v = 0u;
+    for (uint i = 0u; i < pb; i++)
+        v |= rd8(a + i) << (8u * i);
+    return v;
+}
+
+/* The Windows ternary raster operation, bit (P << 2 | S << 1 | D), on every bit */
+uint rop3(uint code, uint p, uint s, uint d)
+{
+    uint r = 0u;
+    [[dont_unroll]] for (uint b = 0u; b < 32u; b++) {
+        const uint idx = (((p >> b) & 1u) << 2) | (((s >> b) & 1u) << 1) | ((d >> b) & 1u);
+        r |= ((code >> idx) & 1u) << b;
+    }
+    return r;
+}
+
+void card_pixels(uint seg, uint op, uint row, uint first, int i0, int i1)
+{
+    const uint o   = op * TG_WORDS;
+    const uint pb  = ops[o + TG_BYTES];
+    const int  dir = int(segs[seg * KG_WORDS + KG_DIR]);
+    const uint d0  = segs[seg * KG_WORDS + KG_BIT] >> 3;
+    [[dont_unroll]] for (int n = i0; n < i1; n++) {
+        const uint w    = row + uint(n) * 3u;
+        const uint kind = stream[w];
+        uint       src  = stream[w + 1u];
+        if ((kind & TGK_ADDR) != 0u)
+            src = rd_px(src, pb);
+        if (((kind & TGK_CMP) != 0u) && (src == ops[o + TG_TRANS]))
+            continue;
+        const uint a   = d0 + uint((int(first) + n * dir) * int(pb));
+        const uint res = rop3(ops[o + TG_ROP], stream[w + 2u], src, rd_px(a, pb));
+        for (uint i = 0u; i < pb; i++)
+            wr8(a + i, res >> (8u * i));
+    }
+}

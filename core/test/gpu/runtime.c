@@ -22,6 +22,45 @@ __asm__(".section .text.entry\n"
         "    calll end_screen\n"
         "    jmp 1b\n");
 
+/* Unreal mode, as the loader enters it (loader.S): each data segment loaded once in protected mode with a flat 4 GB
+   descriptor, then 0 again in real mode; the interrupt flag kept */
+__asm__(".text\n"
+        ".globl unreal\n"
+        "unreal:\n"
+        "    pushfl\n"
+        "    cli\n"
+        "    pushl %eax\n"
+        "    pushl %ebx\n"
+        "    lgdtl unreal_desc\n"
+        "    movl %cr0, %eax\n"
+        "    orb $1, %al\n"
+        "    movl %eax, %cr0\n"
+        "    jmp 1f\n"
+        "1:  movw $8, %bx\n"
+        "    movw %bx, %ds\n"
+        "    movw %bx, %es\n"
+        "    movw %bx, %fs\n"
+        "    movw %bx, %gs\n"
+        "    andb $0xfe, %al\n"
+        "    movl %eax, %cr0\n"
+        "    jmp 2f\n"
+        "2:  xorw %bx, %bx\n"
+        "    movw %bx, %ds\n"
+        "    movw %bx, %es\n"
+        "    movw %bx, %fs\n"
+        "    movw %bx, %gs\n"
+        "    popl %ebx\n"
+        "    popl %eax\n"
+        "    popfl\n"
+        "    retl\n"
+        "    .p2align 3\n"
+        "unreal_gdt:\n"
+        "    .quad 0\n"
+        "    .quad 0x00cf92000000ffff\n"
+        "unreal_desc:\n"
+        "    .word 15\n"
+        "    .long unreal_gdt\n");
+
 int card_class(void) {
     /* VGA: the display combination call (INT 10h 1A00h), which only a VGA's BIOS has */
     u16 bx = 0;

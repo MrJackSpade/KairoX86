@@ -73,6 +73,9 @@
 #include <86box/vid_xga.h>
 #include <86box/vid_svga.h>
 #include <86box/vid_svga_render.h>
+#include <86box/kairo_gpu.h> /* KairoX86#274 */
+#include <86box/kairo_gpu_seg.h>
+#include <86box/kairo_gpu_tgui.h>
 
 #define ROM_TGUI_9400CXI          "roms/video/tgui9440/9400CXI.VBI"
 #define ROM_TGUI_9440_VLB         "roms/video/tgui9440/trident_9440_vlb.bin"
@@ -178,6 +181,19 @@ typedef struct tgui_t {
     void        *i2c, *ddc;
 
     int has_bios;
+
+    /* KairoX86#274: the graphics engine's batch on the GPU and its runs, one per 1, 2 and 4 bytes a pixel; NULL in
+       software */
+    struct {
+        kairo_seg_t     *seg;
+        kairo_seg_run_t *run[3];
+        uint32_t         record[TG_WORDS];
+        uint64_t         generation;
+        int              issued;
+        int              in_order;
+        uint32_t         trans; /* the pixel being recorded's transparent colour and bytes */
+        int              pb;
+    } *k_gpu;
 } tgui_t;
 
 video_timings_t timing_tgui_vlb = { .type = VIDEO_BUS, .write_b = 4, .write_w = 8, .write_l = 16, .read_b = 4, .read_w = 8, .read_l = 16 };
@@ -1501,6 +1517,8 @@ tgui_ext_linear_read(uint32_t addr, void *priv)
     addr &= svga->vram_mask;
     addr &= ~0x0f;
     addr  = dword_remap(svga, addr);
+    if (svga->kairo_touch != NULL) /* KairoX86#274: the latches' bytes, 0Dh apart in fours */
+        svga->kairo_touch(svga, addr, 64);
 
     for (int i = 0; i < 16; i++) {
         tgui->copy_latch[i] = svga->vram[addr];
@@ -1540,6 +1558,8 @@ tgui_ext_linear_write(uint32_t addr, uint8_t val, void *priv)
     addr &= svga->vram_mask;
     addr &= (svga->gdcreg[0x10] & EXT_CTRL_LATCH_COPY) ? ~0x0f : ~0x07;
     addr = dword_remap(svga, addr);
+    if (svga->kairo_touch != NULL) /* KairoX86#274 */
+        svga->kairo_touch(svga, addr, 16);
 
     svga->changedvram[addr >> 12] = svga->monitor->mon_changeframecount;
 
@@ -1619,6 +1639,8 @@ tgui_ext_linear_writew(uint32_t addr, uint16_t val, void *priv)
     addr &= svga->vram_mask;
     addr &= ~0x0f;
     addr = dword_remap(svga, addr);
+    if (svga->kairo_touch != NULL) /* KairoX86#274 */
+        svga->kairo_touch(svga, addr, 32);
 
     svga->changedvram[addr >> 12] = svga->monitor->mon_changeframecount;
     val = (val >> 8) | (val << 8);
@@ -2534,8 +2556,89 @@ enum {
         svga->changedvram[((addr) & (tgui->vram_mask >> 2)) >> 10] = svga->monitor->mon_changeframecount; \
     }
 
+/* KairoX86#274: the run's operation in the batch: the record again only where it differs or the batch has been drawn */
+static void
+tgui_k_op(void *priv, bool in_order)
+{
+    tgui_t  *tgui          = (tgui_t *) priv;
+    uint32_t rec[TG_WORDS] = { 0 };
+
+    rec[TG_ROP]   = tgui->accel.rop;
+    rec[TG_TRANS] = tgui->k_gpu->trans;
+    rec[TG_BYTES] = tgui->k_gpu->pb;
+    kairo_seg_make_room(tgui->k_gpu->seg);
+    if (tgui->k_gpu->issued && (tgui->k_gpu->in_order == in_order) && (tgui->k_gpu->generation == kairo_seg_generation(tgui->k_gpu->seg)) &&
+        !memcmp(tgui->k_gpu->record, rec, sizeof(rec)))
+        return;
+    memcpy(kairo_seg_op(tgui->k_gpu->seg, in_order), rec, sizeof(rec));
+    memcpy(tgui->k_gpu->record, rec, sizeof(rec));
+    tgui->k_gpu->generation = kairo_seg_generation(tgui->k_gpu->seg);
+    tgui->k_gpu->in_order   = in_order;
+    tgui->k_gpu->issued     = 1;
+}
+
+#define TGUI_K_NONE 0xffffffffu
+
+/* One pixel of an operation, at pixel dst: through the raster operation with the pattern pat_dat and the source
+   src_dat, or (src_at not TGUI_K_NONE) the pixel at src_at, left where cmp and that source is trans_col. With
+   Hardware acceleration on, recorded for the GPU. */
+static void
+tgui_draw_pixel(tgui_t *tgui, uint32_t dst, uint32_t src_dat, uint32_t src_at, uint32_t pat_dat, int cmp, uint32_t trans_col)
+{
+    svga_t   *svga   = &tgui->svga;
+    uint16_t *vram_w = (uint16_t *) svga->vram;
+    uint32_t *vram_l = (uint32_t *) svga->vram;
+    uint32_t  dst_dat;
+    uint32_t  out;
+
+    if (tgui->k_gpu != NULL) {
+        const int      shift                 = (tgui->accel.bpp == 0) ? 0 : (tgui->accel.bpp == 1) ? 1 : 2;
+        const uint32_t pmask                 = tgui->vram_mask >> shift;
+        const uint32_t s_at                  = (src_at != TGUI_K_NONE) ? ((src_at & pmask) << shift) : KAIRO_SEG_RUN_NONE;
+        const uint32_t words[TG_PIXEL_WORDS] = { ((src_at != TGUI_K_NONE) ? TGK_ADDR : 0) | (cmp ? TGK_CMP : 0),
+                                                 (src_at != TGUI_K_NONE) ? s_at : src_dat, pat_dat };
+        const uint32_t reads[1]              = { s_at };
+
+        /* A run is of one pixel size, one transparent colour */
+        for (int i = 0; i < 3; i++)
+            if ((i != shift) || (tgui->k_gpu->trans != trans_col))
+                kairo_seg_run_flush(tgui->k_gpu->run[i]);
+        tgui->k_gpu->trans = trans_col;
+        tgui->k_gpu->pb    = 1 << shift;
+        kairo_seg_run_pixel(tgui->k_gpu->run[shift], (dst & pmask) << shift, words, reads);
+        return;
+    }
+
+    if (src_at != TGUI_K_NONE) {
+        READ(src_at, src_dat);
+    }
+    if (cmp && (src_dat == trans_col))
+        return;
+    READ(dst, dst_dat);
+    MIX();
+    WRITE(dst, out);
+}
+
+/* Every run into the batch: the command has ended, the processor may meet its pixels next */
+static void
+tgui_k_flush(tgui_t *tgui)
+{
+    if (tgui->k_gpu != NULL)
+        for (int i = 0; i < 3; i++)
+            kairo_seg_run_flush(tgui->k_gpu->run[i]);
+}
+
+static void tgui_accel_command_walk(int count, uint32_t cpu_dat, tgui_t *tgui);
+
 static void
 tgui_accel_command(int count, uint32_t cpu_dat, tgui_t *tgui)
+{
+    tgui_accel_command_walk(count, cpu_dat, tgui);
+    tgui_k_flush(tgui);
+}
+
+static void
+tgui_accel_command_walk(int count, uint32_t cpu_dat, tgui_t *tgui)
 {
     svga_t         *svga = &tgui->svga;
     const uint32_t *pattern_data;
@@ -2683,8 +2786,6 @@ tgui_accel_command(int count, uint32_t cpu_dat, tgui_t *tgui)
                             }
 
 
-                            READ(tgui->accel.dst, dst_dat);
-
                             pat_dat = pattern_data[((tgui->accel.pat_y & 7) * 8) + (tgui->accel.pat_x & 7)];
 
                             if (tgui->accel.bpp == 0)
@@ -2692,11 +2793,8 @@ tgui_accel_command(int count, uint32_t cpu_dat, tgui_t *tgui)
                             else if (tgui->accel.bpp == 1)
                                 pat_dat &= 0xffff;
 
-                            if ((((tgui->accel.flags & (TGUI_PATMONO | TGUI_TRANSENA)) == (TGUI_TRANSENA | TGUI_PATMONO)) && (pat_dat != trans_col)) || !(tgui->accel.flags & TGUI_PATMONO) || ((tgui->accel.flags & (TGUI_PATMONO | TGUI_TRANSENA)) == TGUI_PATMONO) || (tgui->accel.ger22 & 0x200)) {
-                                MIX();
-
-                                WRITE(tgui->accel.dst, out);
-                            }
+                            if ((((tgui->accel.flags & (TGUI_PATMONO | TGUI_TRANSENA)) == (TGUI_TRANSENA | TGUI_PATMONO)) && (pat_dat != trans_col)) || !(tgui->accel.flags & TGUI_PATMONO) || ((tgui->accel.flags & (TGUI_PATMONO | TGUI_TRANSENA)) == TGUI_PATMONO) || (tgui->accel.ger22 & 0x200))
+                                tgui_draw_pixel(tgui, tgui->accel.dst, src_dat, TGUI_K_NONE, pat_dat, 0, trans_col);
                         }
 
                         tgui->accel.src += xdir;
@@ -2753,8 +2851,6 @@ tgui_accel_command(int count, uint32_t cpu_dat, tgui_t *tgui)
                             else if (tgui->accel.bpp == 1)
                                 src_dat &= 0xffff;
 
-                            READ(tgui->accel.dst, dst_dat);
-
                             pat_dat = pattern_data[((tgui->accel.pat_y & 7) * 8) + (tgui->accel.pat_x & 7)];
 
                             if (tgui->accel.bpp == 0)
@@ -2762,11 +2858,8 @@ tgui_accel_command(int count, uint32_t cpu_dat, tgui_t *tgui)
                             else if (tgui->accel.bpp == 1)
                                 pat_dat &= 0xffff;
 
-                            if (!(tgui->accel.flags & TGUI_TRANSENA) || (src_dat != trans_col)) {
-                                MIX();
-
-                                WRITE(tgui->accel.dst, out);
-                            }
+                            if (!(tgui->accel.flags & TGUI_TRANSENA) || (src_dat != trans_col))
+                                tgui_draw_pixel(tgui, tgui->accel.dst, src_dat, TGUI_K_NONE, pat_dat, 0, trans_col);
                         }
 
                         cpu_dat <<= 1;
@@ -2806,9 +2899,6 @@ tgui_accel_command(int count, uint32_t cpu_dat, tgui_t *tgui)
 
                 default:
                     while (count--) {
-                        READ(tgui->accel.src, src_dat);
-                        READ(tgui->accel.dst, dst_dat);
-
                         pat_dat = pattern_data[((tgui->accel.pat_y & 7) * 8) + (tgui->accel.pat_x & 7)];
 
                         if (tgui->accel.bpp == 0)
@@ -2816,11 +2906,7 @@ tgui_accel_command(int count, uint32_t cpu_dat, tgui_t *tgui)
                         else if (tgui->accel.bpp == 1)
                             pat_dat &= 0xffff;
 
-                        if (!(tgui->accel.flags & TGUI_TRANSENA) || (src_dat != trans_col)) {
-                            MIX();
-
-                            WRITE(tgui->accel.dst, out);
-                        }
+                        tgui_draw_pixel(tgui, tgui->accel.dst, src_dat, tgui->accel.src, pat_dat, !!(tgui->accel.flags & TGUI_TRANSENA), trans_col);
 
                         tgui->accel.src += xdir;
                         tgui->accel.dst += xdir;
@@ -2858,9 +2944,6 @@ tgui_accel_command(int count, uint32_t cpu_dat, tgui_t *tgui)
             }
 
             while (count--) {
-                READ(tgui->accel.src, src_dat);
-                READ(tgui->accel.dst, dst_dat);
-
                 pat_dat = pattern_data[((tgui->accel.pat_y & 7) * 8) + (tgui->accel.pat_x & 7)];
 
                 if (tgui->accel.bpp == 0)
@@ -2868,11 +2951,7 @@ tgui_accel_command(int count, uint32_t cpu_dat, tgui_t *tgui)
                 else if (tgui->accel.bpp == 1)
                     pat_dat &= 0xffff;
 
-                if (!(tgui->accel.flags & TGUI_TRANSENA) || (src_dat != trans_col)) {
-                    MIX();
-
-                    WRITE(tgui->accel.dst, out);
-                }
+                tgui_draw_pixel(tgui, tgui->accel.dst, src_dat, tgui->accel.src, pat_dat, !!(tgui->accel.flags & TGUI_TRANSENA), trans_col);
 
                 tgui->accel.src += xdir;
                 tgui->accel.dst += xdir;
@@ -2914,13 +2993,7 @@ tgui_accel_command(int count, uint32_t cpu_dat, tgui_t *tgui)
             while (count--) {
                 /*Note by TC1995: I suppose the x/y clipping max is always more than 0 in the TGUI 96xx, but the TGUI 9440 lacks clipping*/
                 if ((tgui->type == TGUI_9440) || ((tgui->type >= TGUI_9660) && ((tgui->accel.dx & 0xfff) >= tgui->accel.left) && ((tgui->accel.dx & 0xfff) <= tgui->accel.right) && ((tgui->accel.dy & 0xfff) >= tgui->accel.top) && ((tgui->accel.dy & 0xfff) <= tgui->accel.bottom))) {
-                    READ(tgui->accel.dx + (tgui->accel.dy * tgui->accel.pitch), dst_dat);
-
-                    pat_dat = tgui->accel.fg_col;
-
-                    MIX();
-
-                    WRITE(tgui->accel.dx + (tgui->accel.dy * tgui->accel.pitch), out);
+                    tgui_draw_pixel(tgui, tgui->accel.dx + (tgui->accel.dy * tgui->accel.pitch), src_dat, TGUI_K_NONE, tgui->accel.fg_col, 0, trans_col);
                 }
 
                 if (!tgui->accel.y)
@@ -3005,13 +3078,7 @@ tgui_accel_command(int count, uint32_t cpu_dat, tgui_t *tgui)
             while (count--) {
                 /*Note by TC1995: I suppose the x/y clipping max is always more than 0 in the TGUI 96xx, but the TGUI 9440 lacks clipping*/
                 if ((tgui->type == TGUI_9440) || ((tgui->type >= TGUI_9660) && ((tgui->accel.dx & 0xfff) >= tgui->accel.left) && ((tgui->accel.dx & 0xfff) <= tgui->accel.right) && ((tgui->accel.dy & 0xfff) >= tgui->accel.top) && ((tgui->accel.dy & 0xfff) <= tgui->accel.bottom))) {
-                    READ(tgui->accel.dx + (tgui->accel.dy * tgui->accel.pitch), dst_dat);
-
-                    pat_dat = tgui->accel.fg_col;
-
-                    MIX();
-
-                    WRITE(tgui->accel.dx + (tgui->accel.dy * tgui->accel.pitch), out);
+                    tgui_draw_pixel(tgui, tgui->accel.dx + (tgui->accel.dy * tgui->accel.pitch), src_dat, TGUI_K_NONE, tgui->accel.fg_col, 0, trans_col);
                 }
 
                 if (!tgui->accel.y)
@@ -3083,13 +3150,7 @@ tgui_accel_command(int count, uint32_t cpu_dat, tgui_t *tgui)
             while (count--) {
                 /*Note by TC1995: I suppose the x/y clipping max is always more than 0 in the TGUI 96xx, but the TGUI 9440 lacks clipping*/
                 if ((tgui->type == TGUI_9440) || ((tgui->type >= TGUI_9660) && ((tgui->accel.dx & 0xfff) >= tgui->accel.left) && ((tgui->accel.dx & 0xfff) <= tgui->accel.right) && ((tgui->accel.dy & 0xfff) >= tgui->accel.top) && ((tgui->accel.dy & 0xfff) <= tgui->accel.bottom))) {
-                    READ(tgui->accel.dx + (tgui->accel.dy * tgui->accel.pitch), dst_dat);
-
-                    pat_dat = tgui->accel.fg_col;
-
-                    MIX();
-
-                    WRITE(tgui->accel.dx + (tgui->accel.dy * tgui->accel.pitch), out);
+                    tgui_draw_pixel(tgui, tgui->accel.dx + (tgui->accel.dy * tgui->accel.pitch), src_dat, TGUI_K_NONE, tgui->accel.fg_col, 0, trans_col);
                 }
 
                 if (!tgui->accel.y)
@@ -4271,6 +4332,15 @@ tgui_mmio_read_l(uint32_t addr, void *priv)
     return ret;
 }
 
+/* KairoX86#274: the SVGA core's memory handlers and display (svga->kairo_touch) */
+static void
+tgui_svga_touch(svga_t *svga, uint32_t addr, uint32_t len)
+{
+    const tgui_t *tgui = (const tgui_t *) svga->priv;
+
+    kairo_seg_touch(tgui->k_gpu->seg, addr & tgui->vram_mask, len);
+}
+
 static void *
 tgui_init(const device_t *info)
 {
@@ -4326,6 +4396,17 @@ tgui_init(const device_t *info)
 
     if (tgui->type == TGUI_9400CXI)
         svga->ramdac = device_add(&tkd8001_ramdac_device);
+
+    /* KairoX86#274: with Hardware acceleration on, the graphics engine's pixels drawn on the GPU */
+    if (kairo_gpu_on) {
+        tgui->k_gpu = calloc(1, sizeof(*tgui->k_gpu));
+        if (tgui->k_gpu == NULL)
+            fatal("TGUI on the GPU: no memory\n");
+        tgui->k_gpu->seg = kairo_tgui_open(svga->vram, tgui->vram_mask, svga->changedvram, &svga->monitor->mon_changeframecount);
+        for (int i = 0; i < 3; i++)
+            tgui->k_gpu->run[i] = kairo_seg_run_open(tgui->k_gpu->seg, tgui->vram_mask, 1 << i, TG_PIXEL_WORDS, 1, tgui_k_op, tgui);
+        svga->kairo_touch = tgui_svga_touch;
+    }
 
     mem_mapping_add(&tgui->linear_mapping, 0, 0, svga_read_linear, svga_readw_linear, svga_readl_linear, tgui_accel_write_fb_b, tgui_accel_write_fb_w, tgui_accel_write_fb_l, NULL, MEM_MAPPING_EXTERNAL, svga);
     mem_mapping_add(&tgui->accel_mapping, 0, 0, tgui_accel_read, tgui_accel_read_w, tgui_accel_read_l, tgui_accel_write, tgui_accel_write_w, tgui_accel_write_l, NULL, MEM_MAPPING_EXTERNAL, tgui);
@@ -4392,6 +4473,12 @@ tgui_close(void *priv)
 {
     tgui_t *tgui = (tgui_t *) priv;
 
+    if (tgui->k_gpu != NULL) {
+        kairo_seg_close(tgui->k_gpu->seg); /* KairoX86#274 */
+        for (int i = 0; i < 3; i++)
+            kairo_seg_run_close(tgui->k_gpu->run[i]);
+        free(tgui->k_gpu);
+    }
     svga_close(&tgui->svga);
 
     if (tgui->type >= TGUI_9440) {

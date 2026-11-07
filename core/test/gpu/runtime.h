@@ -18,13 +18,19 @@ static inline u8 inb(u16 port) { u8 v; __asm__ volatile("inb %1, %0" : "=a"(v) :
 static inline u16 inw(u16 port) { u16 v; __asm__ volatile("inw %1, %0" : "=a"(v) : "Nd"(port)); return v; }
 static inline u32 inl(u16 port) { u32 v; __asm__ volatile("inl %1, %0" : "=a"(v) : "Nd"(port)); return v; }
 
-/* INT 10h with AX, BX, CX, DX and DI (ES = 0, so ES:DI is a linear address below 64 KB); returns AX, and BX in *bx_out */
+/* Unreal mode again (runtime.c): DS, ES, FS and GS with a 4 GB limit, as the loader left them. A BIOS that uses
+   protected or unreal mode itself (the Trident TGUI's mode set) leaves them at 64K, and every access above that faults. */
+void unreal(void);
+
+/* INT 10h with AX, BX, CX, DX and DI (ES = 0, so ES:DI is a linear address below 64 KB); returns AX, and BX in *bx_out.
+   Unreal mode is restored after it. */
 static inline u16 int10(u16 ax, u16 bx, u16 cx, u16 dx, u16 di, u16 *bx_out) {
     u16 rax, rbx;
     __asm__ volatile("pushl %%ebp\n\tint $0x10\n\tpopl %%ebp"
                      : "=a"(rax), "=b"(rbx), "+c"(cx), "+d"(dx), "+D"(di)
                      : "a"(ax), "b"(bx)
                      : "memory", "esi", "cc");
+    unreal();
     if (bx_out) *bx_out = rbx;
     return rax;
 }
