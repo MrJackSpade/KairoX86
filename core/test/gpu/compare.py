@@ -40,10 +40,16 @@ BOARDS = {
     # 12 MB. Not the Model 55 SX or LS: their POST stops with error 102 under the recompiler (KairoX86#304)
     'ibmps2_m80_type3': "machine = ibmps2_m80_type3\ncpu_family = i486dx2\ncpu_speed = 66666666\ncpu_multi = 2\n"
                         "mem_size = 8192\n",
+    # The Chips & Technologies B69000's own board (its on-board chip, KairoX86#249)
+    'nupro592': "machine = nupro592\ncpu_family = pentium_p55c\ncpu_speed = 200000000\ncpu_multi = 3\nmem_size = 32768\n",
 }
 # A board's input: the Model 80's CMOS was never set (no reference diskette), so POST stops at 161 and 163 waiting
 # for F1, which it is given well after the prompt appears
-SCRIPT = {'ibmps2_m80_type3': '3100:+0x3b,3106:-0x3b'}
+SCRIPT = {'ibmps2_m80_type3': '3100:+0x3b,3106:-0x3b',
+          # its CMOS unset too: "CMOS checksum error", F1 to continue
+          'nupro592': '600:+0x3b,606:-0x3b'}
+# Boards' own graphics chips (gfxcard = internal), each named as its chip's device is, on its board
+ONBOARD = {'chips_69000_onboard': 'nupro592'}
 # The add-on cards: each one's [Video] line, its own section and the card beside it, an S3 Trio64 (the Voodoos drawn
 # by the C rasteriser on the software side, KairoX86#289; the PowerVR PCX2, KairoX86#269), or the IBM VGA beside the
 # 8514/A, whose ports the S3 has too (KairoX86#238; IBM's, and ATI's 8514 Ultra with the Mach8 engine)
@@ -81,7 +87,9 @@ def query(tool, roms, q):
 
 
 def machine_config(board, card, test, accel, name):
-    video = f"gfxcard = {card}\n" if card not in ADD_ONS else f"gfxcard = {ADD_ONS[card][2]}\n" + ADD_ONS[card][0]
+    video = (f"gfxcard = {card}\n" if card not in ADD_ONS else f"gfxcard = {ADD_ONS[card][2]}\n" + ADD_ONS[card][0])
+    if card in ONBOARD:
+        video = "gfxcard = internal\n"
     voodoo = ADD_ONS[card][1] if card in ADD_ONS else ""
     if card not in ADD_ONS and card.startswith(VOODOO_FAMILY):
         # A device reads its settings from its name's section, "<name> #<n>" for instance n > 0 (the AGP
@@ -207,9 +215,11 @@ def main():
         """The card's test board: its bus's (BUS_BOARD), or else the first board that takes it."""
         if card in ADD_ONS:
             return ADD_ON_BOARD.get(card, '686bx')
+        if card in ONBOARD:
+            return ONBOARD[card]
         own = CARD_BOARD.get(card) or BUS_BOARD.get(bus.get(card), '486ap4')
         return own if card in takes[own] else next((b for b in BOARDS if card in takes[b]), None)
-    cards = sorted(set().union(*takes.values()) - {'none', 'external', 'internal'}) + sorted(ADD_ONS)
+    cards = sorted(set().union(*takes.values()) - {'none', 'external', 'internal'}) + sorted(ADD_ONS) + sorted(ONBOARD)
     if args.cards:
         cards = args.cards.split(',')
     tests = args.tests.split(',') if args.tests else sorted(p.stem for p in Path(args.tests_folder).glob('*.img'))
