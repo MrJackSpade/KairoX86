@@ -1348,7 +1348,7 @@ s3_virge_vblank_start(svga_t *svga)
 static void
 s3_virge_wait_fifo_idle(virge_t *virge)
 {
-    while (!FIFO_EMPTY) {
+    while (!FIFO_EMPTY && !is_quit) { /* KairoX86#301: or the machine is over (an engine thread's fatal error) */
         wake_fifo_thread(virge);
         thread_wait_event(virge->fifo_not_full_event, 1);
     }
@@ -1363,7 +1363,7 @@ s3_virge_wait_3d_idle(virge_t *virge)
         kairo_virge_gpu_drain(virge->k_gpu);
         return;
     }
-    while (s3d_engine_busy(virge)) {
+    while (s3d_engine_busy(virge) && !is_quit) { /* KairoX86#301: or the machine is over (an engine thread's fatal error) */
         thread_reset_event(virge->not_full_event);
         wake_render_threads(virge);
         if (s3d_engine_busy(virge))

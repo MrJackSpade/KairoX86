@@ -533,7 +533,7 @@ wake_fifo_thread(const s3_t *s3)
 static void
 s3_wait_fifo_idle(const s3_t *s3)
 {
-    while (!FIFO_EMPTY) {
+    while (!FIFO_EMPTY && !is_quit) { /* KairoX86#301: or the machine is over (an engine thread's fatal error) */
         wake_fifo_thread(s3);
         thread_wait_event(s3->fifo_not_full_event, 1);
     }

@@ -307,6 +307,8 @@ voodoo_wait_for_render_thread_idle(voodoo_t *voodoo)
         return;
     }
     while (!PARAM_EMPTY(0) || (voodoo->render_threads >= 2 && !PARAM_EMPTY(1)) || (voodoo->render_threads == 4 && (!PARAM_EMPTY(2) || !PARAM_EMPTY(3))) || RENDER_VOODOO_BUSY(voodoo, 0) || (voodoo->render_threads >= 2 && RENDER_VOODOO_BUSY(voodoo, 1)) || (voodoo->render_threads == 4 && (RENDER_VOODOO_BUSY(voodoo, 2) || RENDER_VOODOO_BUSY(voodoo, 3)))) {
+        if (is_quit) /* KairoX86#301: the machine is over (an engine thread's fatal error) */
+            return;
         voodoo_wake_render_thread(voodoo);
         if (!PARAM_EMPTY(0) || RENDER_VOODOO_BUSY(voodoo, 0))
             thread_wait_event(voodoo->render_not_full_event[0], 1);

@@ -4327,6 +4327,56 @@ KAIROX86_GPU_IBM8514 = [
      '    if (dev) {\n        ibm8514_k_close(svga); /* KairoX86#238 */\n        if (kairo_gpu_on)\n            kairo_gpu_free(dev->vram);\n        else\n            free(dev->vram);\n        free(dev->changedvram);\n'),
 ]
 
+# KairoX86#299: a Matrox line is drawn once the drawing engine has run out of the work it can do on its own thread,
+# its FIFO and its DMA (svga->render_sync), so the picture follows the guest's order of work, not the host's thread.
+KAIROX86_MGA_DISPLAY_SETTLE = [
+    ('86box/src/video/vid_mga.c',
+     '    while (!FIFO_EMPTY) {\n        wake_fifo_thread_now(mystique);\n',
+     "    while (!FIFO_EMPTY) {\n        wake_fifo_thread_now(mystique);\n        thread_wait_event(mystique->fifo_not_full_event, 1);\n    }\n}\n\n/* KairoX86#299: whether the engine's DMA has work it can do on its own thread: run_dma also waits for the machine's\n   thread (a SOFTRAP or the end of DMA to report, the status to be read) */\nstatic int\nmystique_dma_running(const mystique_t *mystique)\n{\n    return (mystique->dma.state != MGA_DMA_STATE_IDLE) && !mystique->softrap_pending && !mystique->endprdmasts_pending &&\n           mystique->softrap_status_read;\n}\n\n/* KairoX86#299: a line is drawn once the drawing engine has run out of the work it can do, its FIFO and its DMA\n   (svga->render_sync), so the picture follows the guest's order of work, not the host's thread; as the Mach64's, the\n   ViRGE's and the Voodoos' displays settle */\nstatic void\nmystique_render_sync(svga_t *svga)\n{\n    mystique_t *mystique = (mystique_t *) svga->priv;\n\n    while (!FIFO_EMPTY || mystique_dma_running(mystique)) {\n        wake_fifo_thread_now(mystique);\n"),
+    ('86box/src/video/vid_mga.c',
+     '    mystique->svga.vsync_callback = mystique_vsync_callback;\n\n',
+     '    mystique->svga.vsync_callback = mystique_vsync_callback;\n    mystique->svga.render_sync    = mystique_render_sync; /* KairoX86#299 */\n\n'),
+]
+
+# KairoX86#301: the machine thread's waits on a drawing engine's thread (the S3's, the ViRGE's, the Voodoos' and the
+# Matrox's FIFO and render waits, the display settles) end once the machine is over, so an engine's fatal error stops
+# the machine with its message instead of hanging it.
+KAIROX86_ENGINE_WAIT_QUIT = [
+    ('86box/src/video/vid_s3.c',
+     '{\n    while (!FIFO_EMPTY) {\n        wake_fifo_thread(s3);\n',
+     "{\n    while (!FIFO_EMPTY && !is_quit) { /* KairoX86#301: or the machine is over (an engine thread's fatal error) */\n        wake_fifo_thread(s3);\n"),
+    ('86box/src/video/vid_s3_virge.c',
+     '{\n    while (!FIFO_EMPTY) {\n        wake_fifo_thread(virge);\n',
+     "{\n    while (!FIFO_EMPTY && !is_quit) { /* KairoX86#301: or the machine is over (an engine thread's fatal error) */\n        wake_fifo_thread(virge);\n"),
+    ('86box/src/video/vid_s3_virge.c',
+     '    }\n    while (s3d_engine_busy(virge)) {\n        thread_reset_event(virge->not_full_event);\n',
+     "    }\n    while (s3d_engine_busy(virge) && !is_quit) { /* KairoX86#301: or the machine is over (an engine thread's fatal error) */\n        thread_reset_event(virge->not_full_event);\n"),
+    ('86box/src/include/86box/vid_voodoo_render.h',
+     '    while (!PARAM_EMPTY(0) || (voodoo->render_threads >= 2 && !PARAM_EMPTY(1)) || (voodoo->render_threads == 4 && (!PARAM_EMPTY(2) || !PARAM_EMPTY(3))) || RENDER_VOODOO_BUSY(voodoo, 0) || (voodoo->render_threads >= 2 && RENDER_VOODOO_BUSY(voodoo, 1)) || (voodoo->render_threads == 4 && (RENDER_VOODOO_BUSY(voodoo, 2) || RENDER_VOODOO_BUSY(voodoo, 3)))) {\n        voodoo_wake_render_thread(voodoo);\n',
+     "    while (!PARAM_EMPTY(0) || (voodoo->render_threads >= 2 && !PARAM_EMPTY(1)) || (voodoo->render_threads == 4 && (!PARAM_EMPTY(2) || !PARAM_EMPTY(3))) || RENDER_VOODOO_BUSY(voodoo, 0) || (voodoo->render_threads >= 2 && RENDER_VOODOO_BUSY(voodoo, 1)) || (voodoo->render_threads == 4 && (RENDER_VOODOO_BUSY(voodoo, 2) || RENDER_VOODOO_BUSY(voodoo, 3)))) {\n        if (is_quit) /* KairoX86#301: the machine is over (an engine thread's fatal error) */\n            return;\n        voodoo_wake_render_thread(voodoo);\n"),
+    ('86box/src/video/vid_mga.c',
+     '{\n    while (!FIFO_EMPTY) {\n        wake_fifo_thread_now(mystique);\n',
+     "{\n    while (!FIFO_EMPTY && !is_quit) { /* KairoX86#301: or the machine is over (an engine thread's fatal error) */\n        wake_fifo_thread_now(mystique);\n"),
+    ('86box/src/video/vid_mga.c',
+     '\n    while (!FIFO_EMPTY || mystique_dma_running(mystique)) {\n        wake_fifo_thread_now(mystique);\n',
+     "\n    while ((!FIFO_EMPTY || mystique_dma_running(mystique)) && !is_quit) { /* KairoX86#301: or the machine is over (an engine thread's fatal error) */\n        wake_fifo_thread_now(mystique);\n"),
+]
+
+# KairoX86#298: a Matrox Gouraud line at 24 bpp stores each pixel at its byte offset, as the read before it does, not
+# 4 times that far into memory.
+KAIROX86_MGA_LINE24 = [
+    ('86box/src/video/vid_mga.c',
+     '\n                                ((uint32_t *) svga->vram)[((mystique->dwgreg.ydst_lin + x) * 3) & mystique->vram_mask] = dst | (old_dst & 0xFF000000);\n                                svga->changedvram[(((mystique->dwgreg.ydst_lin + x) * 3) & mystique->vram_mask) >> 12] = changeframecount;\n',
+     '\n                                *(uint32_t *) &svga->vram[((mystique->dwgreg.ydst_lin + x) * 3) & mystique->vram_mask] = dst | (old_dst & 0xFF000000); /* KairoX86#298 */\n                                svga->changedvram[(((mystique->dwgreg.ydst_lin + x) * 3) & mystique->vram_mask) >> 12] = changeframecount;\n'),
+]
+
+# KairoX86#300: a Matrox 32 bpp block mono expansion marks the display page its pixel is in (shift 10, not 11).
+KAIROX86_MGA_PAGE32 = [
+    ('86box/src/video/vid_mga.c',
+     '                                            ((uint32_t *) svga->vram)[(mystique->dwgreg.ydst_lin + x) & mystique->vram_mask_l] = (svga->vram[byte_addr] & (1 << bit_offset)) ? mystique->dwgreg.fcol : mystique->dwgreg.bcol;\n                                        svga->changedvram[((mystique->dwgreg.ydst_lin + x) & mystique->vram_mask_l) >> 11] = changeframecount;\n                                        break;\n',
+     '                                            ((uint32_t *) svga->vram)[(mystique->dwgreg.ydst_lin + x) & mystique->vram_mask_l] = (svga->vram[byte_addr] & (1 << bit_offset)) ? mystique->dwgreg.fcol : mystique->dwgreg.bcol;\n                                        svga->changedvram[((mystique->dwgreg.ydst_lin + x) & mystique->vram_mask_l) >> 10] = changeframecount; /* KairoX86#300 */\n                                        break;\n'),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -4388,6 +4438,10 @@ PATCHES = {
     'kairox86-gpu-s3': KAIROX86_GPU_S3,
     'kairox86-mach64-2d-open': KAIROX86_MACH64_2D_OPEN,
     'kairox86-gpu-ibm8514': KAIROX86_GPU_IBM8514,
+    'kairox86-mga-display-settle': KAIROX86_MGA_DISPLAY_SETTLE,
+    'kairox86-engine-wait-quit': KAIROX86_ENGINE_WAIT_QUIT,
+    'kairox86-mga-line24': KAIROX86_MGA_LINE24,
+    'kairox86-mga-page32': KAIROX86_MGA_PAGE32,
     'kairox86-gpu-cga': KAIROX86_GPU_CGA,
     'kairox86-whole-frames': KAIROX86_WHOLE_FRAMES,
     'kairox86-gpu-mda': KAIROX86_GPU_MDA,

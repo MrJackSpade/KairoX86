@@ -3223,7 +3223,30 @@ mystique_wake_timer(void *priv)
 static void
 wait_fifo_idle(mystique_t *mystique)
 {
-    while (!FIFO_EMPTY) {
+    while (!FIFO_EMPTY && !is_quit) { /* KairoX86#301: or the machine is over (an engine thread's fatal error) */
+        wake_fifo_thread_now(mystique);
+        thread_wait_event(mystique->fifo_not_full_event, 1);
+    }
+}
+
+/* KairoX86#299: whether the engine's DMA has work it can do on its own thread: run_dma also waits for the machine's
+   thread (a SOFTRAP or the end of DMA to report, the status to be read) */
+static int
+mystique_dma_running(const mystique_t *mystique)
+{
+    return (mystique->dma.state != MGA_DMA_STATE_IDLE) && !mystique->softrap_pending && !mystique->endprdmasts_pending &&
+           mystique->softrap_status_read;
+}
+
+/* KairoX86#299: a line is drawn once the drawing engine has run out of the work it can do, its FIFO and its DMA
+   (svga->render_sync), so the picture follows the guest's order of work, not the host's thread; as the Mach64's, the
+   ViRGE's and the Voodoos' displays settle */
+static void
+mystique_render_sync(svga_t *svga)
+{
+    mystique_t *mystique = (mystique_t *) svga->priv;
+
+    while ((!FIFO_EMPTY || mystique_dma_running(mystique)) && !is_quit) { /* KairoX86#301: or the machine is over (an engine thread's fatal error) */
         wake_fifo_thread_now(mystique);
         thread_wait_event(mystique->fifo_not_full_event, 1);
     }
@@ -4671,7 +4694,7 @@ blit_line(mystique_t *mystique, int closed, int autoline)
                                     b = (mystique->dwgreg.dr[12] >> 15) & 0xff;
                                 dst = (r << 16) | (g << 8) | b;
 
-                                ((uint32_t *) svga->vram)[((mystique->dwgreg.ydst_lin + x) * 3) & mystique->vram_mask] = dst | (old_dst & 0xFF000000);
+                                *(uint32_t *) &svga->vram[((mystique->dwgreg.ydst_lin + x) * 3) & mystique->vram_mask] = dst | (old_dst & 0xFF000000); /* KairoX86#298 */
                                 svga->changedvram[(((mystique->dwgreg.ydst_lin + x) * 3) & mystique->vram_mask) >> 12] = changeframecount;
                                 break;
 
@@ -5698,7 +5721,7 @@ blit_bitblt(mystique_t *mystique)
                                                 ((uint32_t *) svga->vram)[(mystique->dwgreg.ydst_lin + x) & mystique->vram_mask_l] = mystique->dwgreg.fcol;
                                         } else
                                             ((uint32_t *) svga->vram)[(mystique->dwgreg.ydst_lin + x) & mystique->vram_mask_l] = (svga->vram[byte_addr] & (1 << bit_offset)) ? mystique->dwgreg.fcol : mystique->dwgreg.bcol;
-                                        svga->changedvram[((mystique->dwgreg.ydst_lin + x) & mystique->vram_mask_l) >> 11] = changeframecount;
+                                        svga->changedvram[((mystique->dwgreg.ydst_lin + x) & mystique->vram_mask_l) >> 10] = changeframecount; /* KairoX86#300 */
                                         break;
 
                                     default:
@@ -6927,6 +6950,7 @@ mystique_init(const device_t *info)
     mystique->softrap_status_read = 1;
 
     mystique->svga.vsync_callback = mystique_vsync_callback;
+    mystique->svga.render_sync    = mystique_render_sync; /* KairoX86#299 */
 
     if (mystique->type != MGA_2064W && mystique->type != MGA_2164W)
         mystique->svga.conv_16to32    = mystique_conv_16to32;
