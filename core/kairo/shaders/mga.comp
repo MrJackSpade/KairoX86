@@ -1,0 +1,63 @@
+#version 450
+#extension GL_EXT_control_flow_attributes : require
+/*
+ * The Matrox Millennium and Mystique's drawing engine on the GPU (KairoX86#264): 86Box's pixel stores of the engine's
+ * walks (vid_mga.c: blits, trapezoids, lines, ILOAD), each a value stored or put through the boolean operation with
+ * the destination, for runs of pixels (kairo_seg_run) of 1 to 4 bytes, on the drawing engines' shared batches
+ * (seg.glsl). The walk stays the CPU's; each pixel's kind and value are its stream words (86box/kairo_gpu_mga.h).
+ * A 3-byte pixel keeps the byte after it, as the C path's 32-bit store does.
+ *
+ * Copyright 2026 MrJackSpade. GPL-2.0-or-later.
+ */
+#include "seg.glsl"
+
+const uint MG_BOP = 0u, MG_BYTES = 1u, MG_WORDS = 4u;
+const uint MGK_BOP = 1u, MGK_BOP_BGR = 2u;
+
+/* DWGCTL's boolean operation (vid_mga.c bitop): s the source, d the destination */
+uint bitop(uint code, uint s, uint d)
+{
+    switch (code) {
+        case 0x0u: return 0u;
+        case 0x1u: return ~(d | s);
+        case 0x2u: return d & ~s;
+        case 0x3u: return ~s;
+        case 0x4u: return ~d & s;
+        case 0x5u: return ~d;
+        case 0x6u: return d ^ s;
+        case 0x7u: return ~(d & s);
+        case 0x8u: return d & s;
+        case 0x9u: return ~(d ^ s);
+        case 0xau: return d;
+        case 0xbu: return d | ~s;
+        case 0xcu: return s;
+        case 0xdu: return ~d | s;
+        case 0xeu: return d | s;
+        default: return 0xffffffffu;
+    }
+}
+
+void card_pixels(uint seg, uint op, uint row, uint first, int i0, int i1)
+{
+    const uint o    = op * MG_WORDS;
+    const uint pb   = ops[o + MG_BYTES];
+    const uint code = ops[o + MG_BOP];
+    const int  dir  = int(segs[seg * KG_WORDS + KG_DIR]);
+    const uint d0   = segs[seg * KG_WORDS + KG_BIT] >> 3;
+    [[dont_unroll]] for (int n = i0; n < i1; n++) {
+        const uint w    = row + uint(n) * 2u;
+        const uint kind = stream[w];
+        uint       v    = stream[w + 1u];
+        const uint a    = d0 + uint((int(first) + n * dir) * int(pb));
+        if (kind != 0u) {
+            uint old = 0u;
+            for (uint i = 0u; i < pb; i++)
+                old |= rd8(a + i) << (8u * i);
+            if (kind == MGK_BOP_BGR)
+                old = ((old >> 16) & 0xffu) | (old & 0xff00u) | ((old & 0xffu) << 16);
+            v = bitop(code, v, old);
+        }
+        for (uint i = 0u; i < pb; i++)
+            wr8(a + i, v >> (8u * i));
+    }
+}
