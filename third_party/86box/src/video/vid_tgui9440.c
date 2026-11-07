@@ -1204,26 +1204,36 @@ tgui_overlay_update(tgui_t *tgui)
 }
 
 static __inline int
-tgui_overlay_key(const tgui_t *tgui, uint32_t col)
+tgui_overlay_key(const tgui_t *tgui, uint32_t *rendered_key, uint32_t *rendered_mask)
 {
     const svga_t *svga = &tgui->svga;
     uint32_t      key  = tgui->ext_regs[0x30] | (tgui->ext_regs[0x31] << 8) | (tgui->ext_regs[0x32] << 16);
     uint32_t      mask = tgui->ext_regs[0x34] | (tgui->ext_regs[0x35] << 8) | (tgui->ext_regs[0x36] << 16);
 
     if (!(tgui->ext_regs[0x37] & 0x01))
-        return 1;
+        return 0;
 
-    /*The key holds raw frame buffer bytes; compare against the rendered colour.*/
+    /*The key holds raw frame buffer bytes; compare against the rendered colour: a pixel shows the overlay where
+      (rendered & *rendered_mask) == *rendered_key (KairoX86#233: as one key for the line, so the GPU can compare it)*/
     switch (svga->bpp) {
         case 8:
-            return (col & 0xffffff) == (svga->pallook[key & 0xff] & 0xffffff);
+            *rendered_mask = 0xffffff;
+            *rendered_key  = svga->pallook[key & 0xff] & 0xffffff;
+            break;
         case 15:
-            return (col & 0xffffff) == (video_15to32[key & 0x7fff] & 0xffffff);
+            *rendered_mask = 0xffffff;
+            *rendered_key  = video_15to32[key & 0x7fff] & 0xffffff;
+            break;
         case 16:
-            return (col & 0xffffff) == (video_16to32[key & 0xffff] & 0xffffff);
+            *rendered_mask = 0xffffff;
+            *rendered_key  = video_16to32[key & 0xffff] & 0xffffff;
+            break;
         default:
-            return !((col ^ key) & mask & 0xffffff);
+            *rendered_mask = mask & 0xffffff;
+            *rendered_key  = key & mask & 0xffffff;
+            break;
     }
+    return 1;
 }
 
 #define CLAMP(x) (((x) < 0) ? 0 : (((x) > 0xff) ? 0xff : (x)))
@@ -1286,11 +1296,17 @@ tgui_overlay_draw(svga_t *svga, int displine)
     if (x_end > svga->hdisp)
         x_end = svga->hdisp;
 
+    uint32_t  key      = 0;
+    uint32_t  key_mask = 0;
+    const int keyed    = tgui_overlay_key(tgui, &key, &key_mask);
+
     for (int x = svga->overlay_latch.x; x < x_end; x++, h_acc += tgui->ovl.hstep) {
         uint32_t sx = h_acc >> 16;
         int      fx = h_filt ? ((h_acc >> 8) & 0xff) : 0;
 
-        if ((x < 0) || !tgui_overlay_key(tgui, p[x]))
+        uint32_t value;
+
+        if (x < 0)
             continue;
 
         tgui_overlay_fetch_h(svga, addr, sx, sx_max, fx, rgb, c);
@@ -1301,7 +1317,7 @@ tgui_overlay_draw(svga_t *svga, int displine)
         }
 
         if (rgb)
-            p[x] = (c[0] << 16) | (c[1] << 8) | c[2];
+            value = (c[0] << 16) | (c[1] << 8) | c[2];
         else {
             int y = (c[0] - 16) * 298;
             int u = c[1] - 128;
@@ -1310,8 +1326,13 @@ tgui_overlay_draw(svga_t *svga, int displine)
             int g = (y - 100 * u - 208 * v + 128) >> 8;
             int b = (y + 516 * u + 128) >> 8;
 
-            p[x] = (CLAMP(r) << 16) | (CLAMP(g) << 8) | CLAMP(b);
+            value = (CLAMP(r) << 16) | (CLAMP(g) << 8) | CLAMP(b);
         }
+        /* KairoX86#233: where the key does not match, the line's own pixel stays */
+        if (keyed)
+            svga_overlay_put_keyed(svga, &p[x], value, key, key_mask);
+        else
+            svga_overlay_put(svga, &p[x], value);
     }
 
     svga->overlay_latch.v_acc += tgui->ovl.vstep;

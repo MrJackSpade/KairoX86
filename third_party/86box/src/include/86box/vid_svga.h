@@ -293,6 +293,12 @@ typedef struct svga_t {
     uint8_t render_async;
     /* KairoX86#233: the line's hardware cursors were taken as a patch for the GPU (vid_svga.c svga_cursor_probe) */
     uint8_t kairo_cursor_patched;
+    /* KairoX86#233: the line was queued for the GPU with its cursors and overlay as a patch over it */
+    uint8_t kairo_line_patched;
+    /* KairoX86#233: the line's overlay goes into its GPU patch (svga_overlay_put and the rest, below), not its pixels */
+    uint8_t   kairo_overlay_patching;
+    uint32_t *kairo_overlay_row; /* the row it draws on, and its width */
+    int       kairo_overlay_w;
     uint8_t color_2bpp;
     uint8_t ksc5601_sbyte_mask;
     uint8_t ksc5601_udc_area_msb[2];
@@ -369,6 +375,44 @@ typedef struct svga_t {
 
     void *     local;
 } svga_t;
+
+/* KairoX86#233: every overlay (svga_t overlay_draw) changes the line's pixels only through these, so with Hardware
+   acceleration a line under an overlay goes to the GPU too, the overlay as a patch over it (vid_svga.c). Without it,
+   each does to the pixel at p what it says. */
+void svga_overlay_patch_put(svga_t *svga, uint32_t *p, uint32_t value);
+void svga_overlay_patch_and(svga_t *svga, uint32_t *p, uint32_t mask);
+void svga_overlay_patch_put_keyed(svga_t *svga, uint32_t *p, uint32_t value, uint32_t key, uint32_t key_mask);
+
+/* The pixel becomes value */
+static inline void
+svga_overlay_put(svga_t *svga, uint32_t *p, uint32_t value)
+{
+    if (svga->kairo_overlay_patching)
+        svga_overlay_patch_put(svga, p, value);
+    else
+        *p = value;
+}
+
+/* The pixel's bits outside mask are cleared */
+static inline void
+svga_overlay_and(svga_t *svga, uint32_t *p, uint32_t mask)
+{
+    if (svga->kairo_overlay_patching)
+        svga_overlay_patch_and(svga, p, mask);
+    else
+        *p &= mask;
+}
+
+/* The pixel becomes value where the line drew a colour matching the key ((pixel & key_mask) == key), before any
+   overlay pixel changed it; one key a line */
+static inline void
+svga_overlay_put_keyed(svga_t *svga, uint32_t *p, uint32_t value, uint32_t key, uint32_t key_mask)
+{
+    if (svga->kairo_overlay_patching)
+        svga_overlay_patch_put_keyed(svga, p, value, key, key_mask);
+    else if ((*p & key_mask) == key)
+        *p = value;
+}
 
 extern void     ibm8514_set_poll(svga_t *svga);
 extern void     ibm8514_poll(void *priv);

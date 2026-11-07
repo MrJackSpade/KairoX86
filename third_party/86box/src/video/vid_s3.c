@@ -3043,7 +3043,7 @@ s3_trio64v_overlay_draw(svga_t *svga, int displine)
 
     for (int x = 0; x < x_size; x++) {
         if (s3_trio64v_colorkey(s3, offset + x, displine - svga->y_add))
-            *p++ = r[x_read] | (g[x_read] << 8) | (b[x_read] << 16);
+            svga_overlay_put(svga, p++, r[x_read] | (g[x_read] << 8) | (b[x_read] << 16));
         else
             p++;
 

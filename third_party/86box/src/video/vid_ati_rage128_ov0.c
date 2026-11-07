@@ -1072,7 +1072,7 @@ rage128_overlay_draw(svga_t *svga, int displine)
             int show_video = mix_and ? (gpass && vpass) : (gpass || vpass);
 
             if (show_video)
-                rage128_hdbl_put(line + svga->x_add, sh, x1 + i, rgb);
+                rage128_hdbl_overlay_put(svga, line + svga->x_add, sh, x1 + i, rgb);
         }
         return;
     }
@@ -1212,7 +1212,7 @@ rage128_overlay_draw(svga_t *svga, int displine)
             int show_video = mix_and ? (gpass && vpass) : (gpass || vpass);
 
             if (show_video)
-                rage128_hdbl_put(line + svga->x_add, sh, x1 + i, rgb);
+                rage128_hdbl_overlay_put(svga, line + svga->x_add, sh, x1 + i, rgb);
         }
     }
     if (vbad)

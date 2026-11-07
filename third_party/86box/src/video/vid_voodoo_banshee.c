@@ -2842,7 +2842,7 @@ banshee_overlay_draw(svga_t *svga, int displine)
                         chroma_test_passed = banshee_chroma_key(banshee, svga->overlay_latch.x + x, displine - svga->y_add);
 
                         if (chroma_test_passed)
-                            p[x] = (r << 16) | (g << 8) | b;
+                            svga_overlay_put(svga, &p[x], (r << 16) | (g << 8) | b);
 
                         src_x += voodoo->overlay.vidOverlayDudx;
                     }
@@ -2856,7 +2856,7 @@ banshee_overlay_draw(svga_t *svga, int displine)
                         chroma_test_passed = banshee_chroma_key(banshee, svga->overlay_latch.x + x, displine - svga->y_add);
 
                         if (chroma_test_passed)
-                            p[x] = (r << 16) | (g << 8) | b;
+                            svga_overlay_put(svga, &p[x], (r << 16) | (g << 8) | b);
                     }
                 }
                 break;
@@ -2917,7 +2917,7 @@ banshee_overlay_draw(svga_t *svga, int displine)
                         chroma_test_passed = banshee_chroma_key(banshee, svga->overlay_latch.x + x, displine - svga->y_add);
 
                         if (chroma_test_passed)
-                            p[x] = (fil[x * 3 + 2] << 16) | (fil[x * 3 + 1] << 8) | fil[x * 3];
+                            svga_overlay_put(svga, &p[x], (fil[x * 3 + 2] << 16) | (fil[x * 3 + 1] << 8) | fil[x * 3]);
                     }
                 } else /* filter disabled by emulator option */
                 {
@@ -2925,7 +2925,7 @@ banshee_overlay_draw(svga_t *svga, int displine)
                         for (x = 0; x < svga->overlay_latch.cur_xsize; x++) {
                             chroma_test_passed = banshee_chroma_key(banshee, svga->overlay_latch.x + x, displine - svga->y_add);
                             if (chroma_test_passed)
-                                p[x] = banshee->overlay_buffer[0][src_x >> 20];
+                                svga_overlay_put(svga, &p[x], banshee->overlay_buffer[0][src_x >> 20]);
 
                             src_x += voodoo->overlay.vidOverlayDudx;
                         }
@@ -2933,7 +2933,7 @@ banshee_overlay_draw(svga_t *svga, int displine)
                         for (x = 0; x < svga->overlay_latch.cur_xsize; x++) {
                             chroma_test_passed = banshee_chroma_key(banshee, svga->overlay_latch.x + x, displine - svga->y_add);
                             if (chroma_test_passed)
-                                p[x] = banshee->overlay_buffer[0][x];
+                                svga_overlay_put(svga, &p[x], banshee->overlay_buffer[0][x]);
                         }
                     }
                 }
@@ -2991,7 +2991,7 @@ banshee_overlay_draw(svga_t *svga, int displine)
                         for (x = 0; x < svga->overlay_latch.cur_xsize; x++) {
                             chroma_test_passed = banshee_chroma_key(banshee, svga->overlay_latch.x + x, displine - svga->y_add);
                             if (chroma_test_passed)
-                                p[x] = (fil[(src_x >> 20) * 3 + 2] << 16) | (fil[(src_x >> 20) * 3 + 1] << 8) | fil[(src_x >> 20) * 3];
+                                svga_overlay_put(svga, &p[x], (fil[(src_x >> 20) * 3 + 2] << 16) | (fil[(src_x >> 20) * 3 + 1] << 8) | fil[(src_x >> 20) * 3]);
 
                             src_x += voodoo->overlay.vidOverlayDudx;
                         }
@@ -2999,7 +2999,7 @@ banshee_overlay_draw(svga_t *svga, int displine)
                         for (x = 0; x < svga->overlay_latch.cur_xsize; x++) {
                             chroma_test_passed = banshee_chroma_key(banshee, svga->overlay_latch.x + x, displine - svga->y_add);
                             if (chroma_test_passed)
-                                p[x] = (fil[x * 3 + 2] << 16) | (fil[x * 3 + 1] << 8) | fil[x * 3];
+                                svga_overlay_put(svga, &p[x], (fil[x * 3 + 2] << 16) | (fil[x * 3 + 1] << 8) | fil[x * 3]);
                         }
                     }
                 } else /* filter disabled by emulator option */
@@ -3008,7 +3008,7 @@ banshee_overlay_draw(svga_t *svga, int displine)
                         for (x = 0; x < svga->overlay_latch.cur_xsize; x++) {
                             chroma_test_passed = banshee_chroma_key(banshee, svga->overlay_latch.x + x, displine - svga->y_add);
                             if (chroma_test_passed)
-                                p[x] = banshee->overlay_buffer[0][src_x >> 20];
+                                svga_overlay_put(svga, &p[x], banshee->overlay_buffer[0][src_x >> 20]);
 
                             src_x += voodoo->overlay.vidOverlayDudx;
                         }
@@ -3016,7 +3016,7 @@ banshee_overlay_draw(svga_t *svga, int displine)
                         for (x = 0; x < svga->overlay_latch.cur_xsize; x++) {
                             chroma_test_passed = banshee_chroma_key(banshee, svga->overlay_latch.x + x, displine - svga->y_add);
                             if (chroma_test_passed)
-                                p[x] = banshee->overlay_buffer[0][x];
+                                svga_overlay_put(svga, &p[x], banshee->overlay_buffer[0][x]);
                         }
                     }
                 }
@@ -3028,7 +3028,7 @@ banshee_overlay_draw(svga_t *svga, int displine)
                     for (x = 0; x < svga->overlay_latch.cur_xsize; x++) {
                         chroma_test_passed = banshee_chroma_key(banshee, svga->overlay_latch.x + x, displine - svga->y_add);
                         if (chroma_test_passed)
-                            p[x] = banshee->overlay_buffer[0][src_x >> 20];
+                            svga_overlay_put(svga, &p[x], banshee->overlay_buffer[0][src_x >> 20]);
 
                         src_x += voodoo->overlay.vidOverlayDudx;
                     }
@@ -3036,7 +3036,7 @@ banshee_overlay_draw(svga_t *svga, int displine)
                     for (x = 0; x < svga->overlay_latch.cur_xsize; x++) {
                         chroma_test_passed = banshee_chroma_key(banshee, svga->overlay_latch.x + x, displine - svga->y_add);
                         if (chroma_test_passed)
-                            p[x] = banshee->overlay_buffer[0][x];
+                            svga_overlay_put(svga, &p[x], banshee->overlay_buffer[0][x]);
                     }
                 }
                 break;

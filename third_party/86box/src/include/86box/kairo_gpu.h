@@ -120,13 +120,20 @@ typedef struct kairo_gpu_scan {
     uint32_t a;       /* the kind's own parameter */
     uint32_t skip;    /* the first pixels not drawn: the CPU drew over them after the line was queued */
     uint32_t flags;   /* KAIRO_SCAN_WIDE */
-    /* A patch over the drawn pixels (a hardware cursor, kairo_gpu_scan_patch): pixels patch_from to patch_from +
-       patch_count - 1 of the line (0: none) each become (v & A) ^ X, the pairs A, X from dword patch_src on */
+    /* A patch over the drawn pixels (hardware cursors and overlays, kairo_gpu_scan_patch): pixels patch_from to
+       patch_from + patch_count - 1 of the line (0: none), four dwords each from dword patch_src on (A, X, K, V): a
+       pixel with K set whose drawn value v matches the line's key ((v & patch_key_mask) == patch_key) becomes V,
+       any other (v & A) ^ X */
     uint32_t patch_from;
     uint32_t patch_count;
     uint32_t patch_src;
-    uint32_t reserved;
+    uint32_t patch_key;
+    uint32_t patch_key_mask;
+    uint32_t reserved[3];
 } kairo_gpu_scan_t;
+
+/* The dwords of each pixel of a patch: A, X, K, V */
+#define KAIRO_PATCH_WORDS 4
 
 enum {
     /* Packed 8 bits a pixel, 4 a dword; a: the DAC mask; palette: 256 colours */
@@ -184,11 +191,20 @@ uint32_t *kairo_gpu_scan(const void *bitmap, kairo_gpu_buffer_t *bitmap_gpu, uin
                          uint32_t b, uint32_t flags);
 /* The line kairo_gpu_scan gave is written: the queue unlocks. */
 void kairo_gpu_scan_commit(void);
-/* Pixels start to start + count - 1 of bitmap, of the line queued last for them, become (v & ax[2k]) ^ ax[2k + 1]
-   when it is drawn (a hardware cursor over it: KairoX86#233). Returns the pixels the patch took ([*from, *to); none
-   when no queued line draws them): the caller applies the rest to the pixels the CPU drew. One patch a line. */
-void kairo_gpu_scan_patch(const void *bitmap, uint32_t start, uint32_t count, const uint32_t *ax, uint32_t *from,
-                          uint32_t *to);
+/* Pixels start to start + count - 1 of bitmap, of the line queued last for them, take the patch when it is drawn
+   (hardware cursors and overlays over it: KairoX86#233): pixel k's dwords ax[4k] to ax[4k + 3] (A, X, K, V), with
+   the line's key and key_mask (kairo_gpu_scan_t). Returns the pixels the patch took ([*from, *to); none when no
+   queued line draws them): the caller applies the rest to the pixels the CPU drew. One patch a line. */
+void kairo_gpu_scan_patch(const void *bitmap, uint32_t start, uint32_t count, const uint32_t *ax, uint32_t key,
+                          uint32_t key_mask, uint32_t *from, uint32_t *to);
+/* One pixel as a patch takes it (the CPU's half of kairo_gpu_scan_patch) */
+static inline uint32_t
+kairo_gpu_patch_pixel(uint32_t v, const uint32_t *axkv, uint32_t key, uint32_t key_mask)
+{
+    if (axkv[2] && ((v & key_mask) == key))
+        return axkv[3];
+    return (v & axkv[0]) ^ axkv[1];
+}
 /* Draws every queued line and waits until they are drawn. */
 void kairo_gpu_scan_drain(void);
 /* The CPU is about to draw pixels start to start + count - 1 of bitmap: a queued line that draws any of

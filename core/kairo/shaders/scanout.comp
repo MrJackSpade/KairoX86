@@ -25,10 +25,14 @@ struct Scan {
     uint a;
     uint skip;
     uint flags;
-    uint patch_from;  // a patch over the drawn pixels (a hardware cursor): (v & A) ^ X
-    uint patch_count;
+    uint patch_from;  // a patch over the drawn pixels (cursors, overlays): A, X, K, V a pixel; V where K is set
+    uint patch_count; // and the drawn pixel matches the line's key, else (v & A) ^ X
     uint patch_src;
-    uint reserved;
+    uint patch_key;
+    uint patch_key_mask;
+    uint reserved0;
+    uint reserved1;
+    uint reserved2;
 };
 
 const uint SCAN_8 = 1u;
@@ -143,8 +147,13 @@ void main() {
             v = colour(palette, on ? ((cell >> 8) & 0xffu) : ((cell >> 16) & 0xffu));
         }
         const uint p = i - lines[j].patch_from;
-        if (p < lines[j].patch_count)
-            v = (v & words[lines[j].patch_src + 2u * p]) ^ words[lines[j].patch_src + 2u * p + 1u];
+        if (p < lines[j].patch_count) {
+            const uint w = lines[j].patch_src + 4u * p;
+            if (words[w + 2u] != 0u && (v & lines[j].patch_key_mask) == lines[j].patch_key)
+                v = words[w + 3u];
+            else
+                v = (v & words[w]) ^ words[w + 1u];
+        }
         pixels[start + i] = v;
     }
 }

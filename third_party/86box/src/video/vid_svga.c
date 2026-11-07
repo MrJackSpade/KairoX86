@@ -1530,9 +1530,122 @@ svga_cursor_probe(svga_t *svga)
     return 1;
 }
 
-/* After the line is drawn (queued): the cursors' patch, on the GPU's line where it draws them, else on the pixels */
+/* The line's patch (KAIRO_PATCH_WORDS a pixel: A, X, K, V), its overlay's first and its cursors' after, over pixels
+   [kairo_line_lo, kairo_line_hi), with the overlay's key */
+static uint32_t kairo_line_patch[KAIRO_PATCH_WORDS * KAIRO_CURSOR_ROW];
+static int      kairo_line_lo;
+static int      kairo_line_hi;
+static uint32_t kairo_line_key;
+static uint32_t kairo_line_key_mask;
+static int      kairo_line_keyed;
+
 static void
-svga_cursor_patch(svga_t *svga)
+svga_line_patch_clear(int w)
+{
+    for (int x = 0; x < w; x++) {
+        uint32_t *axkv = &kairo_line_patch[KAIRO_PATCH_WORDS * x];
+        axkv[0]        = 0xffffffffu;
+        axkv[1]        = 0;
+        axkv[2]        = 0;
+        axkv[3]        = 0;
+    }
+    kairo_line_lo    = w;
+    kairo_line_hi    = 0;
+    kairo_line_keyed = 0;
+}
+
+static void
+svga_line_patch_widen(int x)
+{
+    if (x < kairo_line_lo)
+        kairo_line_lo = x;
+    if (x >= kairo_line_hi)
+        kairo_line_hi = x + 1;
+}
+
+/* The overlay's pixel p: its place in the line's patch, or -1 past the row (where it changes the bitmap as the CPU
+   would, after the GPU drew what it had queued there) */
+static int
+svga_overlay_column(svga_t *svga, uint32_t *p)
+{
+    const ptrdiff_t x = p - svga->kairo_overlay_row;
+
+    if ((x >= 0) && (x < svga->kairo_overlay_w))
+        return (int) x;
+    bitmap_t *bitmap = svga->monitor->target_buffer;
+    kairo_gpu_scan_touch(bitmap, (uint32_t) (p - bitmap->dat), 1);
+    return -1;
+}
+
+void
+svga_overlay_patch_put(svga_t *svga, uint32_t *p, uint32_t value)
+{
+    const int x = svga_overlay_column(svga, p);
+
+    if (x < 0) {
+        *p = value;
+        return;
+    }
+    uint32_t *axkv = &kairo_line_patch[KAIRO_PATCH_WORDS * x];
+    axkv[0]        = 0;
+    axkv[1]        = value;
+    axkv[2]        = 0;
+    axkv[3]        = 0;
+    svga_line_patch_widen(x);
+}
+
+void
+svga_overlay_patch_and(svga_t *svga, uint32_t *p, uint32_t mask)
+{
+    const int x = svga_overlay_column(svga, p);
+
+    if (x < 0) {
+        *p &= mask;
+        return;
+    }
+    uint32_t *axkv = &kairo_line_patch[KAIRO_PATCH_WORDS * x];
+    axkv[0] &= mask;
+    axkv[1] &= mask;
+    axkv[3] &= mask;
+    svga_line_patch_widen(x);
+}
+
+void
+svga_overlay_patch_put_keyed(svga_t *svga, uint32_t *p, uint32_t value, uint32_t key, uint32_t key_mask)
+{
+    const int x = svga_overlay_column(svga, p);
+
+    if (x < 0) {
+        if ((*p & key_mask) == key)
+            *p = value;
+        return;
+    }
+    if (kairo_line_keyed && ((key != kairo_line_key) || (key_mask != kairo_line_key_mask)))
+        fatal("SVGA overlay: two colour keys on one line\n");
+    kairo_line_keyed    = 1;
+    kairo_line_key      = key;
+    kairo_line_key_mask = key_mask;
+    uint32_t *axkv      = &kairo_line_patch[KAIRO_PATCH_WORDS * x];
+    axkv[2]             = 1;
+    axkv[3]             = value;
+    svga_line_patch_widen(x);
+}
+
+/* Whether the line's row can take a patch */
+static int
+svga_line_patchable(svga_t *svga)
+{
+    const bitmap_t *bitmap = svga->monitor->target_buffer;
+    const int       row    = svga->displine + svga->y_add;
+
+    return (bitmap != NULL) && (row >= 0) && (row < bitmap->h) && (row < 2048) && (bitmap->w > 0) &&
+           (bitmap->w <= KAIRO_CURSOR_ROW);
+}
+
+/* After the line is drawn (queued) and its overlay patched: the cursors' patch over it, and the whole patch on the
+   GPU's line where it draws it, else on the pixels the CPU drew */
+static void
+svga_line_patch(svga_t *svga)
 {
     bitmap_t      *bitmap = svga->monitor->target_buffer;
     uint32_t      *p      = bitmap->line[(svga->displine + svga->y_add) & 2047];
@@ -1540,19 +1653,36 @@ svga_cursor_patch(svga_t *svga)
     uint32_t       from;
     uint32_t       to;
 
-    if (kairo_cursor_hi <= kairo_cursor_lo)
+    if (svga->kairo_cursor_patched) {
+        for (int x = kairo_cursor_lo; x < kairo_cursor_hi; x++) {
+            uint32_t      *axkv = &kairo_line_patch[KAIRO_PATCH_WORDS * x];
+            const uint32_t a    = kairo_cursor_ax[2 * x];
+            const uint32_t xr   = kairo_cursor_ax[2 * x + 1];
+            axkv[0] &= a;
+            axkv[1] = (axkv[1] & a) ^ xr;
+            axkv[3] = (axkv[3] & a) ^ xr;
+        }
+        if (kairo_cursor_hi > kairo_cursor_lo) {
+            svga_line_patch_widen(kairo_cursor_lo);
+            svga_line_patch_widen(kairo_cursor_hi - 1);
+        }
+    }
+    if (kairo_line_hi <= kairo_line_lo)
         return;
-    kairo_gpu_scan_patch(bitmap, row + (uint32_t) kairo_cursor_lo, (uint32_t) (kairo_cursor_hi - kairo_cursor_lo),
-                         &kairo_cursor_ax[2 * kairo_cursor_lo], &from, &to);
-    for (int x = kairo_cursor_lo; x < kairo_cursor_hi; x++)
+    const uint32_t key      = kairo_line_keyed ? kairo_line_key : 0;
+    const uint32_t key_mask = kairo_line_keyed ? kairo_line_key_mask : 0;
+    kairo_gpu_scan_patch(bitmap, row + (uint32_t) kairo_line_lo, (uint32_t) (kairo_line_hi - kairo_line_lo),
+                         &kairo_line_patch[KAIRO_PATCH_WORDS * kairo_line_lo], key, key_mask, &from, &to);
+    for (int x = kairo_line_lo; x < kairo_line_hi; x++)
         if (((row + (uint32_t) x) < from) || ((row + (uint32_t) x) >= to))
-            p[x] = (p[x] & kairo_cursor_ax[2 * x]) ^ kairo_cursor_ax[2 * x + 1];
+            p[x] = kairo_gpu_patch_pixel(p[x], &kairo_line_patch[KAIRO_PATCH_WORDS * x], key, key_mask);
 }
 
 static void
 svga_do_render(svga_t *svga)
 {
     svga->kairo_cursor_patched = 0; /* KairoX86#233: set below, for this line only */
+    svga->kairo_line_patched   = 0;
     /* KairoX86#233: the row's queued GPU drawing, if any, before it is drawn again */
     if (kairo_gpu_on && (svga->monitor->target_buffer != NULL) && ((svga->displine + svga->y_add) >= 0)
         && ((svga->displine + svga->y_add) < svga->monitor->target_buffer->h)) {
@@ -1580,10 +1710,17 @@ svga_do_render(svga_t *svga)
         svga->render_async = 0;
 #else
         svga->render_async = !svga->overlay_on && !svga->dac_hwcursor_on && !svga->hwcursor_on;
-        /* KairoX86#233: with the GPU, a line only cursors draw on too, the cursors as a patch */
+        /* KairoX86#233: with the GPU, a line the cursors or the overlay draw on too, they as a patch over it */
         svga->kairo_cursor_patched = 0;
-        if (kairo_gpu_on && !svga->render_async && !svga->overlay_on && svga_cursor_probe(svga))
-            svga->render_async = svga->kairo_cursor_patched = 1;
+        if (kairo_gpu_on && !svga->render_async && svga_line_patchable(svga)) {
+            const int cursors = svga->dac_hwcursor_on || svga->hwcursor_on;
+            if (!cursors || svga_cursor_probe(svga)) {
+                svga->render_async         = 1;
+                svga->kairo_cursor_patched = cursors;
+                svga->kairo_line_patched   = 1;
+                svga_line_patch_clear(svga->monitor->target_buffer->w);
+            }
+        }
 #endif
 #ifndef K9X_NO_RENDER /* measurement only: the cost of rendering on this thread */
         svga->render(svga);
@@ -1594,16 +1731,24 @@ svga_do_render(svga_t *svga)
     if (svga->overlay_on) {
         if (!svga->override && svga->overlay_draw) {
             svga_kairo_touch_all(svga); /* KairoX86#237 */
+            if (svga->kairo_line_patched) {
+                /* KairoX86#233: its pixels into the line's patch */
+                svga->kairo_overlay_row      = svga->monitor->target_buffer->line[svga->displine + svga->y_add];
+                svga->kairo_overlay_w        = svga->monitor->target_buffer->w;
+                svga->kairo_overlay_patching = 1;
+            }
             svga->overlay_draw(svga, svga->displine + svga->y_add);
+            svga->kairo_overlay_patching = 0;
         }
         svga->overlay_on--;
         if (svga->overlay_on && svga->interlace)
             svga->overlay_on--;
     }
 
-    /* KairoX86#233: the cursors drawn as the patch the probe took (the card's state already that of their drawing) */
-    if (svga->kairo_cursor_patched)
-        svga_cursor_patch(svga);
+    /* KairoX86#233: the overlay's patch and the cursors' (the patch the probe took, the card's state already that of
+       their drawing) over the queued line */
+    if (svga->kairo_line_patched)
+        svga_line_patch(svga);
 
     if (svga->dac_hwcursor_on) {
         if (!svga->override && svga->dac_hwcursor_draw && !svga->kairo_cursor_patched) {

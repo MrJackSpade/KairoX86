@@ -1236,6 +1236,14 @@ rage128_hdbl_put(uint32_t *line, int shift, int x, uint32_t rgb)
         line[(x << shift) + k] = rgb;
 }
 
+/* rage128_hdbl_put for the overlay: through the svga's overlay pixels (KairoX86#233) */
+static inline void
+rage128_hdbl_overlay_put(svga_t *svga, uint32_t *line, int shift, int x, uint32_t rgb)
+{
+    for (int k = 0; k < (1 << shift); k++)
+        svga_overlay_put(svga, &line[(x << shift) + k], rgb);
+}
+
 static inline void
 rage128_hdbl_xor(uint32_t *line, int shift, int x, uint32_t mask)
 {

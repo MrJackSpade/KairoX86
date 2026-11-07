@@ -658,10 +658,10 @@ gd54xx_overlay_draw(svga_t *svga, int displine)
             } else
                 occl = 0;
             if (!occl)
-                *p++ = r[x_read] | (g[x_read] << 8) | (b[x_read] << 16);
+                svga_overlay_put(svga, p++, r[x_read] | (g[x_read] << 8) | (b[x_read] << 16));
             src2 += bytesperpix;
         } else
-            *p++ = r[x_read] | (g[x_read] << 8) | (b[x_read] << 16);
+            svga_overlay_put(svga, p++, r[x_read] | (g[x_read] << 8) | (b[x_read] << 16));
 
         h_acc += gd54xx->overlay.hzoom;
         if (h_acc >= 256) {

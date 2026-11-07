@@ -2984,7 +2984,7 @@ mach64_overlay_draw(svga_t *svga, int displine)
 
     if (overlay_cmp_mix == 2) {
         for (x = 0; x < mach64->svga.overlay_latch.cur_xsize; x++)
-            p[x] = scaled[x];
+            svga_overlay_put(svga, &p[x], scaled[x]);
     } else {
         for (x = 0; x < mach64->svga.overlay_latch.cur_xsize; x++) {
             int gr_cmp    = 0;
@@ -3097,7 +3097,7 @@ mach64_overlay_draw(svga_t *svga, int displine)
             }
 
             if (use_video)
-                p[x] = scaled[x];
+                svga_overlay_put(svga, &p[x], scaled[x]);
         }
     }
 

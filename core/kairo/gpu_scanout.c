@@ -18,7 +18,7 @@
 
 #include "gpu_internal.h"
 
-_Static_assert(sizeof(kairo_gpu_scan_t) == 48, "kairo_gpu_scan_t's size changed: shaders/scanout.comp reads it");
+_Static_assert(sizeof(kairo_gpu_scan_t) == 64, "kairo_gpu_scan_t's size changed: shaders/scanout.comp reads it");
 
 static const uint32_t scanout_spirv[] = {
 #include "scanout.comp.inc"
@@ -146,7 +146,8 @@ kairo_gpu_scan_cut(const void *bitmap, uint32_t start, uint32_t count)
 }
 
 void
-kairo_gpu_scan_patch(const void *bitmap, uint32_t start, uint32_t count, const uint32_t *ax, uint32_t *from, uint32_t *to)
+kairo_gpu_scan_patch(const void *bitmap, uint32_t start, uint32_t count, const uint32_t *ax, uint32_t key, uint32_t key_mask,
+                     uint32_t *from, uint32_t *to)
 {
     *from = *to = start;
     pthread_mutex_lock(&queue_lock);
@@ -161,13 +162,15 @@ kairo_gpu_scan_patch(const void *bitmap, uint32_t start, uint32_t count, const u
                 continue;
             if (line->patch_count != 0)
                 fatal("GPU scanout: a second patch over one line\n");
-            if ((words_used + 2 * (hi - lo)) > WORDS)
+            if ((words_used + KAIRO_PATCH_WORDS * (hi - lo)) > WORDS)
                 fatal("GPU scanout: no room for a patch of %u pixels\n", (unsigned) (hi - lo));
-            memcpy((uint32_t *) words->data + words_used, &ax[2 * (lo - start)], 2 * (hi - lo) * 4);
+            memcpy((uint32_t *) words->data + words_used, &ax[KAIRO_PATCH_WORDS * (lo - start)], KAIRO_PATCH_WORDS * (hi - lo) * 4);
             line->patch_from  = lo - line->out;
             line->patch_count = hi - lo;
-            line->patch_src   = words_used;
-            words_used += 2 * (hi - lo);
+            line->patch_src      = words_used;
+            line->patch_key      = key;
+            line->patch_key_mask = key_mask;
+            words_used += KAIRO_PATCH_WORDS * (hi - lo);
             *from = lo;
             *to   = hi;
             break;
@@ -230,7 +233,9 @@ kairo_gpu_scan(const void *bitmap, kairo_gpu_buffer_t *bitmap_gpu, uint32_t out,
     line->patch_from       = 0;
     line->patch_count      = 0;
     line->patch_src        = 0;
-    line->reserved         = 0;
+    line->patch_key        = 0;
+    line->patch_key_mask   = 0;
+    memset(line->reserved, 0, sizeof(line->reserved));
     uint32_t *at           = (uint32_t *) words->data + words_used;
     words_used += word_count;
     return at;

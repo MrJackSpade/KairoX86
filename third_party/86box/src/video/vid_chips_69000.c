@@ -3153,14 +3153,14 @@ chips_69000_overlay_draw(svga_t *svga, int displine)
                 c = chips_69000_overlay_mix(c, n, (mr[0x1f] & 0x40) ? 0x80 : v_frac);
             }
 
-            p[x] = c;
+            svga_overlay_put(svga, &p[x], c);
         }
     }
 
     if (mr[0x3c] & 0x80) {
         /* Bit 0 of each colour is forced to 0 at the output, hiding a key in it. */
         for (int x = 0; x < svga->hdisp; x++)
-            p[x] &= 0xfefefe;
+            svga_overlay_and(svga, &p[x], 0xfefefe);
     }
 }
 
