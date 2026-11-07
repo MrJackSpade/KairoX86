@@ -2234,7 +2234,7 @@ et4000w32_draw_byte(et4000w32p_t *et4000, int source, int mix)
             const uint32_t reads[ET_BYTE_WORDS]     = { p_at, (source >= 0) ? KAIRO_SEG_RUN_NONE : s_at,
                                                         (mix >= 0) ? KAIRO_SEG_RUN_NONE : (m_at >> 3) };
 
-            kairo_seg_run_byte(g->run, d_at, words, reads);
+            kairo_seg_run_pixel(g->run, d_at, words, reads);
             return;
         }
         /* The processor takes the result: the batch drawn first */
@@ -2853,7 +2853,7 @@ et4000w32p_init(const device_t *info)
             fatal("ET4000/W32 on the GPU: no memory\n");
         et4000->k_gpu->seg = kairo_et4000w32_open(et4000->svga.vram, et4000->vram_mask, et4000->svga.changedvram,
                                                   &et4000->svga.monitor->mon_changeframecount);
-        et4000->k_gpu->run = kairo_seg_run_open(et4000->k_gpu->seg, et4000->vram_mask, ET_BYTE_WORDS, 3, et4000w32_k_op, et4000);
+        et4000->k_gpu->run = kairo_seg_run_open(et4000->k_gpu->seg, et4000->vram_mask, 1, ET_BYTE_WORDS, 3, et4000w32_k_op, et4000);
         et4000->svga.kairo_touch = et4000w32p_svga_touch;
     }
 

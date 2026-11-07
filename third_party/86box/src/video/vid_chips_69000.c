@@ -36,6 +36,9 @@
 #include <86box/vid_ddc.h>
 #include <86box/plat_unused.h>
 #include <86box/bswap.h>
+#include <86box/kairo_gpu.h> /* KairoX86#249 */
+#include <86box/kairo_gpu_seg.h>
+#include <86box/kairo_gpu_chips69000.h>
 #include <assert.h>
 
 #pragma pack(push, 1)
@@ -169,6 +172,17 @@ typedef struct chips_69000_t {
         uint32_t h_step, v_step;
         uint8_t  cur_buffer;
     } overlay;
+
+    /* KairoX86#249: the BitBLT engine's batch on the GPU and its runs, one per bytes per pixel; NULL in software */
+    struct {
+        kairo_seg_t     *seg;
+        kairo_seg_run_t *run[3];
+        uint32_t         record[CH_WORDS];
+        uint64_t         generation;
+        int              issued;
+        int              in_order;
+        int              pb; /* the pixel being recorded's bytes */
+    } *k_gpu;
 } chips_69000_t;
 
 static chips_69000_t *reset_state = NULL;
@@ -1354,8 +1368,106 @@ chips_69000_recalc_banking(chips_69000_t *chips)
     }*/
 }
 
+/* KairoX86#249: the run's operation in the batch: the record again only where it differs or the batch has been drawn */
+static void
+chips_69000_k_op(void *priv, bool in_order)
+{
+    chips_69000_t *chips = (chips_69000_t *) priv;
+    uint32_t       rec[CH_WORDS] = { 0 };
+
+    rec[CH_ROP]    = chips->bitblt_running.bitblt.bitblt_control & 0xff;
+    rec[CH_CTRL]   = chips->bitblt_running.bitblt.bitblt_control;
+    rec[CH_KEY]    = chips->bitblt_running.bitblt.monochrome_source_expansion_color_reg_select ? chips->bitblt_running.bitblt.source_key_bg
+                                                                                               : chips->bitblt_running.bitblt.pattern_source_key_bg;
+    rec[CH_PAT_FG] = chips->bitblt_running.bitblt.pattern_source_key_fg;
+    rec[CH_PAT_BG] = chips->bitblt_running.bitblt.pattern_source_key_bg;
+    rec[CH_BYTES]  = chips->k_gpu->pb;
+    kairo_seg_make_room(chips->k_gpu->seg);
+    if (chips->k_gpu->issued && (chips->k_gpu->in_order == in_order) && (chips->k_gpu->generation == kairo_seg_generation(chips->k_gpu->seg)) &&
+        !memcmp(chips->k_gpu->record, rec, sizeof(rec)))
+        return;
+    memcpy(kairo_seg_op(chips->k_gpu->seg, in_order), rec, sizeof(rec));
+    memcpy(chips->k_gpu->record, rec, sizeof(rec));
+    chips->k_gpu->generation = kairo_seg_generation(chips->k_gpu->seg);
+    chips->k_gpu->in_order   = in_order;
+    chips->k_gpu->issued     = 1;
+}
+
+/* Every run into the batch: the walk has ended, the processor may meet its pixels next */
+static void
+chips_69000_k_flush(chips_69000_t *chips)
+{
+    if (chips->k_gpu != NULL)
+        for (int i = 0; i < 3; i++)
+            kairo_seg_run_flush(chips->k_gpu->run[i]);
+}
+
+/* A pixel of a blit recorded for the GPU: its source (src_at, the address of its first byte, or KAIRO_SEG_RUN_NONE
+   for the pixel itself) and its pattern, as chips_69000_process_pixel finds them. 0 when one of its addresses is the
+   MMIO window (readb_linear's bit 22), which the processor draws (the batch first). */
+static int
+chips_69000_k_pixel(chips_69000_t *chips, uint32_t pixel, uint32_t src_at, uint32_t dest_addr)
+{
+    const uint32_t ctrl  = chips->bitblt_running.bitblt.bitblt_control;
+    const int      pb    = chips->bitblt_running.bytes_per_pixel;
+    const uint32_t mask  = (1 << (8 * pb)) - 1;
+    const uint8_t  vpa   = (ctrl >> 20) & 7;
+    const uint32_t vmask = 0x1fffff & chips->svga.vram_mask;
+    uint32_t       dst   = chips->bitblt_running.bitblt.destination_addr;
+    uint32_t       pat_at = KAIRO_SEG_RUN_NONE;
+    uint32_t       wp;
+
+    if (pb == 2)
+        dst >>= 1;
+    if (ctrl & (1 << 18)) {
+        if (ctrl & (1 << 19)) {
+            /* A solid mono pattern: its bits clear */
+            if (ctrl & (1 << 17))
+                return 1;
+            wp = CH_IMM | (chips->bitblt_running.bitblt.pattern_source_key_bg & mask);
+        } else {
+            pat_at = chips->bitblt_running.bitblt.pat_addr + ((vpa + (chips->bitblt_running.y & 7)) & 7);
+            wp     = CH_MONO | ((((pat_at & vmask) << 3) + (7 - ((dst + chips->bitblt_running.x) & 7))) & CH_ADDR_MASK);
+        }
+    } else {
+        if (pb == 1)
+            pat_at = chips->bitblt_running.bitblt.pat_addr + 8 * ((vpa + chips->bitblt_running.y) & 7) + (((dst & 7) + chips->bitblt_running.x) & 7);
+        else if (pb == 2)
+            pat_at = chips->bitblt_running.bitblt.pat_addr + (2 * 8 * ((vpa + chips->bitblt_running.y) & 7)) + (2 * (((dst & 7) + chips->bitblt_running.x) & 7));
+        else
+            pat_at = chips->bitblt_running.bitblt.pat_addr + (4 * 8 * ((vpa + chips->bitblt_running.y) & 7)) +
+                     (3 * ((((chips->bitblt_running.bitblt.destination_addr / 3) & 7) + chips->bitblt_running.x) & 7));
+        wp = pat_at & vmask;
+    }
+    if (((dest_addr + pb - 1) & 0x400000) || (dest_addr & 0x400000) || ((src_at != KAIRO_SEG_RUN_NONE) && (src_at & 0x400000)) ||
+        ((pat_at != KAIRO_SEG_RUN_NONE) && (pat_at & 0x400000)))
+        return 0;
+
+    const uint32_t words[CH_PIXEL_WORDS] = { (src_at == KAIRO_SEG_RUN_NONE) ? (CH_IMM | (pixel & 0xffffff)) : (src_at & vmask), wp };
+    const uint32_t reads[2]              = { (src_at == KAIRO_SEG_RUN_NONE) ? KAIRO_SEG_RUN_NONE : (src_at & vmask),
+                                             (pat_at == KAIRO_SEG_RUN_NONE) ? KAIRO_SEG_RUN_NONE : (pat_at & vmask) };
+
+    /* A run is of one pixel size: another size's run goes in first */
+    for (int i = 0; i < 3; i++)
+        if (i != pb - 1)
+            kairo_seg_run_flush(chips->k_gpu->run[i]);
+    chips->k_gpu->pb = pb;
+    kairo_seg_run_pixel(chips->k_gpu->run[pb - 1], dest_addr & vmask, words, reads);
+    return 1;
+}
+
+static void
+chips_69000_process_pixel_at(chips_69000_t* chips, uint32_t pixel, uint32_t src_at);
+
 void
 chips_69000_process_pixel(chips_69000_t* chips, uint32_t pixel)
+{
+    chips_69000_process_pixel_at(chips, pixel, KAIRO_SEG_RUN_NONE);
+}
+
+/* KairoX86#249: src_at, with Hardware acceleration on, the address of a source pixel in video memory not yet read */
+static void
+chips_69000_process_pixel_at(chips_69000_t* chips, uint32_t pixel, uint32_t src_at)
 {
     uint32_t pattern_fg = chips->bitblt_running.bitblt.pattern_source_key_fg;
     uint32_t pattern_bg = chips->bitblt_running.bitblt.pattern_source_key_bg;
@@ -1365,6 +1477,21 @@ chips_69000_process_pixel(chips_69000_t* chips, uint32_t pixel)
     uint32_t dest_addr = chips->bitblt_running.bitblt.destination_addr + (chips->bitblt_running.y * chips->bitblt_running.bitblt.destination_span) + (chips->bitblt_running.x * chips->bitblt_running.bytes_per_pixel);
     uint8_t vert_pat_alignment = (chips->bitblt_running.bitblt.bitblt_control >> 20) & 7;
     uint8_t orig_dest_addr_bit = chips->bitblt_running.bitblt.destination_addr & 1;
+
+    if (chips->k_gpu != NULL) {
+        if (chips_69000_k_pixel(chips, pixel, src_at, dest_addr))
+            return;
+        /* The processor's: the batch first, and the source pixel now */
+        chips_69000_k_flush(chips);
+        kairo_seg_drain(chips->k_gpu->seg);
+        if (src_at != KAIRO_SEG_RUN_NONE) {
+            pixel = chips_69000_readb_linear(src_at, chips);
+            if (chips->bitblt_running.bytes_per_pixel >= 2)
+                pixel |= chips_69000_readb_linear(src_at + 1, chips) << 8;
+            if (chips->bitblt_running.bytes_per_pixel >= 3)
+                pixel |= chips_69000_readb_linear(src_at + 2, chips) << 16;
+        }
+    }
 
     switch (chips->bitblt_running.bytes_per_pixel) {
         case 1: /* 8 bits-per-pixel. */
@@ -1750,6 +1877,13 @@ chips_69000_setup_bitblt(chips_69000_t* chips)
         do {
             uint32_t pixel = 0;
             uint32_t source_addr = chips->bitblt_running.bitblt.source_addr + (chips->bitblt_running.y * chips->bitblt.source_span) + (chips->bitblt_running.x * chips->bitblt_running.bytes_per_pixel);
+
+            /* KairoX86#249: on the GPU the source is read where the pixel is drawn */
+            if (chips->k_gpu != NULL) {
+                chips_69000_process_pixel_at(chips, 0, source_addr);
+                chips->bitblt_running.x += chips->bitblt_running.x_dir;
+                continue;
+            }
 
             switch (chips->bitblt_running.bytes_per_pixel) {
                 case 1: /* 8 bits-per-pixel. */
@@ -2569,6 +2703,7 @@ chips_69000_writeb_mmio(uint32_t addr, uint8_t val, chips_69000_t* chips)
     //pclog("C&T Write 0x%X, val = 0x%02X\n", addr, val);
     if (addr & 0x10000) {
         chips_69000_bitblt_write(chips, val);
+        chips_69000_k_flush(chips); /* KairoX86#249 */
         return;
     }
     addr &= 0xFFF;
@@ -2580,6 +2715,7 @@ chips_69000_writeb_mmio(uint32_t addr, uint8_t val, chips_69000_t* chips)
             chips->bitblt_regs_b[addr & 0xFF] = val;
             if ((addr & 0xFFF) == 0x023 && chips->bitblt_regs[0x8] != 0) {
                 chips_69000_setup_bitblt(chips);
+                chips_69000_k_flush(chips); /* KairoX86#249 */
             }
             break;
         default:
@@ -2677,6 +2813,7 @@ chips_69000_writew_mmio(uint32_t addr, uint16_t val, chips_69000_t* chips)
         }
         chips_69000_bitblt_write(chips, val & 0xFF);
         chips_69000_bitblt_write(chips, (val >> 8) & 0xFF);
+        chips_69000_k_flush(chips); /* KairoX86#249 */
         return;
     }
     addr &= 0xFFF;
@@ -2699,6 +2836,7 @@ chips_69000_writel_mmio(uint32_t addr, uint32_t val, chips_69000_t* chips)
         chips_69000_bitblt_write(chips, (val >> 8) & 0xFF);
         chips_69000_bitblt_write(chips, (val >> 16) & 0xFF);
         chips_69000_bitblt_write(chips, (val >> 24) & 0xFF);
+        chips_69000_k_flush(chips); /* KairoX86#249 */
         return;
     }
     addr &= 0xFFF;
@@ -3195,11 +3333,22 @@ chips_69000_reset(void *priv)
     chips_69000_t *chips = (chips_69000_t *) priv;
 
     if (reset_state != NULL) {
+        if (chips->k_gpu != NULL) /* KairoX86#249: the batch drawn; the reset state holds the same one */
+            kairo_seg_drain(chips->k_gpu->seg);
         chips_69000_disable_handlers(chips);
         reset_state->slot = chips->slot;
 
         *chips = *reset_state;
     }
+}
+
+/* KairoX86#249: the SVGA core's memory handlers and display (svga->kairo_touch) */
+static void
+chips_69000_svga_touch(svga_t *svga, uint32_t addr, uint32_t len)
+{
+    const chips_69000_t *chips = (const chips_69000_t *) svga->priv;
+
+    kairo_seg_touch(chips->k_gpu->seg, addr & chips->svga.vram_mask, len);
 }
 
 static void *
@@ -3240,6 +3389,18 @@ chips_69000_init(const device_t *info)
     chips->on_board        = !!(info->local);
 
     chips->svga.packed_chain4 = 1;
+
+    /* KairoX86#249: with Hardware acceleration on, the BitBLT engine's pixels drawn on the GPU (reset keeps the batch) */
+    if (kairo_gpu_on) {
+        chips->k_gpu = calloc(1, sizeof(*chips->k_gpu));
+        if (chips->k_gpu == NULL)
+            fatal("B69000 on the GPU: no memory\n");
+        chips->k_gpu->seg = kairo_chips69000_open(chips->svga.vram, chips->svga.vram_mask, chips->svga.changedvram,
+                                                  &chips->svga.monitor->mon_changeframecount);
+        for (int i = 0; i < 3; i++)
+            chips->k_gpu->run[i] = kairo_seg_run_open(chips->k_gpu->seg, chips->svga.vram_mask, i + 1, CH_PIXEL_WORDS, 2, chips_69000_k_op, chips);
+        chips->svga.kairo_touch = chips_69000_svga_touch;
+    }
 
     timer_add(&chips->decrement_timer, chips_69000_decrement_timer, chips, 0);
     timer_on_auto(&chips->decrement_timer, 1000000. / 2000.);
@@ -3282,6 +3443,12 @@ chips_69000_close(void *priv)
  //   thread_wait(chips->accel_thread);
     ddc_close(chips->ddc);
     i2c_gpio_close(chips->i2c);
+    if (chips->k_gpu != NULL) {
+        kairo_seg_close(chips->k_gpu->seg); /* KairoX86#249 */
+        for (int i = 0; i < 3; i++)
+            kairo_seg_run_close(chips->k_gpu->run[i]);
+        free(chips->k_gpu);
+    }
     svga_close(&chips->svga);
 
     free(reset_state);

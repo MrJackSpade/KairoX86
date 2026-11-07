@@ -4105,7 +4105,7 @@ gd54xx_draw_byte(gd54xx_t *gd54xx, uint32_t d_at, uint32_t ws, uint32_t wm, uint
                                                 KAIRO_SEG_RUN_NONE };
 
         gd54xx->k_gpu->normal = normal;
-        kairo_seg_run_byte(gd54xx->k_gpu->run, d_at, words, reads);
+        kairo_seg_run_pixel(gd54xx->k_gpu->run, d_at, words, reads);
         return;
     }
 
@@ -5389,7 +5389,7 @@ gd54xx_init(const device_t *info)
         if (gd54xx->k_gpu == NULL)
             fatal("GD54xx on the GPU: no memory\n");
         gd54xx->k_gpu->seg = kairo_cl54xx_open(svga->vram, gd54xx->vram_mask, svga->changedvram, &svga->monitor->mon_changeframecount);
-        gd54xx->k_gpu->run = kairo_seg_run_open(gd54xx->k_gpu->seg, gd54xx->vram_mask, CL_BYTE_WORDS, 1, gd54xx_k_op, gd54xx);
+        gd54xx->k_gpu->run = kairo_seg_run_open(gd54xx->k_gpu->seg, gd54xx->vram_mask, 1, CL_BYTE_WORDS, 1, gd54xx_k_op, gd54xx);
         svga->kairo_touch  = gd54xx_svga_touch;
     }
     if ((vram == 1) || (vram >= 256 && vram <= 1024))

@@ -1,0 +1,75 @@
+#version 450
+#extension GL_EXT_control_flow_attributes : require
+/*
+ * The Chips & Technologies B69000 BitBLT engine on the GPU (KairoX86#249): 86Box's chips_69000_process_pixel
+ * (vid_chips_69000.c) for runs of pixels (kairo_seg_run), on the drawing engines' shared batches (seg.glsl). The walk
+ * stays the CPU's; each pixel's source and pattern are its stream words (86box/kairo_gpu_chips69000.h).
+ *
+ * Copyright 2026 MrJackSpade. GPL-2.0-or-later.
+ */
+#include "seg.glsl"
+
+const uint CH_ROP = 0u, CH_CTRL = 1u, CH_KEY = 2u, CH_PAT_FG = 3u, CH_PAT_BG = 4u, CH_BYTES = 5u, CH_WORDS = 8u;
+const uint CH_IMM = 0x80000000u, CH_MONO = 0x40000000u, CH_ADDR_MASK = 0x0fffffffu;
+
+uint ow(uint o, uint i) { return ops[o + i]; }
+
+uint rd_px(uint a, uint pb)
+{
+    uint v = 0u;
+    for (uint i = 0u; i < pb; i++)
+        v |= rd8(a + i) << (8u * i);
+    return v;
+}
+
+/* The Windows ternary raster operation, bit (P << 2 | S << 1 | D), on every bit */
+uint rop3(uint code, uint p, uint s, uint d)
+{
+    uint r = 0u;
+    for (uint b = 0u; b < 24u; b++) {
+        const uint idx = (((p >> b) & 1u) << 2) | (((s >> b) & 1u) << 1) | ((d >> b) & 1u);
+        r |= ((code >> idx) & 1u) << b;
+    }
+    return r;
+}
+
+void card_pixels(uint seg, uint op, uint row, uint first, int i0, int i1)
+{
+    const uint o    = op * CH_WORDS;
+    const uint pb   = ow(o, CH_BYTES);
+    const uint ctrl = ow(o, CH_CTRL);
+    const uint mask = (pb >= 4u) ? 0xffffffffu : ((1u << (8u * pb)) - 1u);
+    const uint key  = ow(o, CH_KEY) & mask;
+    const int  dir  = int(segs[seg * KG_WORDS + KG_DIR]);
+    const uint d0   = segs[seg * KG_WORDS + KG_BIT] >> 3;
+    [[dont_unroll]] for (int n = i0; n < i1; n++) {
+        const uint w    = row + uint(n) * 2u;
+        const uint ws   = stream[w];
+        const uint wp   = stream[w + 1u];
+        const uint a    = d0 + uint((int(first) + n * dir) * int(pb));
+        uint       dest = rd_px(a, pb);
+        const uint src  = ((ws & CH_IMM) != 0u) ? (ws & 0xffffffu) : rd_px(ws & CH_ADDR_MASK, pb);
+        uint       pat;
+        if ((wp & CH_IMM) != 0u)
+            pat = wp & 0xffffffu;
+        else if ((wp & CH_MONO) != 0u) {
+            const uint ba = wp & CH_ADDR_MASK;
+            const bool on = ((rd8(ba >> 3) >> (ba & 7u)) & 1u) != 0u;
+            /* A clear bit of a write-masking mono pattern leaves the pixel */
+            if (!on && ((ctrl & (1u << 17)) != 0u))
+                continue;
+            pat = (on ? ow(o, CH_PAT_FG) : ow(o, CH_PAT_BG)) & mask;
+        } else
+            pat = rd_px(wp & CH_ADDR_MASK, pb);
+        const bool keyed = (ctrl & (1u << 14)) != 0u;
+        const uint mode  = (ctrl >> 15) & 3u;
+        const bool pol   = (ctrl & (1u << 16)) == 0u;
+        if (keyed && ((mode & 1u) != 0u) && ((key == dest) == pol))
+            continue;
+        dest = rop3(ow(o, CH_ROP), pat, src, dest) & mask;
+        if (keyed && ((mode & 1u) == 0u) && ((key == dest) == pol))
+            continue;
+        for (uint i = 0u; i < pb; i++)
+            wr8(a + i, dest >> (8u * i));
+    }
+}
