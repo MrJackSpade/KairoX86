@@ -41,6 +41,9 @@
 #include <86box/vid_xga.h>
 #include <86box/vid_svga.h>
 #include <86box/vid_svga_render.h>
+#include <86box/kairo_gpu.h> /* KairoX86#271 */
+#include <86box/kairo_gpu_seg.h>
+#include <86box/kairo_gpu_s3.h>
 #ifdef ENABLE_S3_LOG
 #include "cpu.h"
 #endif
@@ -437,6 +440,18 @@ typedef struct s3_t {
     int vram;
 
     void (*accel_start)(int count, int cpu_input, uint32_t mix_dat, uint32_t cpu_dat, void *priv);
+
+    /* KairoX86#271: the graphics engine's batch on the GPU and its runs of 1 to 4-byte pixels; NULL in software */
+    struct {
+        kairo_seg_t     *seg;
+        kairo_seg_run_t *run[4];
+        uint32_t         record[S3_WORDS];
+        uint64_t         generation;
+        int              issued;
+        int              in_order;
+        int              pb;       /* the pixel being recorded's bytes */
+        uint32_t         wrt_mask; /* and write mask */
+    } *k_gpu;
 } s3_t;
 
 static s3_t             *reset_state = NULL;
@@ -715,6 +730,85 @@ s3_accel_write_pixel(s3_t *s3, uint32_t addr, uint8_t color)
     s3->svga.changedvram[addr >> 12] = s3->svga.monitor->mon_changeframecount;
 }
 
+/* KairoX86#271: the run's operation in the batch: the record again only where it differs or the batch has been drawn */
+static void
+s3_k_op(void *priv, bool in_order)
+{
+    s3_t    *s3            = (s3_t *) priv;
+    uint32_t rec[S3_WORDS] = { 0 };
+
+    rec[S3_WRT_MASK] = s3->k_gpu->wrt_mask;
+    rec[S3_BYTES]    = s3->k_gpu->pb;
+    kairo_seg_make_room(s3->k_gpu->seg);
+    if (s3->k_gpu->issued && (s3->k_gpu->in_order == in_order) && (s3->k_gpu->generation == kairo_seg_generation(s3->k_gpu->seg)) &&
+        !memcmp(s3->k_gpu->record, rec, sizeof(rec)))
+        return;
+    memcpy(kairo_seg_op(s3->k_gpu->seg, in_order), rec, sizeof(rec));
+    memcpy(s3->k_gpu->record, rec, sizeof(rec));
+    s3->k_gpu->generation = kairo_seg_generation(s3->k_gpu->seg);
+    s3->k_gpu->in_order   = in_order;
+    s3->k_gpu->issued     = 1;
+}
+
+static void
+s3_k_flush(s3_t *s3)
+{
+    if (s3->k_gpu != NULL)
+        for (int i = 0; i < 4; i++)
+            kairo_seg_run_flush(s3->k_gpu->run[i]);
+}
+
+/* The batch drawn before the processor reads the engine's results back */
+static void
+s3_k_drain(s3_t *s3)
+{
+    if (s3->k_gpu != NULL) {
+        s3_k_flush(s3);
+        kairo_seg_drain(s3->k_gpu->seg);
+    }
+}
+
+/* A pixel the engine's walk reads from video memory (READ): what the batch draws there first */
+static __inline void
+s3_k_touch(s3_t *s3, uint32_t addr)
+{
+    if (s3->k_gpu == NULL)
+        return;
+    if (s3->bpp == 0)
+        addr = s3_accel_packed4(s3) ? (addr >> 1) : s3_accel_addr(s3, addr);
+    kairo_seg_touch(s3->k_gpu->seg, addr & s3->vram_mask, 4);
+}
+
+/* A pixel of the engine at addr with Hardware acceleration on: kind (the mix code, or S3K_ROP3 and the ternary
+   raster operation) of the source src and pattern pat, through the write mask, on the GPU */
+static void
+s3_k_pixel(s3_t *s3, uint32_t addr, uint32_t src, uint32_t pat, uint32_t kind, uint32_t wrt_mask)
+{
+    int      pb = 1;
+    uint32_t a;
+
+    if (s3->bpp == 0) {
+        if (s3_accel_packed4(s3)) {
+            a = (addr >> 1) & s3->vram_mask;
+            kind |= S3K_NIBBLE | ((uint32_t) ((addr & 1) ? 0 : 4) << 17);
+        } else
+            a = s3_accel_addr(s3, addr) & s3->vram_mask;
+    } else {
+        a  = addr & s3->vram_mask;
+        pb = (s3->bpp == 1) ? 2 : (s3->bpp == 2) ? 3 : 4;
+    }
+
+    const uint32_t words[S3_PIXEL_WORDS] = { kind, src, pat };
+    const uint32_t reads[1]              = { KAIRO_SEG_RUN_NONE };
+
+    /* A run is of one pixel size and write mask */
+    if ((s3->k_gpu->pb != pb) || (s3->k_gpu->wrt_mask != wrt_mask))
+        s3_k_flush(s3);
+    s3->k_gpu->pb       = pb;
+    s3->k_gpu->wrt_mask = wrt_mask;
+    kairo_seg_run_pixel(s3->k_gpu->run[pb - 1], a, words, reads);
+}
+
 /*The scissors compare the pixel (X bits 9-0) only: some drivers keep the clip rectangle
   at 0-1023 for both passes, others shift it by 0x400 along with X.*/
 static __inline int
@@ -737,19 +831,24 @@ s3_accel_read_transfer(const s3_t *s3, uint32_t addr, int offset)
 }
 
 #define READ_PIXTRANS_BYTE_IO(n) \
-    s3->accel.pix_trans[n] = s3_accel_read_transfer(s3, (s3->accel.dest + s3->accel.cx) * x_mul, n * x_mul);
+    { s3_k_drain(s3); /* KairoX86#271 */ \
+      s3->accel.pix_trans[n] = s3_accel_read_transfer(s3, (s3->accel.dest + s3->accel.cx) * x_mul, n * x_mul); }
 
 #define READ_PIXTRANS_BYTE_MM \
-    temp = s3_accel_read_transfer(s3, s3->accel.dest + (s3->accel.cx * x_mul), 0);
+    { s3_k_drain(s3); /* KairoX86#271 */ \
+      temp = s3_accel_read_transfer(s3, s3->accel.dest + (s3->accel.cx * x_mul), 0); }
 
 #define READ_PIXTRANS_WORD                                                                                                      \
+    { s3_k_drain(s3); /* KairoX86#271 */                                                                                   \
     if (s3->bpp == 0) {                                                                                                         \
         temp = s3_accel_read_transfer(s3, s3->accel.dest + (s3->accel.cx * x_mul), 0);                                 \
         temp |= (s3_accel_read_transfer(s3, s3->accel.dest + (s3->accel.cx * x_mul), x_mul) << 8);                     \
     } else                                                                                                                      \
-        temp = *(uint16_t *)&vram[(s3->accel.dest + (s3->accel.cx * x_mul)) & s3->vram_mask];
+        temp = *(uint16_t *)&vram[(s3->accel.dest + (s3->accel.cx * x_mul)) & s3->vram_mask]; \
+    }
 
 #define READ_PIXTRANS_LONG                                                                                                      \
+    { s3_k_drain(s3); /* KairoX86#271 */                                                                                   \
     if (s3->bpp == 0) {                                                                                                         \
         temp = s3_accel_read_transfer(s3, s3->accel.dest + (s3->accel.cx * x_mul), 0);                                 \
         temp |= (s3_accel_read_transfer(s3, s3->accel.dest + (s3->accel.cx * x_mul), x_mul) << 8);                     \
@@ -761,7 +860,8 @@ s3_accel_read_transfer(const s3_t *s3, uint32_t addr, int offset)
     } else if (s3->bpp == 2) {                                                                           \
         temp = (*(uint32_t *) &vram[(s3->accel.dest + (s3->accel.cx * x_mul)) & s3->vram_mask]) & 0xffffff;                     \
     } else                                                                                                                      \
-        temp = *(uint32_t *)&vram[(s3->accel.dest + (s3->accel.cx * x_mul)) & s3->vram_mask];
+        temp = *(uint32_t *)&vram[(s3->accel.dest + (s3->accel.cx * x_mul)) & s3->vram_mask]; \
+    }
 
 static int
 s3_cpu_src(s3_t *s3)
@@ -7354,14 +7454,17 @@ polygon_setup(s3_t *s3)
 }
 
 #define READ(addr, dat)                                                 \
-    if (s3->bpp == 0)                                                   \
-        dat = s3_accel_read_pixel(s3, addr);                            \
-    else if (s3->bpp == 1)                                              \
-        dat = *(uint16_t *)&vram[(addr) & s3->vram_mask];               \
-    else if (s3->bpp == 2)                                              \
-        dat = (*(uint32_t *)&vram[(addr) & s3->vram_mask]) & 0xffffff;  \
-    else                                                                \
-        dat = *(uint32_t *)&vram[(addr) & s3->vram_mask];
+    do {                                                                \
+        s3_k_touch(s3, addr); /* KairoX86#271 */                       \
+        if (s3->bpp == 0)                                               \
+            dat = s3_accel_read_pixel(s3, addr);                        \
+        else if (s3->bpp == 1)                                          \
+            dat = *(uint16_t *)&vram[(addr) & s3->vram_mask];           \
+        else if (s3->bpp == 2)                                          \
+            dat = (*(uint32_t *)&vram[(addr) & s3->vram_mask]) & 0xffffff; \
+        else                                                            \
+            dat = *(uint32_t *)&vram[(addr) & s3->vram_mask];           \
+    } while (0)
 
 #define MIX_READ                                                                                  \
     {                                                                                             \
@@ -8610,8 +8713,18 @@ s3_short_stroke_start(s3_t *s3, uint8_t ssv)
     s3->accel_start(-1, 0, -1, 0, s3);
 }
 
+static void s3_accel_start_walk(int count, int cpu_input, uint32_t mix_dat, uint32_t cpu_data, void *priv);
+
+/* KairoX86#271: the walk, and with Hardware acceleration on the runs it ended in recorded */
 static void
 s3_accel_start(int count, int cpu_input, uint32_t mix_dat, uint32_t cpu_data, void *priv)
+{
+    s3_accel_start_walk(count, cpu_input, mix_dat, cpu_data, priv);
+    s3_k_flush((s3_t *) priv);
+}
+
+static void
+s3_accel_start_walk(int count, int cpu_input, uint32_t mix_dat, uint32_t cpu_data, void *priv)
 {
     uint64_t  cpu_dat = cpu_data;
     s3_t     *s3      = (s3_t *)priv;
@@ -8785,13 +8898,20 @@ s3_accel_start(int count, int cpu_input, uint32_t mix_dat, uint32_t cpu_data, vo
                             update = 1;
 
                         if (update) {
-                            READ((s3->accel.cy * s3->width * x_mul) + (s3->accel.cx * x_mul), dest_dat);
+                            if (s3->k_gpu != NULL) { /* KairoX86#271: the GPU draws the pixel */
 
-                            old_dest_dat = dest_dat;
-                            MIX
+                                if (s3->accel.ssv_draw) {
+                                    s3_k_pixel(s3, (s3->accel.cy * s3->width * x_mul) + (s3->accel.cx * x_mul), src_dat, pat_dat, ((mix_dat & mix_mask) ? (s3->accel.frgd_mix & 0xf) : (s3->accel.bkgd_mix & 0xf)), wrt_mask);
+                                }
+                            } else {
+                                READ((s3->accel.cy * s3->width * x_mul) + (s3->accel.cx * x_mul), dest_dat);
 
-                            if (s3->accel.ssv_draw) {
-                                WRITE((s3->accel.cy * s3->width * x_mul) + (s3->accel.cx * x_mul), dest_dat);
+                                old_dest_dat = dest_dat;
+                                MIX
+
+                                if (s3->accel.ssv_draw) {
+                                    WRITE((s3->accel.cy * s3->width * x_mul) + (s3->accel.cx * x_mul), dest_dat);
+                                }
                             }
                         }
                     }
@@ -8897,15 +9017,24 @@ s3_accel_start(int count, int cpu_input, uint32_t mix_dat, uint32_t cpu_data, vo
                             update = 1;
 
                         if (update) {
-                            READ((s3->accel.cy * s3->width * x_mul) + (s3->accel.cx * x_mul), dest_dat);
+                            if (s3->k_gpu != NULL) { /* KairoX86#271: the GPU draws the pixel */
 
-                            old_dest_dat = dest_dat;
-                            MIX
+                                if ((s3->accel.cmd & 0x04) && s3->accel.sy) {
+                                    s3_k_pixel(s3, (s3->accel.cy * s3->width * x_mul) + (s3->accel.cx * x_mul), src_dat, pat_dat, ((mix_dat & mix_mask) ? (s3->accel.frgd_mix & 0xf) : (s3->accel.bkgd_mix & 0xf)), wrt_mask);
+                                } else if (!(s3->accel.cmd & 0x04)) {
+                                    s3_k_pixel(s3, (s3->accel.cy * s3->width * x_mul) + (s3->accel.cx * x_mul), src_dat, pat_dat, ((mix_dat & mix_mask) ? (s3->accel.frgd_mix & 0xf) : (s3->accel.bkgd_mix & 0xf)), wrt_mask);
+                                }
+                            } else {
+                                READ((s3->accel.cy * s3->width * x_mul) + (s3->accel.cx * x_mul), dest_dat);
 
-                            if ((s3->accel.cmd & 0x04) && s3->accel.sy) {
-                                WRITE((s3->accel.cy * s3->width * x_mul) + (s3->accel.cx * x_mul), dest_dat);
-                            } else if (!(s3->accel.cmd & 0x04)) {
-                                WRITE((s3->accel.cy * s3->width * x_mul) + (s3->accel.cx * x_mul), dest_dat);
+                                old_dest_dat = dest_dat;
+                                MIX
+
+                                if ((s3->accel.cmd & 0x04) && s3->accel.sy) {
+                                    WRITE((s3->accel.cy * s3->width * x_mul) + (s3->accel.cx * x_mul), dest_dat);
+                                } else if (!(s3->accel.cmd & 0x04)) {
+                                    WRITE((s3->accel.cy * s3->width * x_mul) + (s3->accel.cx * x_mul), dest_dat);
+                                }
                             }
                         }
                     }
@@ -9009,12 +9138,17 @@ s3_accel_start(int count, int cpu_input, uint32_t mix_dat, uint32_t cpu_data, vo
                             update = 1;
 
                         if (update) {
-                            READ((s3->accel.cy * s3->width * x_mul) + (s3->accel.cx * x_mul), dest_dat);
+                            if (s3->k_gpu != NULL) { /* KairoX86#271: the GPU draws the pixel */
 
-                            old_dest_dat = dest_dat;
-                            MIX
+                                s3_k_pixel(s3, (s3->accel.cy * s3->width * x_mul) + (s3->accel.cx * x_mul), src_dat, pat_dat, ((mix_dat & mix_mask) ? (s3->accel.frgd_mix & 0xf) : (s3->accel.bkgd_mix & 0xf)), wrt_mask);
+                            } else {
+                                READ((s3->accel.cy * s3->width * x_mul) + (s3->accel.cx * x_mul), dest_dat);
 
-                            WRITE((s3->accel.cy * s3->width * x_mul) + (s3->accel.cx * x_mul), dest_dat);
+                                old_dest_dat = dest_dat;
+                                MIX
+
+                                WRITE((s3->accel.cy * s3->width * x_mul) + (s3->accel.cx * x_mul), dest_dat);
+                            }
                         }
                     }
 
@@ -9146,13 +9280,20 @@ s3_accel_start(int count, int cpu_input, uint32_t mix_dat, uint32_t cpu_data, vo
                             update = 1;
 
                         if (update) {
-                            READ(s3->accel.dest + (s3->accel.cx * x_mul), dest_dat);
+                            if (s3->k_gpu != NULL) { /* KairoX86#271: the GPU draws the pixel */
 
-                            old_dest_dat = dest_dat;
-                            MIX
+                                if (s3->accel.cmd & 0x10) {
+                                    s3_k_pixel(s3, s3->accel.dest + (s3->accel.cx * x_mul), src_dat, pat_dat, ((mix_dat & mix_mask) ? (s3->accel.frgd_mix & 0xf) : (s3->accel.bkgd_mix & 0xf)), wrt_mask);
+                                }
+                            } else {
+                                READ(s3->accel.dest + (s3->accel.cx * x_mul), dest_dat);
 
-                            if (s3->accel.cmd & 0x10) {
-                                WRITE(s3->accel.dest + (s3->accel.cx * x_mul), dest_dat);
+                                old_dest_dat = dest_dat;
+                                MIX
+
+                                if (s3->accel.cmd & 0x10) {
+                                    WRITE(s3->accel.dest + (s3->accel.cx * x_mul), dest_dat);
+                                }
                             }
                         }
                     }
@@ -9273,13 +9414,20 @@ s3_accel_start(int count, int cpu_input, uint32_t mix_dat, uint32_t cpu_data, vo
                                 update = 1;
 
                             if (update) {
-                                READ(s3->accel.dest + (s3->accel.poly_x * x_mul), dest_dat);
+                                if (s3->k_gpu != NULL) { /* KairoX86#271: the GPU draws the pixel */
 
-                                old_dest_dat = dest_dat;
-                                MIX
+                                    if (s3->accel.cmd & 0x10) {
+                                        s3_k_pixel(s3, s3->accel.dest + (s3->accel.poly_x * x_mul), src_dat, pat_dat, ((mix_dat & mix_mask) ? (s3->accel.frgd_mix & 0xf) : (s3->accel.bkgd_mix & 0xf)), wrt_mask);
+                                    }
+                                } else {
+                                    READ(s3->accel.dest + (s3->accel.poly_x * x_mul), dest_dat);
 
-                                if (s3->accel.cmd & 0x10) {
-                                    WRITE(s3->accel.dest + (s3->accel.poly_x * x_mul), dest_dat);
+                                    old_dest_dat = dest_dat;
+                                    MIX
+
+                                    if (s3->accel.cmd & 0x10) {
+                                        WRITE(s3->accel.dest + (s3->accel.poly_x * x_mul), dest_dat);
+                                    }
                                 }
                             }
                         }
@@ -9335,11 +9483,16 @@ s3_accel_start(int count, int cpu_input, uint32_t mix_dat, uint32_t cpu_data, vo
                 while (1) {
                     if ((s3_accel_clip_x(s3, s3->accel.dx) >= clip_l) && (s3_accel_clip_x(s3, s3->accel.dx) <= clip_r) && (s3->accel.dy >= clip_t) && (s3->accel.dy <= clip_b)) {
                         READ(s3->accel.src + (s3->accel.cx * x_mul), src_dat);
-                        READ(s3->accel.dest + (s3->accel.dx * x_mul), dest_dat);
-                        dest_dat = (src_dat & wrt_mask) | (dest_dat & ~wrt_mask);
+                        if (s3->k_gpu != NULL) { /* KairoX86#271: mix 7, the source */
+                            if (s3->accel.cmd & 0x10)
+                                s3_k_pixel(s3, s3->accel.dest + (s3->accel.dx * x_mul), src_dat, 0, 7, wrt_mask);
+                        } else {
+                            READ(s3->accel.dest + (s3->accel.dx * x_mul), dest_dat);
+                            dest_dat = (src_dat & wrt_mask) | (dest_dat & ~wrt_mask);
 
-                        if (s3->accel.cmd & 0x10) {
-                            WRITE(s3->accel.dest + (s3->accel.dx * x_mul), dest_dat);
+                            if (s3->accel.cmd & 0x10) {
+                                WRITE(s3->accel.dest + (s3->accel.dx * x_mul), dest_dat);
+                            }
                         }
                     }
 
@@ -9413,13 +9566,20 @@ s3_accel_start(int count, int cpu_input, uint32_t mix_dat, uint32_t cpu_data, vo
                             update = 1;
 
                         if (update) {
-                            READ(s3->accel.dest + (s3->accel.dx * x_mul), dest_dat);
+                            if (s3->k_gpu != NULL) { /* KairoX86#271: the GPU draws the pixel */
 
-                            old_dest_dat = dest_dat;
-                            MIX
+                                if ((!(s3->accel.cmd & 0x10) && vram_mask) || (s3->accel.cmd & 0x10)) {
+                                    s3_k_pixel(s3, s3->accel.dest + (s3->accel.dx * x_mul), src_dat, pat_dat, ((mix_dat & mix_mask) ? (s3->accel.frgd_mix & 0xf) : (s3->accel.bkgd_mix & 0xf)), wrt_mask);
+                                }
+                            } else {
+                                READ(s3->accel.dest + (s3->accel.dx * x_mul), dest_dat);
 
-                            if ((!(s3->accel.cmd & 0x10) && vram_mask) || (s3->accel.cmd & 0x10)) {
-                                WRITE(s3->accel.dest + (s3->accel.dx * x_mul), dest_dat);
+                                old_dest_dat = dest_dat;
+                                MIX
+
+                                if ((!(s3->accel.cmd & 0x10) && vram_mask) || (s3->accel.cmd & 0x10)) {
+                                    WRITE(s3->accel.dest + (s3->accel.dx * x_mul), dest_dat);
+                                }
                             }
                         }
                     }
@@ -9546,13 +9706,20 @@ s3_accel_start(int count, int cpu_input, uint32_t mix_dat, uint32_t cpu_data, vo
                         update = 1;
 
                     if (update) {
-                        READ(s3->accel.dest + (s3->accel.dx * x_mul), dest_dat);
+                        if (s3->k_gpu != NULL) { /* KairoX86#271: the GPU draws the pixel */
 
-                        old_dest_dat = dest_dat;
-                        MIX
+                            if (s3->accel.cmd & 0x10) {
+                                s3_k_pixel(s3, s3->accel.dest + (s3->accel.dx * x_mul), src_dat, pat_dat, ((mix_dat & mix_mask) ? (s3->accel.frgd_mix & 0xf) : (s3->accel.bkgd_mix & 0xf)), wrt_mask);
+                            }
+                        } else {
+                            READ(s3->accel.dest + (s3->accel.dx * x_mul), dest_dat);
 
-                        if (s3->accel.cmd & 0x10) {
-                            WRITE(s3->accel.dest + (s3->accel.dx * x_mul), dest_dat);
+                            old_dest_dat = dest_dat;
+                            MIX
+
+                            if (s3->accel.cmd & 0x10) {
+                                WRITE(s3->accel.dest + (s3->accel.dx * x_mul), dest_dat);
+                            }
                         }
                     }
                 }
@@ -9652,13 +9819,20 @@ s3_accel_start(int count, int cpu_input, uint32_t mix_dat, uint32_t cpu_data, vo
                                 update = 1;
 
                             if (update) {
-                                READ((s3->accel.cy * s3->width * x_mul) + (s3->accel.cx * x_mul), dest_dat);
+                                if (s3->k_gpu != NULL) { /* KairoX86#271: the GPU draws the pixel */
 
-                                old_dest_dat = dest_dat;
-                                MIX
+                                    if (s3->accel.cmd & 0x10) {
+                                        s3_k_pixel(s3, (s3->accel.cy * s3->width * x_mul) + (s3->accel.cx * x_mul), src_dat, pat_dat, ((mix_dat & mix_mask) ? (s3->accel.frgd_mix & 0xf) : (s3->accel.bkgd_mix & 0xf)), wrt_mask);
+                                    }
+                                } else {
+                                    READ((s3->accel.cy * s3->width * x_mul) + (s3->accel.cx * x_mul), dest_dat);
 
-                                if (s3->accel.cmd & 0x10) {
-                                    WRITE((s3->accel.cy * s3->width * x_mul) + (s3->accel.cx * x_mul), dest_dat);
+                                    old_dest_dat = dest_dat;
+                                    MIX
+
+                                    if (s3->accel.cmd & 0x10) {
+                                        WRITE((s3->accel.cy * s3->width * x_mul) + (s3->accel.cx * x_mul), dest_dat);
+                                    }
                                 }
                             }
                         }
@@ -9702,13 +9876,20 @@ s3_accel_start(int count, int cpu_input, uint32_t mix_dat, uint32_t cpu_data, vo
                                 update = 1;
 
                             if (update) {
-                                READ((s3->accel.cy * s3->width * x_mul) + (s3->accel.cx * x_mul), dest_dat);
+                                if (s3->k_gpu != NULL) { /* KairoX86#271: the GPU draws the pixel */
 
-                                old_dest_dat = dest_dat;
-                                MIX
+                                    if (s3->accel.cmd & 0x10) {
+                                        s3_k_pixel(s3, (s3->accel.cy * s3->width * x_mul) + (s3->accel.cx * x_mul), src_dat, pat_dat, ((mix_dat & mix_mask) ? (s3->accel.frgd_mix & 0xf) : (s3->accel.bkgd_mix & 0xf)), wrt_mask);
+                                    }
+                                } else {
+                                    READ((s3->accel.cy * s3->width * x_mul) + (s3->accel.cx * x_mul), dest_dat);
 
-                                if (s3->accel.cmd & 0x10) {
-                                    WRITE((s3->accel.cy * s3->width * x_mul) + (s3->accel.cx * x_mul), dest_dat);
+                                    old_dest_dat = dest_dat;
+                                    MIX
+
+                                    if (s3->accel.cmd & 0x10) {
+                                        WRITE((s3->accel.cy * s3->width * x_mul) + (s3->accel.cx * x_mul), dest_dat);
+                                    }
                                 }
                             }
                         }
@@ -9804,13 +9985,20 @@ s3_accel_start(int count, int cpu_input, uint32_t mix_dat, uint32_t cpu_data, vo
                                 update = 1;
 
                             if (update) {
-                                READ(s3->accel.dest + (s3->accel.poly_x * x_mul), dest_dat);
+                                if (s3->k_gpu != NULL) { /* KairoX86#271: the GPU draws the pixel */
 
-                                old_dest_dat = dest_dat;
-                                MIX
+                                    if (s3->accel.cmd & 0x10) {
+                                        s3_k_pixel(s3, s3->accel.dest + (s3->accel.poly_x * x_mul), src_dat, pat_dat, ((mix_dat & mix_mask) ? (s3->accel.frgd_mix & 0xf) : (s3->accel.bkgd_mix & 0xf)), wrt_mask);
+                                    }
+                                } else {
+                                    READ(s3->accel.dest + (s3->accel.poly_x * x_mul), dest_dat);
 
-                                if (s3->accel.cmd & 0x10) {
-                                    WRITE(s3->accel.dest + (s3->accel.poly_x * x_mul), dest_dat);
+                                    old_dest_dat = dest_dat;
+                                    MIX
+
+                                    if (s3->accel.cmd & 0x10) {
+                                        WRITE(s3->accel.dest + (s3->accel.poly_x * x_mul), dest_dat);
+                                    }
                                 }
                             }
                         }
@@ -10163,7 +10351,10 @@ s3_accel_start(int count, int cpu_input, uint32_t mix_dat, uint32_t cpu_data, vo
                     } else
                         update = 1;
 
-                    if (update) {
+                    if (update && (s3->k_gpu != NULL)) { /* KairoX86#271: the ternary raster operation on the GPU */
+                        if (s3->accel.cmd & 0x10)
+                            s3_k_pixel(s3, s3->accel.dest + (s3->accel.dx * x_mul), src_dat, pat_dat, S3K_ROP3 | rop, wrt_mask);
+                    } else if (update) {
                         READ(s3->accel.dest + (s3->accel.dx * x_mul), dest_dat);
 
                         ROPMIX
@@ -10526,6 +10717,8 @@ s3_reset(void *priv)
         if (s3->pci)
             reset_state->pci_slot = s3->pci_slot;
 
+        if (s3->k_gpu != NULL) /* KairoX86#271: the batch drawn; the reset state holds the same one */
+            s3_k_drain(s3);
         *s3 = *reset_state;
     } else
         s3_log("NULL reset.\n");
@@ -10545,6 +10738,15 @@ s3_calc_crc16(const int ndata, const uint16_t *data)
         }
     }
     return crc16;
+}
+
+/* KairoX86#271: the SVGA core's memory handlers and display (svga->kairo_touch) */
+static void
+s3_svga_touch(svga_t *svga, uint32_t addr, uint32_t len)
+{
+    const s3_t *s3 = (const s3_t *) svga->priv;
+
+    kairo_seg_touch(s3->k_gpu->seg, addr & s3->vram_mask, len);
 }
 
 static void *
@@ -11636,6 +11838,17 @@ s3_init(const device_t *info)
     timer_add(&s3->fifo_emp_timer, s3_fifo_emp_timer, s3, 0);
     svga->render_sync = s3_render_sync;
 
+    /* KairoX86#271: with Hardware acceleration on, the graphics engine's pixels drawn on the GPU (reset keeps the batch) */
+    if (kairo_gpu_on) {
+        s3->k_gpu = calloc(1, sizeof(*s3->k_gpu));
+        if (s3->k_gpu == NULL)
+            fatal("S3 on the GPU: no memory\n");
+        s3->k_gpu->seg = kairo_s3_open(svga->vram, s3->vram_mask, svga->changedvram, &svga->monitor->mon_changeframecount);
+        for (int i = 0; i < 4; i++)
+            s3->k_gpu->run[i] = kairo_seg_run_open(s3->k_gpu->seg, s3->vram_mask, i + 1, S3_PIXEL_WORDS, 1, s3_k_op, s3);
+        svga->kairo_touch = s3_svga_touch;
+    }
+
     *reset_state = *s3;
 
     return s3;
@@ -11652,6 +11865,12 @@ s3_close(void *priv)
     thread_destroy_event(s3->fifo_not_full_event);
     thread_destroy_event(s3->wake_fifo_thread);
 
+    if (s3->k_gpu != NULL) {
+        kairo_seg_close(s3->k_gpu->seg); /* KairoX86#271 */
+        for (int i = 0; i < 4; i++)
+            kairo_seg_run_close(s3->k_gpu->run[i]);
+        free(s3->k_gpu);
+    }
     svga_close(&s3->svga);
 
     ddc_close(s3->ddc);

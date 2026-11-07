@@ -1,0 +1,81 @@
+#version 450
+#extension GL_EXT_control_flow_attributes : require
+/*
+ * The S3 86C801 to Trio64's graphics engine on the GPU (KairoX86#271): 86Box's per-pixel draw of s3_accel_start
+ * (vid_s3.c: READ, MIX or ROPMIX, the write mask, WRITE) for runs of pixels (kairo_seg_run), on the drawing engines'
+ * shared batches (seg.glsl). The walk stays the CPU's and reads each pixel's source, pattern and mix; the pixel's mix
+ * code, source and pattern are its stream words (86box/kairo_gpu_s3.h).
+ *
+ * Copyright 2026 MrJackSpade. GPL-2.0-or-later.
+ */
+#include "seg.glsl"
+
+const uint S3_WRT_MASK = 0u, S3_BYTES = 1u, S3_WORDS = 4u;
+const uint S3K_ROP3 = 0x100u, S3K_NIBBLE = 0x10000u;
+
+/* The 16 mixes (vid_s3.c MIX_READ) */
+uint mix16(uint m, uint d, uint s)
+{
+    switch (m) {
+        case 0x0u: return ~d;
+        case 0x1u: return 0u;
+        case 0x2u: return 0xffffffffu;
+        case 0x3u: return d;
+        case 0x4u: return ~s;
+        case 0x5u: return s ^ d;
+        case 0x6u: return ~(s ^ d);
+        case 0x7u: return s;
+        case 0x8u: return ~(s & d);
+        case 0x9u: return ~s | d;
+        case 0xau: return s | ~d;
+        case 0xbu: return s | d;
+        case 0xcu: return s & d;
+        case 0xdu: return s & ~d;
+        case 0xeu: return ~s & d;
+        default: return ~(s | d);
+    }
+}
+
+/* The Windows ternary raster operation, bit (P << 2 | S << 1 | D), on every bit */
+uint rop3(uint code, uint p, uint s, uint d)
+{
+    uint r = 0u;
+    [[dont_unroll]] for (uint b = 0u; b < 32u; b++) {
+        const uint idx = (((p >> b) & 1u) << 2) | (((s >> b) & 1u) << 1) | ((d >> b) & 1u);
+        r |= ((code >> idx) & 1u) << b;
+    }
+    return r;
+}
+
+void card_pixels(uint seg, uint op, uint row, uint first, int i0, int i1)
+{
+    const uint o   = op * S3_WORDS;
+    const uint pb  = ops[o + S3_BYTES];
+    const uint wm  = ops[o + S3_WRT_MASK];
+    const int  dir = int(segs[seg * KG_WORDS + KG_DIR]);
+    const uint d0  = segs[seg * KG_WORDS + KG_BIT] >> 3;
+    [[dont_unroll]] for (int n = i0; n < i1; n++) {
+        const uint w    = row + uint(n) * 3u;
+        const uint kind = stream[w];
+        const uint src  = stream[w + 1u];
+        const uint pat  = stream[w + 2u];
+        const uint a    = d0 + uint((int(first) + n * dir) * int(pb));
+        const bool nib  = (kind & S3K_NIBBLE) != 0u;
+        const uint sh   = (kind >> 17) & 7u;
+        uint       old;
+        if (nib)
+            old = (rd8(a) >> sh) & 0xfu;
+        else {
+            old = 0u;
+            for (uint i = 0u; i < pb; i++)
+                old |= rd8(a + i) << (8u * i);
+        }
+        uint res = ((kind & S3K_ROP3) != 0u) ? rop3(kind & 0xffu, pat, src, old) : mix16(kind & 0xfu, old, src);
+        res      = (res & wm) | (old & ~wm);
+        if (nib)
+            wr8(a, (rd8(a) & ~(0xfu << sh)) | ((res & 0xfu) << sh));
+        else
+            for (uint i = 0u; i < pb; i++)
+                wr8(a + i, res >> (8u * i));
+    }
+}

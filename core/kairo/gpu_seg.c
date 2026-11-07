@@ -47,8 +47,12 @@ struct kairo_seg {
     uint8_t            *changed;
     const int          *stamp;
     unsigned long long  drawn;
-    void              (*flush)(void *ctx);
-    void               *flush_ctx;
+    struct {
+        void (*fn)(void *ctx);
+        bool (*open)(void *ctx, uint32_t addr, uint32_t len);
+        void *ctx;
+    } flushes[KAIRO_SEG_FLUSHES];
+    uint32_t            n_flushes;
     uint64_t            generation;
 };
 
@@ -162,10 +166,14 @@ drain_locked(kairo_seg_t *s)
 }
 
 void
-kairo_seg_set_flush(kairo_seg_t *s, void (*fn)(void *ctx), void *ctx)
+kairo_seg_add_flush(kairo_seg_t *s, void (*fn)(void *ctx), bool (*open)(void *ctx, uint32_t addr, uint32_t len), void *ctx)
 {
-    s->flush     = fn;
-    s->flush_ctx = ctx;
+    if (s->n_flushes == KAIRO_SEG_FLUSHES)
+        fatal("%s on the GPU: more than %d flushes\n", s->name, KAIRO_SEG_FLUSHES);
+    s->flushes[s->n_flushes].fn   = fn;
+    s->flushes[s->n_flushes].open = open;
+    s->flushes[s->n_flushes].ctx  = ctx;
+    s->n_flushes++;
 }
 
 uint64_t
@@ -177,8 +185,8 @@ kairo_seg_generation(const kairo_seg_t *s)
 void
 kairo_seg_drain(kairo_seg_t *s)
 {
-    if (s->flush != NULL)
-        s->flush(s->flush_ctx);
+    for (uint32_t i = 0; i < s->n_flushes; i++)
+        s->flushes[i].fn(s->flushes[i].ctx);
     if (!kairo_gpu_pages_any(&s->touched) && (s->n_ops == 0))
         return;
     pthread_mutex_lock(&s->lock);
@@ -189,6 +197,10 @@ kairo_seg_drain(kairo_seg_t *s)
 void
 kairo_seg_touch(kairo_seg_t *s, uint32_t addr, uint32_t len)
 {
+    /* Work not in the batch yet that draws or reads there goes in first */
+    for (uint32_t i = 0; i < s->n_flushes; i++)
+        if ((s->flushes[i].open != NULL) && s->flushes[i].open(s->flushes[i].ctx, addr & s->vram_mask, len))
+            s->flushes[i].fn(s->flushes[i].ctx);
     if (kairo_gpu_pages_hit(&s->touched, addr & s->vram_mask, len))
         kairo_seg_drain(s);
 }

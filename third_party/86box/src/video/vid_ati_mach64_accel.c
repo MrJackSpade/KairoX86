@@ -2514,7 +2514,7 @@ mach64_2d_kairo_open(mach64_t *mach64)
                                        &mach64->svga.monitor->mon_changeframecount);
     g->lock     = thread_create_mutex();
     mach64->k_2d = g;
-    kairo_seg_set_flush(g->seg, mach64_2d_flush, mach64);
+    kairo_seg_add_flush(g->seg, mach64_2d_flush, NULL, mach64);
 }
 
 void
