@@ -233,9 +233,32 @@ codegen_texture_fetch(uint8_t *code_block, voodoo_t *voodoo, voodoo_params_t *pa
         addbyte(0xc1);
         addbyte(0xe8);
         addbyte(28);
-        addbyte(0x8b); /*MOV EBX, state->lod_min*/
+        /* KairoX86#289: the triangle's LOD clamped to the texture's range, its fraction kept, as the C code's
+           voodoo_tmu_fetch has it (not lod_min, which drew every mipmapped texture at its largest level) */
+        addbyte(0x8b); /*MOV EBX, state->tmu[tmu].lod*/
+        addbyte(0x9f);
+        addlong(VOODOO_OFFSETOF_ARRAY_MEMBER(voodoo_state_t, tmu, tmu, lod));
+        addbyte(0x3b); /*CMP EBX, state->lod_min*/
         addbyte(0x9f);
         addlong(VOODOO_OFFSETOF_ARRAY(voodoo_state_t, lod_min, tmu));
+        addbyte(0x0f); /*CMOVL EBX, state->lod_min*/
+        addbyte(0x4c);
+        addbyte(0x9f);
+        addlong(VOODOO_OFFSETOF_ARRAY(voodoo_state_t, lod_min, tmu));
+        addbyte(0x3b); /*CMP EBX, state->lod_max*/
+        addbyte(0x9f);
+        addlong(VOODOO_OFFSETOF_ARRAY(voodoo_state_t, lod_max, tmu));
+        addbyte(0x0f); /*CMOVNL EBX, state->lod_max*/
+        addbyte(0x4d);
+        addbyte(0x9f);
+        addlong(VOODOO_OFFSETOF_ARRAY(voodoo_state_t, lod_max, tmu));
+        addbyte(0x89); /*MOV state->lod_frac[tmu], EBX*/
+        addbyte(0x9f);
+        addlong(VOODOO_OFFSETOF_ARRAY(voodoo_state_t, lod_frac, tmu));
+        addbyte(0x81); /*AND state->lod_frac[tmu], 0xff*/
+        addbyte(0xa7);
+        addlong(VOODOO_OFFSETOF_ARRAY(voodoo_state_t, lod_frac, tmu));
+        addlong(0xff);
         addbyte(0x48); /*SHR RCX, 28*/
         addbyte(0xc1);
         addbyte(0xe9);
@@ -871,7 +894,7 @@ voodoo_generate(uint8_t *code_block, voodoo_t *voodoo, voodoo_params_t *params, 
             addbyte(0x07);
 
             addbyte(0x09); /* OR EAX, EBX */
-            addbyte(0xc3);
+            addbyte(0xd8 /* KairoX86#289: EAX is the index (C3 ORed it into EBX) */);
 
             addbyte(0x88); /* MOV CL, AL */
             addbyte(0xc1);
@@ -2388,13 +2411,6 @@ voodoo_generate(uint8_t *code_block, voodoo_t *voodoo, voodoo_params_t *params, 
                 addbyte(0xd8);
             }
 
-            /*Divide by 2 to prevent overflow on multiply*/
-            addbyte(0x66); /*PSRAW XMM3, 1*/
-            addbyte(0x0f);
-            addbyte(0x71);
-            addbyte(0xe3);
-            addbyte(1);
-
             switch (params->fogMode & (FOG_Z | FOG_ALPHA)) {
                 case 0:
                     addbyte(0x8b); /*MOV EBX, state->w_depth[EDI]*/
@@ -2477,40 +2493,52 @@ voodoo_generate(uint8_t *code_block, voodoo_t *voodoo, voodoo_params_t *params, 
                     addbyte(0x8b); /*MOV EAX, state->w[EDI]+4*/
                     addbyte(0x87);
                     addlong(offsetof(voodoo_state_t, w) + 4);
-                    addbyte(0x31); /*XOR EBX, EBX*/
-                    addbyte(0xdb);
-                    addbyte(0x09); /*OR EAX, EAX*/
-                    addbyte(0xc0);
-                    addbyte(0x0f); /*CMOVS EAX, EBX*/
-                    addbyte(0x48);
-                    addbyte(0xc3);
-                    addbyte(0xbb); /*MOV EBX, 0xff*/
+                    addbyte(0x25); /*AND EAX, 0xff (KairoX86#289: the C code masks its low byte, not clamps it)*/
                     addlong(0xff);
-                    addbyte(0x3d); /*CMP EAX, 0xff*/
-                    addlong(0xff);
-                    addbyte(0x0f); /*CMOVAE EAX, EBX*/
-                    addbyte(0x43);
-                    addbyte(0xc3);
 #if 0
-                    fog_a = CLAMP(w >> 32);
+                    fog_a = CLAMP((w >> 32) & 0xff);
 #endif
                     break;
             }
-            addbyte(0x01); /*ADD EAX, EAX*/
+            /* KairoX86#289: (fog * (fog_a + 1)) >> 8 in 32 bits, as the C code has it (halving the fog first to
+               keep the product in 16 bits lost its low bit; fog_a from the table reaches past 255) */
+            addbyte(0x83); /*ADD EAX, 1*/
             addbyte(0xc0);
-
-            addbyte(0x66); /*PMULLW XMM3, alookup+4[EAX*8]*/
-            addbyte(0x41);
+            addbyte(1);
+            addbyte(0x66); /*MOVD XMM5, EAX*/
+            addbyte(0x0f);
+            addbyte(0x6e);
+            addbyte(0xe8);
+            addbyte(0xf2); /*PSHUFLW XMM5, XMM5, 0*/
+            addbyte(0x0f);
+            addbyte(0x70);
+            addbyte(0xed);
+            addbyte(0);
+            addbyte(0xf3); /*MOVQ XMM4, XMM3*/
+            addbyte(0x0f);
+            addbyte(0x7e);
+            addbyte(0xe3);
+            addbyte(0x66); /*PMULLW XMM3, XMM5*/
             addbyte(0x0f);
             addbyte(0xd5);
-            addbyte(0x5c);
-            addbyte(0xc2);
-            addbyte(16);
-            addbyte(0x66); /*PSRAW XMM3, 7*/
+            addbyte(0xdd);
+            addbyte(0x66); /*PMULHW XMM4, XMM5*/
             addbyte(0x0f);
-            addbyte(0x71);
+            addbyte(0xe5);
+            addbyte(0xe5);
+            addbyte(0x66); /*PUNPCKLWD XMM3, XMM4*/
+            addbyte(0x0f);
+            addbyte(0x61);
+            addbyte(0xdc);
+            addbyte(0x66); /*PSRAD XMM3, 8*/
+            addbyte(0x0f);
+            addbyte(0x72);
             addbyte(0xe3);
-            addbyte(7);
+            addbyte(8);
+            addbyte(0x66); /*PACKSSDW XMM3, XMM3*/
+            addbyte(0x0f);
+            addbyte(0x6b);
+            addbyte(0xdb);
 
             if (params->fogMode & FOG_MULT) {
                 addbyte(0xf3); /*MOV XMM0, XMM3*/
@@ -2595,8 +2623,8 @@ voodoo_generate(uint8_t *code_block, voodoo_t *voodoo, voodoo_params_t *params, 
             addbyte(0x8b);
             addbyte(0x8f);
             addlong(offsetof(voodoo_state_t, aux_mem));
-            addbyte(0x0f); /*MOVZX EBX, [ECX+EBX*2]*/
-            addbyte(0xb7);
+            addbyte(0x0f); /*MOVZX EBX, byte [ECX+EBX*2] (KairoX86#289: the alpha is the aux word's low byte, as the C code's uint8_t dest_a has it)*/
+            addbyte(0xb6);
             addbyte(0x1c);
             addbyte(0x59);
         } else {
@@ -2641,6 +2669,58 @@ voodoo_generate(uint8_t *code_block, voodoo_t *voodoo, voodoo_params_t *params, 
         addbyte(0x0f);
         addbyte(0x60);
         addbyte(0xe2);
+        if (dithersub && voodoo->dithersub_enabled) {
+            /* KairoX86#289: subtractive dithering, as the C code has it: each of the destination's channels
+               through dithersub_rb/_g (or their 2x2 forms) at (real_y, x) before the blend reads it */
+            const int sub2 = dither2x2 ? 1 : 0;
+            addbyte(0x44); /*MOV ECX, R14D (real_y)*/
+            addbyte(0x89);
+            addbyte(0xf1);
+            addbyte(0x8b); /*MOV EAX, state->x[EDI]*/
+            addbyte(0x87);
+            addlong(offsetof(voodoo_state_t, x));
+            addbyte(0x83); /*AND ECX, 3 or 1*/
+            addbyte(0xe1);
+            addbyte(sub2 ? 1 : 3);
+            addbyte(0x83); /*AND EAX, 3 or 1*/
+            addbyte(0xe0);
+            addbyte(sub2 ? 1 : 3);
+            addbyte(0x8d); /*LEA ECX, [RAX+RCX*4 or *2]*/
+            addbyte(0x0c);
+            addbyte(sub2 ? 0x48 : 0x88);
+            addbyte(0x48); /*MOV RSI, dithersub_rb*/
+            addbyte(0xbe);
+            addquad(sub2 ? (uintptr_t) dithersub_rb2x2 : (uintptr_t) dithersub_rb);
+            addbyte(0x48); /*ADD RSI, RCX*/
+            addbyte(0x01);
+            addbyte(0xce);
+            for (int channel = 0; channel < 3; channel++) {
+                addbyte(0x66); /*PEXTRW EAX, XMM4, channel*/
+                addbyte(0x0f);
+                addbyte(0xc5);
+                addbyte(0xc4);
+                addbyte(channel);
+                addbyte(0xc1); /*SHL EAX, 4 or 2*/
+                addbyte(0xe0);
+                addbyte(sub2 ? 2 : 4);
+                addbyte(0x0f); /*MOVZX EAX, byte [RSI+RAX+table offset]*/
+                addbyte(0xb6);
+                addbyte(0x84);
+                addbyte(0x06);
+                if (channel == 1)
+                    addlong(sub2 ? (uint32_t) ((uintptr_t) dithersub_g2x2 - (uintptr_t) dithersub_rb2x2) : (uint32_t) ((uintptr_t) dithersub_g - (uintptr_t) dithersub_rb));
+                else
+                    addlong(0);
+                addbyte(0x66); /*PINSRW XMM4, EAX, channel*/
+                addbyte(0x0f);
+                addbyte(0xc4);
+                addbyte(0xe0);
+                addbyte(channel);
+            }
+            addbyte(0x4c); /*MOV RSI, R15 (params again)*/
+            addbyte(0x89);
+            addbyte(0xfe);
+        }
         addbyte(0xf3); /*MOV XMM6, XMM4*/
         addbyte(0x0f);
         addbyte(0x7e);
