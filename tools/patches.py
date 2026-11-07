@@ -4112,6 +4112,17 @@ KAIROX86_GPU_S3 = [
      '\n    if (s3->k_gpu != NULL) {\n        kairo_seg_close(s3->k_gpu->seg); /* KairoX86#271 */\n        for (int i = 0; i < 4; i++)\n            kairo_seg_run_close(s3->k_gpu->run[i]);\n        free(s3->k_gpu);\n    }\n    svga_close(&s3->svga);\n'),
 ]
 
+# KairoX86#297: the Mach64 2D engine's row being fed from the host, partly received, goes into the batch wherever the
+# processor or the display touches (its open check on the shared batches' flushes).
+KAIROX86_MACH64_2D_OPEN = [
+    ('86box/src/video/vid_ati_mach64_accel.c',
+     '\n/* Bytes [lo, hi) of video memory as a pixel range [p_lo, p_hi] of a width at an offset (pixel addresses) */\n',
+     '\n/* KairoX86#297: whether the row being fed has pixels not in the batch yet; wherever the processor or the display\n   touches, they go in first (the row is short, so its place is not worked out) */\nstatic bool\nmach64_2d_open(void *ctx, UNUSED(uint32_t addr), UNUSED(uint32_t len))\n{\n    mach64_t        *mach64 = ctx;\n    mach64_2d_gpu_t *g      = mach64->k_2d;\n    bool             open;\n\n    /* No rectangle fed from the host (nearly always): no lock taken */\n    if (!__atomic_load_n(&g->host, __ATOMIC_RELAXED))\n        return false;\n    thread_wait_mutex(g->lock);\n    open = g->host && (g->row_done > g->row_flushed);\n    thread_release_mutex(g->lock);\n    return open;\n}\n\n/* Bytes [lo, hi) of video memory as a pixel range [p_lo, p_hi] of a width at an offset (pixel addresses) */\n'),
+    ('86box/src/video/vid_ati_mach64_accel.c',
+     '    mach64->k_2d = g;\n    kairo_seg_add_flush(g->seg, mach64_2d_flush, NULL, mach64);\n}\n',
+     '    mach64->k_2d = g;\n    kairo_seg_add_flush(g->seg, mach64_2d_flush, mach64_2d_open, mach64);\n}\n'),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -4171,6 +4182,7 @@ PATCHES = {
     'kairox86-gpu-tgui': KAIROX86_GPU_TGUI,
     'kairox86-gpu-xga': KAIROX86_GPU_XGA,
     'kairox86-gpu-s3': KAIROX86_GPU_S3,
+    'kairox86-mach64-2d-open': KAIROX86_MACH64_2D_OPEN,
     'kairox86-gpu-cga': KAIROX86_GPU_CGA,
     'kairox86-whole-frames': KAIROX86_WHOLE_FRAMES,
     'kairox86-gpu-mda': KAIROX86_GPU_MDA,

@@ -2196,6 +2196,24 @@ mach64_2d_flush(void *ctx)
     thread_release_mutex(g->lock);
 }
 
+/* KairoX86#297: whether the row being fed has pixels not in the batch yet; wherever the processor or the display
+   touches, they go in first (the row is short, so its place is not worked out) */
+static bool
+mach64_2d_open(void *ctx, UNUSED(uint32_t addr), UNUSED(uint32_t len))
+{
+    mach64_t        *mach64 = ctx;
+    mach64_2d_gpu_t *g      = mach64->k_2d;
+    bool             open;
+
+    /* No rectangle fed from the host (nearly always): no lock taken */
+    if (!__atomic_load_n(&g->host, __ATOMIC_RELAXED))
+        return false;
+    thread_wait_mutex(g->lock);
+    open = g->host && (g->row_done > g->row_flushed);
+    thread_release_mutex(g->lock);
+    return open;
+}
+
 /* Bytes [lo, hi) of video memory as a pixel range [p_lo, p_hi] of a width at an offset (pixel addresses) */
 static void
 mach64_2d_bytes(uint32_t p_lo, uint32_t p_hi, int size, uint64_t *lo, uint64_t *hi)
@@ -2514,7 +2532,7 @@ mach64_2d_kairo_open(mach64_t *mach64)
                                        &mach64->svga.monitor->mon_changeframecount);
     g->lock     = thread_create_mutex();
     mach64->k_2d = g;
-    kairo_seg_add_flush(g->seg, mach64_2d_flush, NULL, mach64);
+    kairo_seg_add_flush(g->seg, mach64_2d_flush, mach64_2d_open, mach64);
 }
 
 void
