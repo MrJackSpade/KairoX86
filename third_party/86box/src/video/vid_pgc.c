@@ -91,6 +91,8 @@
 #include <86box/vid_pgc.h>
 #include <stdbool.h>
 #include <86box/kairo_gpu.h> /* KairoX86#268 */
+#include <86box/kairo_gpu_seg.h>
+#include <86box/kairo_gpu_pgc.h>
 
 #define PGC_CGA_WIDTH  640
 #define PGC_CGA_HEIGHT 400
@@ -526,6 +528,39 @@ hndl_cldel(pgc_t *dev)
  * framebuffer can be taller than the image, so a raster-row loop would
  * clear rows the screen does not show.
  */
+/* KairoX86#268: the drawing processor's batch and its one run of pixels */
+struct pgc_k_gpu {
+    kairo_seg_t     *seg;
+    kairo_seg_run_t *run;
+    uint64_t         generation;
+    int              issued;
+    int              in_order;
+};
+
+/* KairoX86#268: the run's operation in the batch (its record unused: every pixel carries its own), again only once
+   the batch has been drawn or the run's order changes */
+static void
+pgc_k_op(void *priv, bool in_order)
+{
+    struct pgc_k_gpu *g = ((pgc_t *) priv)->k_gpu;
+
+    if (g->issued && (g->in_order == in_order) && (g->generation == kairo_seg_generation(g->seg)))
+        return;
+    kairo_seg_op(g->seg, in_order)[0] = 0;
+    g->generation = kairo_seg_generation(g->seg);
+    g->in_order   = in_order;
+    g->issued     = 1;
+}
+
+/* KairoX86#268: the CPU is about to read or write len bytes of video memory at offset: what the GPU has to draw
+   there first */
+static void
+pgc_k_touch(pgc_t *dev, uint32_t offset, uint32_t len)
+{
+    if (dev->k_gpu != NULL)
+        kairo_seg_touch(dev->k_gpu->seg, offset, len);
+}
+
 static void
 hndl_clears(pgc_t *dev)
 {
@@ -534,8 +569,10 @@ hndl_clears(pgc_t *dev)
     if (!pgc_param_byte(dev, &param))
         return;
 
-    for (uint32_t y = 0; y < (uint32_t) dev->img_h; y++)
+    for (uint32_t y = 0; y < (uint32_t) dev->img_h; y++) {
+        pgc_k_touch(dev, (dev->maxh - 1 - y) * dev->maxw, (uint32_t) dev->img_w); /* KairoX86#268 */
         memset(dev->vram + (dev->maxh - 1 - y) * dev->maxw, param, (size_t) dev->img_w);
+    }
 }
 
 /*
@@ -1161,23 +1198,45 @@ hndl_mover3(pgc_t *dev)
     dev->z += z;
 }
 
-/* Given raster coordinates, find the matching address in PGC video RAM. */
-uint8_t *
-pgc_vram_addr(pgc_t *dev, int16_t x, int16_t y)
+/* Given raster coordinates, the matching offset in PGC video RAM, or -1 outside it. */
+static int
+pgc_vram_offset(const pgc_t *dev, int16_t x, int16_t y)
 {
     int offset;
 
     /* We work from the bottom left-hand corner. */
     if (y < 0 || (uint32_t) y >= dev->maxh || x < 0 || (uint32_t) x >= dev->maxw)
-        return NULL;
+        return -1;
 
     offset = (dev->maxh - 1 - y) * (dev->maxw) + x;
     pgc_log("PGC: vram_addr(x=%i,y=%i) = %i\n", x, y, offset);
 
     if (offset < 0 || (uint32_t) offset >= (dev->maxw * dev->maxh))
-        return NULL;
+        return -1;
 
+    return offset;
+}
+
+/* Given raster coordinates, find the matching address in PGC video RAM, for the CPU to read or write there:
+   with the drawing processor on the GPU, what it has to draw there drawn first (KairoX86#268). */
+uint8_t *
+pgc_vram_addr(pgc_t *dev, int16_t x, int16_t y)
+{
+    const int offset = pgc_vram_offset(dev, x, y);
+
+    if (offset < 0)
+        return NULL;
+    pgc_k_touch(dev, (uint32_t) offset, 1);
     return &dev->vram[offset];
+}
+
+/* KairoX86#268: a pixel's draw recorded for the GPU: its operation (PGC_K_*) and value */
+static void
+pgc_k_pixel(pgc_t *dev, int offset, uint32_t op, uint8_t value)
+{
+    const uint32_t word[PGC_K_WORDS] = { value | (op << 8) };
+
+    kairo_seg_run_pixel(dev->k_gpu->run, (uint32_t) offset, word, NULL);
 }
 
 /*
@@ -1198,6 +1257,12 @@ pgc_write_pixel(pgc_t *dev, uint16_t x, uint16_t y, uint8_t ink)
         return;
     }
 
+    if (dev->k_gpu != NULL) { /* KairoX86#268 */
+        const int offset = pgc_vram_offset(dev, x, y);
+        if (offset >= 0)
+            pgc_k_pixel(dev, offset, PGC_K_SET, ink);
+        return;
+    }
     vram = pgc_vram_addr(dev, x, y);
     if (vram)
         *vram = ink;
@@ -1238,6 +1303,14 @@ pgc_plot(pgc_t *dev, uint16_t x, uint16_t y)
                 x, y,
                 dev->vp_x1, dev->vp_x2, dev->vp_y1, dev->vp_y2,
                 dev->draw_mode, dev->color);
+        return;
+    }
+
+    if (dev->k_gpu != NULL) { /* KairoX86#268: the draw mode's operation on the GPU */
+        static const uint32_t ops[4] = { PGC_K_SET, PGC_K_INVERT, PGC_K_XOR, PGC_K_AND };
+        const int             offset = pgc_vram_offset(dev, x, y);
+        if (offset >= 0)
+            pgc_k_pixel(dev, offset, (dev->draw_mode < 4) ? ops[dev->draw_mode] : PGC_K_SET, dev->color);
         return;
     }
 
@@ -2124,7 +2197,11 @@ wake_timer(void *priv)
     pgc_log("PGC: woke up\n");
 #endif
 
+    /* KairoX86#310: the machine waits while the thread does all it can, so its work lands at this point in emulated
+       time whatever the host's threads do */
+    thread_reset_event(dev->pgc_idle);
     thread_set_event(dev->pgc_wake_thread);
+    thread_wait_event(dev->pgc_idle, -1);
 }
 
 /*
@@ -2170,6 +2247,7 @@ pgc_thread(void *priv)
 #ifdef ENABLE_PGC_LOG
     pgc_log("PGC: thread stopped\n");
 #endif
+    thread_set_event(dev->pgc_idle); /* KairoX86#310: the machine waits no longer */
 }
 
 /* Parameter passed is not a number: abort. */
@@ -2372,6 +2450,7 @@ pgc_sleep(pgc_t *dev)
     if (dev->stopped)
         return;
 
+    thread_set_event(dev->pgc_idle); /* KairoX86#310: the machine goes on */
     thread_wait_event(dev->pgc_wake_thread, -1);
     thread_reset_event(dev->pgc_wake_thread);
 }
@@ -3223,6 +3302,8 @@ pgc_render_gpu(pgc_t *dev)
     const int32_t y      = dev->scan_top + dev->displine;
     uint8_t      *bytes  = (uint8_t *) kairo_gpu_scan(bitmap, bitmap->kairo_gpu, (uint32_t) (bitmap->line[dev->displine] - bitmap->dat),
                                                       KAIRO_SCAN_8, dev->screenw, (dev->screenw + 3) / 4, dev->palette, 256, 0xff, 0, 0);
+    if (y >= 0 && y < (int32_t) dev->maxh)
+        pgc_k_touch(dev, (uint32_t) y * dev->maxw, dev->maxw);
     for (uint32_t x = 0; x < dev->screenw; x++)
         bytes[x] = (y >= 0 && y < (int32_t) dev->maxh) ? dev->vram[y * dev->maxw + ((uint32_t) dev->scan_left + x) % dev->maxw] : 0;
     kairo_gpu_scan_commit();
@@ -3415,13 +3496,21 @@ pgc_close_common(void *priv)
 #endif
     // while (dev->stopped);
     thread_wait(dev->pgc_thread);
+    thread_destroy_event(dev->pgc_idle); /* KairoX86#310 */
+    thread_destroy_event(dev->pgc_wake_thread);
 #ifdef ENABLE_PGC_LOG
     pgc_log("PGC: thread stopped, closing up.\n");
 #endif
 
     if (dev->cga_vram)
         free(dev->cga_vram);
-    if (dev->vram)
+    if (dev->k_gpu != NULL) { /* KairoX86#268 */
+        kairo_seg_close(dev->k_gpu->seg);
+        kairo_seg_run_close(dev->k_gpu->run);
+        free(dev->k_gpu);
+        dev->k_gpu = NULL;
+        kairo_gpu_free(dev->vram);
+    } else if (dev->vram)
         free(dev->vram);
 }
 
@@ -3466,8 +3555,23 @@ pgc_init(pgc_t *dev, int maxw, int maxh, int visw, int vish,
     dev->img_w = visw;
     dev->img_h = vish;
 
-    dev->vram = (uint8_t *) calloc((size_t) maxw, maxh);
-    memset(dev->vram, 0x00, (size_t) maxw * maxh);
+    if (kairo_gpu_on) {
+        /* KairoX86#268: with Hardware acceleration on, the drawing processor's pixels drawn on the GPU, in video
+           memory shared with it (the batch's: a power of two) */
+        uint32_t size = 1;
+        while (size < (uint32_t) maxw * (uint32_t) maxh)
+            size <<= 1;
+        dev->vram  = kairo_gpu_alloc(size);
+        dev->k_gpu = calloc(1, sizeof(*dev->k_gpu));
+        if ((dev->vram == NULL) || (dev->k_gpu == NULL))
+            fatal("PGC on the GPU: no memory\n");
+        memset(dev->vram, 0x00, size);
+        dev->k_gpu->seg = kairo_pgc_open(dev->vram, size - 1);
+        dev->k_gpu->run = kairo_seg_run_open(dev->k_gpu->seg, size - 1, 1, PGC_K_WORDS, 0, pgc_k_op, dev);
+    } else {
+        dev->vram = (uint8_t *) calloc((size_t) maxw, maxh);
+        memset(dev->vram, 0x00, (size_t) maxw * maxh);
+    }
     dev->cga_vram = (uint8_t *) calloc(1, 16384);
     memset(dev->cga_vram, 0x00, 16384);
 
@@ -3490,7 +3594,9 @@ pgc_init(pgc_t *dev, int maxw, int maxh, int visw, int vish,
     dev->inputbyte = inpbyte;
     dev->master = dev->commands = pgc_commands;
     dev->pgc_wake_thread        = thread_create_event();
+    dev->pgc_idle               = thread_create_event();
     dev->pgc_thread             = thread_create(pgc_thread, dev);
+    thread_wait_event(dev->pgc_idle, -1); /* KairoX86#310: the machine starts once the thread first sleeps */
 
     timer_add(&dev->timer, pgc_poll, dev, 1);
 

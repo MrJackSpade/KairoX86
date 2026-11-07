@@ -270,9 +270,9 @@ render_gpu_seq8(svga_t *svga, uint32_t *p, int dwords_per_step, bool wide, bool 
    most significant first, through `colours` (KAIRO_SCAN_BITS), each drawn twice across when wide, to the
    GPU when eligible (the installed renderer is the one asking): returns where its bytes go, in the order
    the loop reads them (NULL: the CPU draws the line). The caller commits the queue. */
-static uint8_t *
-render_gpu_bits(svga_t *svga, uint32_t *p, uint32_t bits, uint32_t pixels, bool wide, const uint32_t *colours, uint32_t n,
-                bool eligible)
+uint8_t *
+svga_render_gpu_bits(svga_t *svga, uint32_t *p, uint32_t bits, uint32_t pixels, bool wide, const uint32_t *colours,
+                     uint32_t n, bool eligible)
 {
     if (!kairo_gpu_on || !eligible || !svga->render_async || (pixels == 0) || (pixels > 4096))
         return NULL;
@@ -776,7 +776,7 @@ render_2bpp_s3(svga_t *svga, bool wide)
         colours[v] = svga->pallook[svga->egapal[v] & svga->dac_mask];
     const int step = wide ? 16 : 8;
     const int end  = svga->hdisp + svga->scrollcache;
-    uint8_t  *gpu  = (end >= 0) ? render_gpu_bits(svga, p, 2, (uint32_t) (end / step + 1) * 8, wide, colours, 4,
+    uint8_t  *gpu  = (end >= 0) ? svga_render_gpu_bits(svga, p, 2, (uint32_t) (end / step + 1) * 8, wide, colours, 4,
                                                   svga->render == (wide ? svga_render_2bpp_s3_lowres : svga_render_2bpp_s3_highres))
                                 : NULL;
 
@@ -895,7 +895,7 @@ svga_render_2bpp_headland_highres(svga_t *svga)
         /* KairoX86#233: each 8 pixels' nibbles to the GPU, when it draws the line (the plane mask within
            4 bits: its pixels index the 16 colours) */
         uint8_t *gpu = ((end >= 0) && !(svga->plane_mask & ~0x0f))
-                           ? render_gpu_bits(svga, p, 4, (uint32_t) (end / 8 + 1) * 8, false, colours, 16,
+                           ? svga_render_gpu_bits(svga, p, 4, (uint32_t) (end / 8 + 1) * 8, false, colours, 16,
                                              svga->render == svga_render_2bpp_headland_highres)
                            : NULL;
 
@@ -1533,7 +1533,7 @@ svga_render_4bpp_tseng_highres(svga_t *svga)
     const int end = svga->hdisp + svga->scrollcache;
     /* KairoX86#233: each 8 pixels' nibbles to the GPU, when it draws the line (the plane mask within 4 bits) */
     uint8_t *gpu = ((end >= 0) && !(svga->plane_mask & ~0x0f))
-                       ? render_gpu_bits(svga, p, 4, (uint32_t) (end / 8 + 1) * 8, false, colours, 16,
+                       ? svga_render_gpu_bits(svga, p, 4, (uint32_t) (end / 8 + 1) * 8, false, colours, 16,
                                          svga->render == svga_render_4bpp_tseng_highres)
                        : NULL;
 

@@ -17,6 +17,9 @@
 #include <86box/timer.h>
 #include <86box/video.h>
 #include <86box/vid_svga.h>
+#include <86box/kairo_gpu.h>         /* KairoX86#267 */
+#include <86box/kairo_gpu_seg.h>
+#include <86box/kairo_gpu_wd90c3x.h>
 #include "vid_wd90c31.h"
 
 enum {
@@ -50,6 +53,15 @@ struct wd90c31_t {
     uint16_t cursor_origin;
     uint32_t cursor_address;
     int      busy, irq;
+    /* KairoX86#267: the engine's pixels drawn on the GPU (packed and planar runs); NULL in software */
+    struct {
+        kairo_seg_t     *seg;
+        kairo_seg_run_t *run[2];
+        uint32_t         record[WD_WORDS];
+        uint64_t         generation;
+        int              issued;
+        int              in_order;
+    } *k_gpu;
 };
 
 static const uint16_t blt_masks[16] = {
@@ -120,6 +132,8 @@ wd90c31_pixel_write(wd90c31_t *wd, uint32_t address, uint8_t pixel)
         svga->fullchange = svga->monitor->mon_changeframecount;
 }
 
+static void wd90c31_k_flush(wd90c31_t *wd); /* KairoX86#267 */
+
 static void
 wd90c31_blt_finish(wd90c31_t *wd)
 {
@@ -135,6 +149,7 @@ wd90c31_blt_finish(wd90c31_t *wd)
         wd->blt[BLT_DST_LO] = dst & 0xfff;
         wd->blt[BLT_DST_HI] = dst >> 12;
     }
+    wd90c31_k_flush(wd); /* KairoX86#267 */
     wd->busy = 0;
     wd->blt[BLT_CONTROL1] &= ~0x800;
     if (r[BLT_CONTROL2] & 0x400) {
@@ -166,12 +181,98 @@ wd90c31_blt_address(wd90c31_t *wd, int source)
     return (base + direction * (wd->y * pitch + wd->x)) & 0x1fffff;
 }
 
+/* KairoX86#267: the run's operation in the batch: the record again only where it differs or the batch has been drawn */
+static void
+wd90c31_k_op(void *priv, bool in_order)
+{
+    wd90c31_t      *wd              = (wd90c31_t *) priv;
+    const uint16_t *r               = wd->active;
+    uint32_t        rec[WD_WORDS]   = { 0 };
+    const int       packed          = !!(r[BLT_CONTROL1] & 0x100);
+
+    const unsigned  format          = (r[BLT_CONTROL1] >> 2) & 3;
+
+    rec[WD_ROP]      = r[BLT_ROP] >> 8;
+    rec[WD_FG]       = r[BLT_FG];
+    rec[WD_BG]       = r[BLT_BG];
+    rec[WD_TRANS]    = r[BLT_TRANS_COLOR];
+    rec[WD_CMP_MASK] = packed ? r[BLT_TRANS_MASK] : (r[BLT_TRANS_MASK] & 0x0f);
+    rec[WD_MASK]     = r[BLT_MASK] & 0xff;
+    rec[WD_DEPTH]    = packed ? 1 : 0;
+    rec[WD_FLAGS]    = ((r[BLT_CONTROL2] & 1) ? WDF_DST_CMP : 0) | ((r[BLT_CONTROL2] & 4) ? WDF_CMP_MATCH : 0) |
+                    ((r[BLT_CONTROL2] & 8) ? WDF_MONO_SKIP : 0) | ((format == 2) ? WDF_FIXED : 0);
+    kairo_seg_make_room(wd->k_gpu->seg);
+    if (wd->k_gpu->issued && (wd->k_gpu->in_order == in_order) && (wd->k_gpu->generation == kairo_seg_generation(wd->k_gpu->seg)) &&
+        !memcmp(wd->k_gpu->record, rec, sizeof(rec)))
+        return;
+    memcpy(kairo_seg_op(wd->k_gpu->seg, in_order), rec, sizeof(rec));
+    memcpy(wd->k_gpu->record, rec, sizeof(rec));
+    wd->k_gpu->generation = kairo_seg_generation(wd->k_gpu->seg);
+    wd->k_gpu->in_order   = in_order;
+    wd->k_gpu->issued     = 1;
+}
+
+/* KairoX86#267: every run into the batch: the operation has ended or its registers changed */
+static void
+wd90c31_k_flush(wd90c31_t *wd)
+{
+    if (wd->k_gpu != NULL)
+        for (int i = 0; i < 2; i++)
+            kairo_seg_run_flush(wd->k_gpu->run[i]);
+}
+
+#define WD90C31_K_NONE 0xffffffffu
+
+/* KairoX86#267: the pixel at engine address dst recorded for the GPU: its source the value source, or the pixel at
+   engine address source_at */
+static void
+wd90c31_k_pixel(wd90c31_t *wd, uint32_t dst, uint8_t source, uint32_t source_at)
+{
+    svga_t        *svga   = wd->svga;
+    const int      packed = !!(wd->active[BLT_CONTROL1] & 0x100);
+    const uint32_t d_at   = packed ? wd90c31_vram_address(svga, dst) : wd90c31_vram_address(svga, (dst >> 3) << 2);
+    const unsigned format = (wd->active[BLT_CONTROL1] >> 2) & 3;
+    uint32_t       s_at   = KAIRO_SEG_RUN_NONE;
+    uint32_t       kind   = packed ? 0 : ((dst & 7) << 8);
+
+    if (format == 2)
+        source_at = WD90C31_K_NONE; /* the foreground colour: the source is not read */
+    if (source_at != WD90C31_K_NONE) {
+        s_at = packed ? wd90c31_vram_address(svga, source_at) : wd90c31_vram_address(svga, (source_at >> 3) << 2);
+        kind |= WDK_ADDR | (packed ? 0 : ((source_at & 7) << 16));
+    }
+    if (format == 1)
+        kind |= WDK_MONO | WDK_MONO_CMP;
+    else if (format == 3)
+        kind |= WDK_MONO | ((source_at != WD90C31_K_NONE) ? WDK_MONO_NZ : (source ? WDK_MONO_BIT : 0));
+    const uint32_t words[WD_PIXEL_WORDS] = { kind, (s_at != KAIRO_SEG_RUN_NONE) ? s_at : source };
+    const uint32_t reads[1]              = { s_at };
+
+    kairo_seg_run_flush(wd->k_gpu->run[packed ? 1 : 0]);
+    kairo_seg_run_pixel(wd->k_gpu->run[packed ? 0 : 1], d_at, words, reads);
+    if (!(svga->gdcreg[6] & 1))
+        svga->fullchange = svga->monitor->mon_changeframecount;
+}
+
 static uint8_t
-wd90c31_blt_pixel(wd90c31_t *wd, uint8_t source)
+wd90c31_blt_pixel(wd90c31_t *wd, uint8_t source, uint32_t source_at)
 {
     const uint16_t *r            = wd->active;
     unsigned        format       = (r[BLT_CONTROL1] >> 2) & 3;
     uint32_t        dst          = wd90c31_blt_address(wd, 0);
+
+    /* KairoX86#267: with the GPU, every pixel but a host read's (which hands the result back) drawn there */
+    if ((wd->k_gpu != NULL) && !(r[BLT_CONTROL1] & 0x20)) {
+        wd90c31_k_pixel(wd, dst, source, source_at);
+        if (++wd->x == r[BLT_WIDTH]) {
+            wd->x = 0;
+            if (++wd->y == r[BLT_HEIGHT])
+                wd90c31_blt_finish(wd);
+        }
+        return 0;
+    }
+    if (source_at != WD90C31_K_NONE)
+        source = wd90c31_pixel_read(wd, source_at);
     uint8_t         dest         = (r[BLT_CONTROL1] & 0x20) ? 0 : wd90c31_pixel_read(wd, dst);
     /* Contrary to the data sheet, set mask bits select the bits that are
        compared: WD's drivers extract glyph plane n with a mask of 1 << n. */
@@ -208,6 +309,7 @@ wd90c31_blt_pixel(wd90c31_t *wd, uint8_t source)
 static void
 wd90c31_blt_start(wd90c31_t *wd)
 {
+    wd90c31_k_flush(wd); /* KairoX86#267: the last operation's pixels before this one's registers */
     memcpy(wd->active, wd->blt, sizeof(wd->active));
     wd->source      = wd->blt[BLT_SRC_LO] | (wd->blt[BLT_SRC_HI] << 12);
     wd->destination = wd->blt[BLT_DST_LO] | (wd->blt[BLT_DST_HI] << 12);
@@ -238,10 +340,8 @@ wd90c31_blt_start(wd90c31_t *wd)
     if (wd->blt[BLT_CONTROL1] & 0x22)
         return;
 
-    while (wd->busy) {
-        uint8_t source = wd90c31_pixel_read(wd, wd90c31_blt_address(wd, 1));
-        wd90c31_blt_pixel(wd, source);
-    }
+    while (wd->busy)
+        wd90c31_blt_pixel(wd, 0, wd90c31_blt_address(wd, 1));
 }
 
 static void
@@ -274,7 +374,7 @@ wd90c31_host_write(wd90c31_t *wd, uint16_t value)
             for (unsigned plane = 0; plane < 4; plane++)
                 pixel |= ((wd->host_data >> (plane * 8 + 7 - i)) & 1) << plane;
         }
-        wd90c31_blt_pixel(wd, pixel);
+        wd90c31_blt_pixel(wd, pixel, WD90C31_K_NONE);
     }
     wd->host_words = 0;
     wd->host_data  = 0;
@@ -294,10 +394,11 @@ wd90c31_host_read(wd90c31_t *wd)
     }
     if (!wd->busy || !(wd->active[BLT_CONTROL1] & 0x20))
         return 0xffff;
+    if (wd->k_gpu != NULL)
+        kairo_seg_drain(wd->k_gpu->seg); /* KairoX86#267: the result read back is the CPU's */
     wd->host_data = 0;
     for (unsigned i = 0; i < (packed ? 4u : 8u) && wd->busy && wd->y == row; i++) {
-        uint8_t source = wd90c31_pixel_read(wd, wd90c31_blt_address(wd, 1));
-        uint8_t pixel  = wd90c31_blt_pixel(wd, source);
+        uint8_t pixel = wd90c31_blt_pixel(wd, 0, wd90c31_blt_address(wd, 1));
         if (packed)
             wd->host_data |= (uint32_t) pixel << (i * 8);
         else {
@@ -507,11 +608,31 @@ wd90c31_hwcursor_draw(wd90c31_t *wd, int displine)
     cursor->addr += cursor->pitch * (svga->interlace ? 2 : 1);
 }
 
+/* KairoX86#267: the SVGA core's memory handlers and display (svga->kairo_touch) */
+static void
+wd90c31_svga_touch(svga_t *svga, uint32_t addr, uint32_t len)
+{
+    const wd90c31_t *wd = (const wd90c31_t *) svga->kairo_touch_priv;
+
+    kairo_seg_touch(wd->k_gpu->seg, addr & svga->vram_mask, len);
+}
+
 wd90c31_t *
 wd90c31_init(svga_t *svga)
 {
     wd90c31_t *wd = calloc(1, sizeof(*wd));
     wd->svga      = svga;
+    /* KairoX86#267: with Hardware acceleration on, the engine's pixels drawn on the GPU */
+    if (kairo_gpu_on) {
+        wd->k_gpu = calloc(1, sizeof(*wd->k_gpu));
+        if (wd->k_gpu == NULL)
+            fatal("WD90C31 on the GPU: no memory\n");
+        wd->k_gpu->seg    = kairo_wd90c3x_open(svga->vram, svga->vram_mask, svga->changedvram, &svga->monitor->mon_changeframecount);
+        wd->k_gpu->run[0] = kairo_seg_run_open(wd->k_gpu->seg, svga->vram_mask, 1, WD_PIXEL_WORDS, 1, wd90c31_k_op, wd);
+        wd->k_gpu->run[1] = kairo_seg_run_open(wd->k_gpu->seg, svga->vram_mask, 4, WD_PIXEL_WORDS, 1, wd90c31_k_op, wd);
+        svga->kairo_touch_priv = wd;
+        svga->kairo_touch      = wd90c31_svga_touch;
+    }
     io_sethandler(0x23c0, 8, wd90c31_in, wd90c31_inw, NULL,
                   wd90c31_out, wd90c31_outw, NULL, wd);
     return wd;
@@ -524,5 +645,11 @@ wd90c31_close(wd90c31_t *wd)
                      wd90c31_out, wd90c31_outw, NULL, wd);
     if (wd->irq)
         picintc(1 << 9);
+    if (wd->k_gpu != NULL) {
+        kairo_seg_close(wd->k_gpu->seg); /* KairoX86#267 */
+        for (int i = 0; i < 2; i++)
+            kairo_seg_run_close(wd->k_gpu->run[i]);
+        free(wd->k_gpu);
+    }
     free(wd);
 }

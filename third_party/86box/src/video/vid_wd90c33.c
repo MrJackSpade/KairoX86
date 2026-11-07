@@ -19,6 +19,9 @@
 #include <86box/timer.h>
 #include <86box/video.h>
 #include <86box/vid_svga.h>
+#include <86box/kairo_gpu.h>         /* KairoX86#267 */
+#include <86box/kairo_gpu_seg.h>
+#include <86box/kairo_gpu_wd90c3x.h>
 #include "vid_wd90c33.h"
 
 /* Register block 1. */
@@ -108,6 +111,16 @@ struct wd90c33_t {
 
     uint16_t cursor_origin;
     uint32_t cursor_address;
+
+    /* KairoX86#267: the engine's pixels drawn on the GPU (planar, byte and word runs); NULL in software */
+    struct {
+        kairo_seg_t     *seg;
+        kairo_seg_run_t *run[3];
+        uint32_t         record[WD_WORDS];
+        uint64_t         generation;
+        int              issued;
+        int              in_order;
+    } *k_gpu;
 };
 
 static const uint16_t de_masks[16] = {
@@ -232,6 +245,87 @@ wd90c33_color_match(wd90c33_t *wd, uint16_t pixel)
     return !((pixel ^ color) & mask & wd90c33_pixel_mask(wd));
 }
 
+/* KairoX86#267: the run's operation in the batch: the record again only where it differs or the batch has been drawn */
+static void
+wd90c33_k_op(void *priv, bool in_order)
+{
+    wd90c33_t      *wd            = (wd90c33_t *) priv;
+    const uint16_t *r             = wd->active;
+    const uint16_t *r2            = wd->active2;
+    uint32_t        rec[WD_WORDS] = { 0 };
+
+    rec[WD_ROP]      = r[DE_ROP] >> 8;
+    rec[WD_FG]       = r2[DE_FG0] | (r2[DE_FG1] << 8);
+    rec[WD_BG]       = r2[DE_BG0] | (r2[DE_BG1] << 8);
+    rec[WD_TRANS]    = r2[DE_TRANS_COLOR0] | (r2[DE_TRANS_COLOR1] << 8);
+    rec[WD_CMP_MASK] = (r2[DE_TRANS_MASK0] | (r2[DE_TRANS_MASK1] << 8)) & wd90c33_pixel_mask(wd);
+    rec[WD_MASK]     = r2[DE_MASK0] | (r2[DE_MASK1] << 8);
+    rec[WD_DEPTH]    = wd->depth;
+    rec[WD_FLAGS]    = ((r[DE_CONTROL2] & 0x80) ? WDF_MONO_SKIP : 0) | ((r[DE_CONTROL2] & 0x200) ? WDF_DST_CMP : 0) |
+                    ((r[DE_CONTROL2] & 0x100) ? WDF_CMP_MATCH : 0);
+    kairo_seg_make_room(wd->k_gpu->seg);
+    if (wd->k_gpu->issued && (wd->k_gpu->in_order == in_order) && (wd->k_gpu->generation == kairo_seg_generation(wd->k_gpu->seg)) &&
+        !memcmp(wd->k_gpu->record, rec, sizeof(rec)))
+        return;
+    memcpy(kairo_seg_op(wd->k_gpu->seg, in_order), rec, sizeof(rec));
+    memcpy(wd->k_gpu->record, rec, sizeof(rec));
+    wd->k_gpu->generation = kairo_seg_generation(wd->k_gpu->seg);
+    wd->k_gpu->in_order   = in_order;
+    wd->k_gpu->issued     = 1;
+}
+
+/* KairoX86#267: every run into the batch: the operation has ended or its registers changed */
+static void
+wd90c33_k_flush(wd90c33_t *wd)
+{
+    if (wd->k_gpu != NULL)
+        for (int i = 0; i < 3; i++)
+            kairo_seg_run_flush(wd->k_gpu->run[i]);
+}
+
+/* KairoX86#267: an engine address's place in video memory for a pixel: planar, its dword (and *bit its bit); else its
+   first byte */
+static uint32_t
+wd90c33_k_at(wd90c33_t *wd, uint32_t address, uint32_t *bit)
+{
+    *bit = wd->depth ? 0 : (address & 7);
+    return wd90c33_vram_address(wd->svga, wd->depth ? address : ((address >> 3) << 2));
+}
+
+#define WD90C33_K_NONE 0xffffffffu
+
+/* KairoX86#267: the pixel at engine address address recorded for the GPU: its kind (WDK_*), its source value, or the
+   pixel at engine address source_at */
+static void
+wd90c33_k_pixel(wd90c33_t *wd, uint32_t address, uint32_t kind, uint16_t source, uint32_t source_at)
+{
+    svga_t  *svga = wd->svga;
+    uint32_t d_bit;
+    uint32_t s_bit = 0;
+    uint32_t s_at  = KAIRO_SEG_RUN_NONE;
+    const uint32_t d_at = wd90c33_k_at(wd, address, &d_bit);
+
+    if (source_at != WD90C33_K_NONE) {
+        s_at = wd90c33_k_at(wd, source_at, &s_bit);
+        kind |= WDK_ADDR;
+    }
+    const uint32_t words[WD_PIXEL_WORDS] = { kind | (d_bit << 8) | (s_bit << 16), (s_at != KAIRO_SEG_RUN_NONE) ? s_at : source };
+    const uint32_t reads[1]              = { s_at };
+    const int      run                   = wd->depth; /* 0 planar (4 bytes), 1 byte, 2 word */
+
+    for (int i = 0; i < 3; i++)
+        if (i != run)
+            kairo_seg_run_flush(wd->k_gpu->run[i]);
+    kairo_seg_run_pixel(wd->k_gpu->run[run], d_at, words, reads);
+    if (!(svga->gdcreg[6] & 1))
+        svga->fullchange = svga->monitor->mon_changeframecount;
+}
+
+/* KairoX86#267: a screen-sourced pixel (a BITBLT's): its source the pixel at engine address source_at, expanded
+   through the compare where compare, else its colour */
+static void
+wd90c33_plot_screen(wd90c33_t *wd, int x, int y, uint32_t source_at, int compare);
+
 /* Draws one pixel. mono is -1 for colour sources, otherwise the bit of a
    monochrome source that selects the foreground or background colour. */
 static void
@@ -246,10 +340,18 @@ wd90c33_plot(wd90c33_t *wd, int x, int y, uint16_t source, int mono)
     y &= 0xfff;
     if (x < r[DE_CLIP_LEFT] || x > r[DE_CLIP_RIGHT] || y < r[DE_CLIP_TOP] || y > r[DE_CLIP_BOTTOM])
         return;
+    if ((wd->k_gpu != NULL) && (mono >= 0)) {
+        wd90c33_k_pixel(wd, wd90c33_pixel_address(wd, x, y), WDK_MONO | (mono ? WDK_MONO_BIT : 0), 0, WD90C33_K_NONE);
+        return;
+    }
     if (mono >= 0) {
         if (!mono && (r[DE_CONTROL2] & 0x80))
             return;
         source = mono ? (r2[DE_FG0] | (r2[DE_FG1] << 8)) : (r2[DE_BG0] | (r2[DE_BG1] << 8));
+    }
+    if (wd->k_gpu != NULL) {
+        wd90c33_k_pixel(wd, wd90c33_pixel_address(wd, x, y), 0, source, WD90C33_K_NONE);
+        return;
     }
     address = wd90c33_pixel_address(wd, x, y);
     dest    = wd90c33_pixel_read(wd, address);
@@ -270,6 +372,7 @@ wd90c33_update_irq(wd90c33_t *wd)
 static void
 wd90c33_finish(wd90c33_t *wd)
 {
+    wd90c33_k_flush(wd); /* KairoX86#267 */
     wd->busy = 0;
     if (wd->cmd_control & CMD_IRQ_ARM) {
         wd->cmd_control |= CMD_IRQ_STATUS;
@@ -401,6 +504,8 @@ wd90c33_host_read(wd90c33_t *wd)
 
     if (!wd->busy || !(wd->active[DE_CONTROL1] & 0x02))
         return 0xffffffff;
+    if (wd->k_gpu != NULL)
+        kairo_seg_drain(wd->k_gpu->seg); /* KairoX86#267: the pixels read back are the CPU's */
     for (int i = 0; wd->busy && (i < count); i++) {
         uint16_t pixel = wd90c33_pixel_read(wd, wd90c33_pixel_address(wd, wd->active[DE_SRC_X] + wd->xdir * wd->x,
                                                                       wd->active[DE_SRC_Y] + wd->ydir * wd->y));
@@ -419,10 +524,10 @@ wd90c33_host_read(wd90c33_t *wd)
     return data;
 }
 
-/* Source pixel for screen-sourced BITBLTs, including 8x8 patterns stored as
+/* The engine address of the source pixel for screen-sourced BITBLTs, including 8x8 patterns stored as
    64 consecutive pixels (section 12.9). */
-static uint16_t
-wd90c33_source_pixel(wd90c33_t *wd, int x, int y)
+static uint32_t
+wd90c33_source_address(wd90c33_t *wd, int x, int y)
 {
     const uint16_t *r = wd->active;
 
@@ -433,9 +538,28 @@ wd90c33_source_pixel(wd90c33_t *wd, int x, int y)
         unsigned px     = ((start & 7) + wd->xdir * x) & 7;
         unsigned py     = ((start >> 3) + wd->ydir * y) & 7;
 
-        return wd90c33_pixel_read(wd, base + (((py << 3) | px) << shift));
+        return base + (((py << 3) | px) << shift);
     }
-    return wd90c33_pixel_read(wd, wd90c33_pixel_address(wd, r[DE_SRC_X] + wd->xdir * x, r[DE_SRC_Y] + wd->ydir * y));
+    return wd90c33_pixel_address(wd, r[DE_SRC_X] + wd->xdir * x, r[DE_SRC_Y] + wd->ydir * y);
+}
+
+/* Source pixel for screen-sourced BITBLTs */
+static uint16_t
+wd90c33_source_pixel(wd90c33_t *wd, int x, int y)
+{
+    return wd90c33_pixel_read(wd, wd90c33_source_address(wd, x, y));
+}
+
+static void
+wd90c33_plot_screen(wd90c33_t *wd, int x, int y, uint32_t source_at, int compare)
+{
+    const uint16_t *r = wd->active;
+
+    x &= 0xfff;
+    y &= 0xfff;
+    if (x < r[DE_CLIP_LEFT] || x > r[DE_CLIP_RIGHT] || y < r[DE_CLIP_TOP] || y > r[DE_CLIP_BOTTOM])
+        return;
+    wd90c33_k_pixel(wd, wd90c33_pixel_address(wd, x, y), compare ? (WDK_MONO | WDK_MONO_CMP) : 0, 0, source_at);
 }
 
 static void
@@ -466,6 +590,8 @@ wd90c33_bitblt(wd90c33_t *wd)
 
             if (format == FORMAT_FIXED)
                 wd90c33_plot(wd, dx, dy, fg, -1);
+            else if (wd->k_gpu != NULL) /* KairoX86#267: the source read on the GPU */
+                wd90c33_plot_screen(wd, dx, dy, wd90c33_source_address(wd, x, y), format == FORMAT_COMPARE);
             else {
                 uint16_t source = wd90c33_source_pixel(wd, x, y);
 
@@ -565,6 +691,7 @@ wd90c33_bresenham(wd90c33_t *wd)
 static void
 wd90c33_start(wd90c33_t *wd, unsigned mode)
 {
+    wd90c33_k_flush(wd); /* KairoX86#267: the last operation's pixels before this one's registers */
     memcpy(wd->active, wd->de, sizeof(wd->active));
     memcpy(wd->active2, wd->de2, sizeof(wd->active2));
     wd->depth = (wd->de[DE_CONTROL2] >> 10) & 3;
@@ -910,11 +1037,31 @@ wd90c33_hwcursor_draw(wd90c33_t *wd, int displine)
     cursor->addr += cursor->pitch * (svga->interlace ? 2 : 1);
 }
 
+/* KairoX86#267: the SVGA core's memory handlers and display (svga->kairo_touch) */
+static void
+wd90c33_svga_touch(svga_t *svga, uint32_t addr, uint32_t len)
+{
+    const wd90c33_t *wd = (const wd90c33_t *) svga->kairo_touch_priv;
+
+    kairo_seg_touch(wd->k_gpu->seg, addr & svga->vram_mask, len);
+}
+
 wd90c33_t *
 wd90c33_init(svga_t *svga)
 {
     wd90c33_t *wd = calloc(1, sizeof(*wd));
     wd->svga      = svga;
+    /* KairoX86#267: with Hardware acceleration on, the engine's pixels drawn on the GPU */
+    if (kairo_gpu_on) {
+        wd->k_gpu = calloc(1, sizeof(*wd->k_gpu));
+        if (wd->k_gpu == NULL)
+            fatal("WD90C33 on the GPU: no memory\n");
+        wd->k_gpu->seg = kairo_wd90c3x_open(svga->vram, svga->vram_mask, svga->changedvram, &svga->monitor->mon_changeframecount);
+        for (int i = 0; i < 3; i++)
+            wd->k_gpu->run[i] = kairo_seg_run_open(wd->k_gpu->seg, svga->vram_mask, (i == 0) ? 4 : i, WD_PIXEL_WORDS, 1, wd90c33_k_op, wd);
+        svga->kairo_touch_priv = wd;
+        svga->kairo_touch      = wd90c33_svga_touch;
+    }
     io_sethandler(0x23c0, 16, wd90c33_in, wd90c33_inw, NULL,
                   wd90c33_out, wd90c33_outw, wd90c33_outl, wd);
     return wd;
@@ -927,5 +1074,11 @@ wd90c33_close(wd90c33_t *wd)
                      wd90c33_out, wd90c33_outw, wd90c33_outl, wd);
     if (wd->cmd_control & CMD_IRQ_STATUS)
         picintc(1 << 9);
+    if (wd->k_gpu != NULL) {
+        kairo_seg_close(wd->k_gpu->seg); /* KairoX86#267 */
+        for (int i = 0; i < 3; i++)
+            kairo_seg_run_close(wd->k_gpu->run[i]);
+        free(wd->k_gpu);
+    }
     free(wd);
 }

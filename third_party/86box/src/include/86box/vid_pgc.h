@@ -108,6 +108,8 @@ typedef struct pgc {
 
     thread_t  *pgc_thread;
     event_t   *pgc_wake_thread;
+    event_t   *pgc_idle; /* KairoX86#310: set while the drawing thread sleeps (or once it has exited) */
+    struct pgc_k_gpu *k_gpu; /* KairoX86#268: the drawing processor's pixels drawn on the GPU; NULL in software */
     pc_timer_t wake_timer;
 
     int ascii_mode;

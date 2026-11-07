@@ -1,0 +1,82 @@
+#version 450
+#extension GL_EXT_control_flow_attributes : require
+/*
+ * The Western Digital WD90C31's BitBLT engine and the WD90C33's drawing engine on the GPU (KairoX86#267): 86Box's
+ * per-pixel draw (vid_wd90c31.c wd90c31_blt_pixel, vid_wd90c33.c wd90c33_plot: the source's mono or fixed colour,
+ * the destination compare, the raster operation and the write mask) for runs of pixels (kairo_seg_run), on the
+ * drawing engines' shared batches (seg.glsl). The walks stay the CPU's; each pixel's kind and source are its stream
+ * words (86box/kairo_gpu_wd90c3x.h).
+ *
+ * Copyright 2026 MrJackSpade. GPL-2.0-or-later.
+ */
+#include "seg.glsl"
+
+const uint WD_ROP = 0u, WD_FG = 1u, WD_BG = 2u, WD_TRANS = 3u, WD_CMP_MASK = 4u, WD_MASK = 5u, WD_DEPTH = 6u,
+           WD_FLAGS = 7u, WD_WORDS = 8u;
+const uint WDF_MONO_SKIP = 1u, WDF_DST_CMP = 2u, WDF_CMP_MATCH = 4u, WDF_FIXED = 8u;
+const uint WDK_ADDR = 1u, WDK_MONO = 2u, WDK_MONO_CMP = 4u, WDK_MONO_BIT = 8u, WDK_MONO_NZ = 16u;
+
+/* A pixel: planar, its bit (bit 7 the leftmost) of each plane's byte of the dword; else its byte or word */
+uint rd_px(uint a, uint bit, uint depth)
+{
+    if (depth == 1u)
+        return rd8(a);
+    if (depth == 2u)
+        return rd8(a) | (rd8(a + 1u) << 8);
+    uint v = 0u;
+    for (uint p = 0u; p < 4u; p++)
+        v |= ((rd8(a + p) >> (7u - bit)) & 1u) << p;
+    return v;
+}
+
+/* The data sheets' raster operation: its truth table's bits 00, 01, 10, 11 from the most significant */
+uint rop4(uint rop, uint s, uint d)
+{
+    return (((rop & 8u) != 0u) ? (~s & ~d) : 0u) | (((rop & 4u) != 0u) ? (~s & d) : 0u) |
+           (((rop & 2u) != 0u) ? (s & ~d) : 0u) | (((rop & 1u) != 0u) ? (s & d) : 0u);
+}
+
+void card_pixels(uint seg, uint op, uint row, uint first, int i0, int i1)
+{
+    const uint o     = op * WD_WORDS;
+    const uint flags = ops[o + WD_FLAGS];
+    const uint depth = ops[o + WD_DEPTH];
+    const uint pb    = (depth == 0u) ? 4u : depth;
+    const uint pmask = (depth == 2u) ? 0xffffu : 0xffu;
+    const uint cmp   = ops[o + WD_CMP_MASK];
+    const uint trans = ops[o + WD_TRANS];
+    const uint mask  = ops[o + WD_MASK];
+    const int  dir   = int(segs[seg * KG_WORDS + KG_DIR]);
+    const uint d0    = segs[seg * KG_WORDS + KG_BIT] >> 3;
+    [[dont_unroll]] for (int n = i0; n < i1; n++) {
+        const uint w     = row + uint(n) * 2u;
+        const uint kind  = stream[w];
+        const uint a     = d0 + uint((int(first) + n * dir) * int(pb));
+        const uint d_bit = (kind >> 8) & 7u;
+        uint       source = ((kind & WDK_ADDR) != 0u) ? rd_px(stream[w + 1u], (kind >> 16) & 7u, depth) : (stream[w + 1u] & pmask);
+        const bool mono_px = (kind & WDK_MONO) != 0u;
+        if (mono_px) {
+            const bool mono = ((kind & WDK_MONO_CMP) != 0u) ? (((source ^ trans) & cmp) == 0u)
+                            : ((kind & WDK_MONO_NZ) != 0u)  ? (source != 0u)
+                                                             : ((kind & WDK_MONO_BIT) != 0u);
+            if (!mono && ((flags & WDF_MONO_SKIP) != 0u))
+                continue;
+            source = mono ? ops[o + WD_FG] : ops[o + WD_BG];
+        } else if ((flags & WDF_FIXED) != 0u)
+            source = ops[o + WD_FG];
+        const uint dest = rd_px(a, d_bit, depth);
+        if (!mono_px && ((flags & WDF_DST_CMP) != 0u) && ((((dest ^ trans) & cmp) == 0u) != ((flags & WDF_CMP_MATCH) != 0u)))
+            continue;
+        const uint pixel = rop4(ops[o + WD_ROP], source, dest) & pmask;
+        if (depth == 0u) {
+            const uint bit = 0x80u >> d_bit;
+            for (uint p = 0u; p < 4u; p++)
+                if ((mask & (1u << p)) != 0u)
+                    wr8(a + p, (rd8(a + p) & ~bit) | (((pixel & (1u << p)) != 0u) ? bit : 0u));
+        } else {
+            wr8(a, (dest & ~mask & 0xffu) | (pixel & mask & 0xffu));
+            if (depth == 2u)
+                wr8(a + 1u, ((dest >> 8) & ~(mask >> 8) & 0xffu) | ((pixel >> 8) & (mask >> 8) & 0xffu));
+        }
+    }
+}

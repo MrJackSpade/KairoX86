@@ -27,6 +27,7 @@
 #include <86box/timer.h>
 #include <86box/video.h>
 #include <86box/vid_svga.h>
+#include <86box/kairo_gpu.h> /* KairoX86#248 */
 #include <86box/vid_svga_render.h>
 #include <86box/plat_unused.h>
 #include "cpu.h"
@@ -979,17 +980,29 @@ chips_45x_render_1bpp(svga_t *svga)
     /* Hercules pixels use the normal-intensity text color. */
     fg = svga->pallook[svga->egapal[(chips_45x_emu_mode(chips) == EMU_HERC) ? 7 : 1] & svga->dac_mask];
 
+    /* KairoX86#248: with Hardware acceleration on, the line to the GPU's scanout queue as one bit a pixel */
+    const uint32_t colours[2] = { bg, fg };
+    uint8_t       *gpu        = (svga->hdisp > 0) ? svga_render_gpu_bits(svga, p, 1, (uint32_t) ((svga->hdisp + 15) / 16) * 16, false,
+                                                                         colours, 2, svga->render == chips_45x_render_1bpp)
+                                                  : NULL;
+
     for (int x = 0; x < svga->hdisp; x += 16) {
         addr = svga->remap_func(svga, svga->memaddr) & svga->vram_display_mask;
 
         for (int b = 0; b < 2; b++) {
             dat = svga->vram[addr | b];
+            if (gpu != NULL) {
+                *gpu++ = dat;
+                continue;
+            }
             for (int i = 0; i < 8; i++)
                 *p++ = (dat & (0x80 >> i)) ? fg : bg;
         }
 
         svga->memaddr += 4;
     }
+    if (gpu != NULL)
+        kairo_gpu_scan_commit();
 }
 
 static void

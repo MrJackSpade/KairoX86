@@ -17,6 +17,8 @@
 #ifndef VIDEO_SVGA_RENDER_H
 #define VIDEO_SVGA_RENDER_H
 
+#include <stdbool.h> /* KairoX86#248: svga_render_gpu_bits */
+
 extern int firstline_draw;
 extern int lastline_draw;
 extern int displine;
@@ -40,6 +42,12 @@ extern void svga_render_null(svga_t *svga);
 extern void svga_render_drain(void);
 extern void svga_render_close(void); /* KairoX86: ends the drawing thread */
 extern void svga_render_blank(svga_t *svga);
+/* KairoX86#233, #248: a line of pixels of bits bits each (most significant first, over the bytes in the order the card
+   scans them) to the GPU's scanout queue at p through colours (n of them), for the shared renderers and a card's
+   own; NULL (the CPU draws it) when the GPU is off, the line is not eligible (the installed renderer is not the
+   caller) or something else draws on it. The caller writes the line's bytes there, then kairo_gpu_scan_commit(). */
+extern uint8_t *svga_render_gpu_bits(svga_t *svga, uint32_t *p, uint32_t bits, uint32_t pixels, bool wide,
+                                     const uint32_t *colours, uint32_t n, bool eligible);
 extern void svga_render_overscan_left(svga_t *svga);
 extern void svga_render_overscan_right(svga_t *svga);
 extern void svga_render_text_40(svga_t *svga);

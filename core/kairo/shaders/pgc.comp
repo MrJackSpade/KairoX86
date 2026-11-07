@@ -1,0 +1,31 @@
+#version 450
+#extension GL_EXT_control_flow_attributes : require
+/*
+ * The IBM Professional Graphics Controller's (and the ImageManager 1024's) drawing processor on the GPU
+ * (KairoX86#268, #261): 86Box's pixel draws (vid_pgc.c pgc_plot: write, invert, XOR or AND with the colour;
+ * pgc_write_pixel: a value written) for runs of pixels (kairo_seg_run), on the drawing engines' shared batches
+ * (seg.glsl). A pixel's stream word (86box/kairo_gpu_pgc.h): bits 0-7 the value, bits 8-9 the operation.
+ *
+ * Copyright 2026 MrJackSpade. GPL-2.0-or-later.
+ */
+#include "seg.glsl"
+
+const uint PGC_K_SET = 0u, PGC_K_INVERT = 1u, PGC_K_XOR = 2u, PGC_K_AND = 3u;
+
+void card_pixels(uint seg, uint op, uint row, uint first, int i0, int i1)
+{
+    const int  dir = int(segs[seg * KG_WORDS + KG_DIR]);
+    const uint d0  = segs[seg * KG_WORDS + KG_BIT] >> 3;
+    [[dont_unroll]] for (int n = i0; n < i1; n++) {
+        const uint w = stream[row + uint(n)];
+        const uint v = w & 0xffu;
+        const uint k = (w >> 8) & 3u;
+        const uint a = d0 + uint(int(first) + n * dir);
+        uint       r = v;
+        if (k != PGC_K_SET) {
+            const uint d = rd8(a);
+            r            = (k == PGC_K_INVERT) ? (d ^ 0xffu) : (k == PGC_K_XOR) ? (d ^ v) : (d & v);
+        }
+        wr8(a, r);
+    }
+}

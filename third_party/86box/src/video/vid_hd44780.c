@@ -33,6 +33,7 @@
 #include <86box/timer.h>
 #include <86box/video.h>
 #include <86box/log.h>
+#include <86box/kairo_gpu.h> /* KairoX86#256 */
 
 enum {
     HD44780_GENERIC = 0,
@@ -690,50 +691,82 @@ hd44780_shift(hd44780_lcd_t *lcd, int delta)
     lcd->shift = (lcd->shift + delta + HD44780_LINE_LEN) % HD44780_LINE_LEN;
 }
 
+/* The bits of dot row dy of the character at (row, col), as the panel shows it */
+static uint8_t
+hd44780_dot_bits(hd44780_t *dev, int row, int col, int dy)
+{
+    hd44780_lcd_t *lcd       = &dev->lcd[row >> 1];
+    int            addr      = ((row & 1) ? HD44780_LINE_LEN : 0) + ((col + lcd->shift) % HD44780_LINE_LEN);
+    int            at_cursor = (hd44780_ddram_index(lcd->addr & 0x7f) == addr);
+    int            is_cursor = at_cursor && (lcd->config[1] & 0x02);
+    int            is_blink  = at_cursor && (lcd->config[1] & 0x01) && (lcd->frames < 30);
+    uint8_t        ch        = lcd->ddram[addr];
+    const uint8_t *glyph     = ((ch & 0xf8) == 0x00) ? &lcd->cgram[(ch & 0x07) << 3] : dev->font[ch];
+
+    if (!(row & 1) && !(lcd->config[2] & 0x20)) /* uninitialized state */
+        return 0xff;
+    if (!(lcd->config[1] & 0x04)) /* render blank if D cleared */
+        return 0x00;
+    if (is_blink)
+        return 0xff;
+    return ((dy == (CHAR_H - 1)) && is_cursor) ? 0xff : glyph[dy];
+}
+
+/* The picture's colours: outside the panel, the panel, a dot on, a dot off */
+enum { HD44780_BLACK, HD44780_PANEL, HD44780_ON, HD44780_OFF };
+
+/* KairoX86#256: the colour of each pixel of picture row y (render_w of them), as one of the four above: the one
+   description both the CPU and the GPU draw from */
+static void
+hd44780_row(hd44780_t *dev, int y, uint8_t *idx)
+{
+    memset(idx, HD44780_BLACK, dev->render_w);
+    if ((y < dev->y_offset) || (y >= (dev->render_h - dev->y_offset)))
+        return;
+    memset(&idx[dev->x_offset], HD44780_PANEL, dev->render_w - (2 * dev->x_offset));
+
+    /* The dot row the line crosses, if any: dot rows are dot_size lines tall, LCD_SCALE apart */
+    const int t = y - dev->y_offset - (MARGIN_DOTS * LCD_SCALE);
+    if ((t < 0) || ((t % LCD_SCALE) >= dev->dot_size))
+        return;
+    const int q   = t / LCD_SCALE;
+    const int row = q / CELL_H;
+    const int dy  = q % CELL_H;
+    if ((row >= dev->rows) || (dy >= CHAR_H))
+        return;
+    for (int col = 0; col < dev->cols; col++) {
+        const uint8_t bits = hd44780_dot_bits(dev, row, col, dy);
+        for (int dx = 0; dx < CHAR_W; dx++) {
+            const uint8_t colour = (bits & (0x10 >> dx)) ? HD44780_ON : HD44780_OFF;
+            const int     px     = dev->x_offset + (MARGIN_DOTS * LCD_SCALE) + (((col * CELL_W) + dx) * LCD_SCALE);
+            memset(&idx[px], colour, dev->dot_size);
+        }
+    }
+}
+
 static void
 hd44780_render(hd44780_t *dev)
 {
-    for (int y = 0; y < dev->render_h; y++)
-        memset(buffer32->line[y], 0x00, dev->render_w * sizeof(uint32_t));
+    const uint32_t colours[4] = { 0x000000, hd44780_palettes[dev->palette].panel, hd44780_palettes[dev->palette].on,
+                                  hd44780_palettes[dev->palette].off };
+    uint8_t        idx[2048];
 
-    for (int y = 0; y < (dev->render_h - (2 * dev->y_offset)); y++) {
-        uint32_t *line = &(buffer32->line[y + dev->y_offset][dev->x_offset]);
-        for (int x = 0; x < (dev->render_w - (2 * dev->x_offset)); x++)
-            line[x] = hd44780_palettes[dev->palette].panel;
-    }
-
-    for (int row = 0; row < dev->rows; row++) {
-        hd44780_lcd_t *lcd = &dev->lcd[row >> 1];
-        for (int col = 0; col < dev->cols; col++) {
-            int            addr      = ((row & 1) ? HD44780_LINE_LEN : 0) + ((col + lcd->shift) % HD44780_LINE_LEN);
-            int            at_cursor = (hd44780_ddram_index(lcd->addr & 0x7f) == addr);
-            int            is_cursor = at_cursor && (lcd->config[1] & 0x02);
-            int            is_blink  = at_cursor && (lcd->config[1] & 0x01) && (lcd->frames < 30);
-            uint8_t        ch        = lcd->ddram[addr];
-            const uint8_t *glyph     = ((ch & 0xf8) == 0x00) ? &lcd->cgram[(ch & 0x07) << 3] : dev->font[ch];
-            for (int dy = 0; dy < CHAR_H; dy++) {
-                uint8_t bits;
-                if (!(row & 1) && !(lcd->config[2] & 0x20)) /* uninitialized state */
-                    bits = 0xff;
-                else if (!(lcd->config[1] & 0x04)) /* render blank if D cleared */
-                    bits = 0x00;
-                else if (is_blink)
-                    bits = 0xff;
-                else
-                    bits = ((dy == (CHAR_H - 1)) && is_cursor) ? 0xff : glyph[dy];
-                for (int dx = 0; dx < CHAR_W; dx++) {
-                    uint32_t color = (bits & (0x10 >> dx)) ? hd44780_palettes[dev->palette].on : hd44780_palettes[dev->palette].off;
-                    int      px    = dev->x_offset + (MARGIN_DOTS * LCD_SCALE) + (((col * CELL_W) + dx) * LCD_SCALE);
-                    int      py    = dev->y_offset + (MARGIN_DOTS * LCD_SCALE) + (((row * CELL_H) + dy) * LCD_SCALE);
-
-                    for (int sy = 0; sy < dev->dot_size; sy++) {
-                        uint32_t *line = &(buffer32->line[py + sy][px]);
-
-                        for (int sx = 0; sx < dev->dot_size; sx++)
-                            line[sx] = color;
-                    }
-                }
-            }
+    if (dev->render_w > (int) sizeof(idx))
+        fatal("HD44780: a picture %d pixels wide\n", dev->render_w);
+    for (int y = 0; y < dev->render_h; y++) {
+        hd44780_row(dev, y, idx);
+        if (kairo_gpu_on) {
+            /* KairoX86#256: the row to the GPU's scanout queue, the colours as an 8-bit palette */
+            const uint32_t out   = (uint32_t) (buffer32->line[y] - buffer32->dat);
+            uint8_t       *bytes = (uint8_t *) kairo_gpu_scan(buffer32, buffer32->kairo_gpu, out, KAIRO_SCAN_8,
+                                                              (uint32_t) dev->render_w, ((uint32_t) dev->render_w + 3) / 4,
+                                                              colours, 4, 0xff, 0, 0);
+            memcpy(bytes, idx, dev->render_w);
+            kairo_gpu_scan_commit();
+        } else {
+            uint32_t *line = buffer32->line[y];
+            for (int x = 0; x < dev->render_w; x++)
+                line[x] = colours[idx[x]];
         }
     }
 }
