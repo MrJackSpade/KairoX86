@@ -106,6 +106,38 @@ class Win9xMachineTest {
         assertNull(chinese.value("Sound Blaster 16 #1", "base401"))
     }
 
+    // The display keys as Win98Chinese.vhd and W98-P.vhd hold them (KairoX86#229)
+    private val display = "System\\CurrentControlSet\\Services\\Class\\DISPLAY"
+    private fun driver(number: String, matching: String, chip: String? = null) = listOfNotNull(
+        "$display\\$number" to mapOf("MatchingDeviceId" to string(matching)),
+        chip?.let { "$display\\$number\\INFO" to mapOf("ChipType" to string(it)) }).toTypedArray()
+
+    @Test
+    fun aVideoCardBoundToAnotherCardsDriverGivesWayToTheLegacyDisplayWindowsUses() {
+        // Win98Chinese.vhd: its Voodoo3 bound to the S3 Trio PCI driver (which failed to load), and the
+        // S3 Trio64 Windows detected at its ports under DOSBox-X, with its own driver
+        val base = arrayOf(*ga686bx, "Enum\\ISAPNP\\CTL0042_DEV0000\\0000C0E0" to emptyMap())
+        val voodoo3 = pci("VEN_121A&DEV_0005&SUBSYS_003A121A&REV_01", "000800", "Driver" to string("Display\\0000"))
+        val trio64 = "Enum\\Root\\*PNP0913\\0000" to mapOf("HardwareID" to string("*PNP0913"), "DetFunc" to string("*:DETECTS3801"),
+            "Driver" to string("Display\\0001"))
+        val chinese = Win9xMachine.of(registry(*base, voodoo3, trio64, *driver("0000", "PCI\\VEN_5333&DEV_8811"),
+            *driver("0001", "*PNP0913", "Trio64(86C764)")))
+        assertEquals("s3_trio64_vlb", chinese.value("Video", "gfxcard"))
+        assertNull(chinese.value("Video", "voodoo"))
+        // W98-P.vhd: the Voodoo3's own driver, so the Voodoo3 it is
+        val own = Win9xMachine.of(registry(*base, pci("VEN_121A&DEV_0005&SUBSYS_003A121A&REV_01", "000800", "Driver" to string("Display\\0002")),
+            *driver("0002", "PCI\\VEN_121A&DEV_0005&SUBSYS_003A121A&REV_01")))
+        assertEquals("voodoo3_3k_agp", own.value("Video", "gfxcard"))
+        // A legacy chip KairoX86 does not build, or no legacy display with a driver, fails: no guessing
+        val vision = assertThrows(IllegalStateException::class.java) {
+            Win9xMachine.of(registry(*base, voodoo3, trio64, *driver("0000", "PCI\\VEN_5333&DEV_8811"), *driver("0001", "*PNP0913", "Vision864")))
+        }
+        assertTrue(vision.message!!.contains("Vision864"))
+        assertThrows(IllegalStateException::class.java) {
+            Win9xMachine.of(registry(*base, voodoo3, *driver("0000", "PCI\\VEN_5333&DEV_8811")))
+        }
+    }
+
     @Test
     fun aWindows95FromPcemsAward430vxGetsThatBoard() {
         // Win95DX8.vhd: Windows 95 names functions without SUBSYS; ViRGE/DX and Voodoo2 in PCem's slots, a Sound Blaster at IRQ 7

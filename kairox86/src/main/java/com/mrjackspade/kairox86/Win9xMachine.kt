@@ -13,7 +13,10 @@ import java.nio.ByteOrder
  * - The board: the one of [BOARDS] whose chipset Windows met at its places (PCI bus 0, by device
  *   number), by the IDs 86Box's (or PCem's) board gives it.
  * - The cards: the PCI ones Windows met in that board's slots, as 86Box places them: the video card
- *   in the first, a Voodoo after it (in the first when the video card is on AGP). When the image's
+ *   in the first, a Voodoo after it (in the first when the video card is on AGP). A PCI or AGP video
+ *   card whose driver is another card's (its class key's MatchingDeviceId names that one) is not the
+ *   display Windows uses: the legacy one it detected is, at its ports, with no PCI identity, as
+ *   DOSBox-X gave it (KairoX86#229), and that card goes in instead ([LEGACY_DISPLAYS]). When the image's
  *   Glide is built for a Voodoo Windows met only at device 0 (DOSBox-X's place for it), the Voodoo
  *   goes there instead (kairox86-pci-dev0-card).
  * - The sound card: the legacy Sound Blaster Windows was told of, at the ports, IRQ and DMA channels
@@ -68,11 +71,18 @@ object Win9xMachine {
         Card("VEN_121A&DEV_0001", Kind.VOODOO, "voodoo"),
         Card("VEN_121A&DEV_0002", Kind.VOODOO, "voodoo_2"))
 
+    /**
+     * 86Box's legacy video cards by the chip Windows' display driver found (its class key's INFO\ChipType):
+     * cards with no PCI identity, which Windows meets only by legacy detection at their ports, as it met
+     * DOSBox-X's S3 (KairoX86#229).
+     */
+    private val LEGACY_DISPLAYS = mapOf("Trio64(86C764)" to "s3_trio64_vlb")
+
     /** 86Box's Sound Blasters by the ISA Plug and Play ID Windows met them by. */
     private val PNP_SOUND = mapOf("CTL0042" to "sbawe32_pnp")
 
-    /** A PCI function Windows met: its ID as the key names it, and where, when on bus 0. */
-    private class Instance(val id: String, val device: Int?, val function: Int?)
+    /** A PCI function Windows met: its ID as the key names it, where, when on bus 0, and its key. */
+    private class Instance(val id: String, val device: Int?, val function: Int?, val key: Win9xRegistry.Key)
 
     private val LOCATION = Regex("BUS_00&DEV_([0-9A-F]{2})&FUNC_([0-9A-F]{2})", RegexOption.IGNORE_CASE)
 
@@ -101,7 +111,7 @@ object Win9xMachine {
         val instances = pci.children.filter { it.name.startsWith("VEN_", ignoreCase = true) }.flatMap { id ->
             id.children.map { at ->
                 val m = LOCATION.matchEntire(at.name)
-                Instance(id.name, m?.groupValues?.get(1)?.toInt(16), m?.groupValues?.get(2)?.toInt(16))
+                Instance(id.name, m?.groupValues?.get(1)?.toInt(16), m?.groupValues?.get(2)?.toInt(16), at)
             }
         }
         val boards = BOARDS.filter { board ->
@@ -121,23 +131,26 @@ object Win9xMachine {
         for (instance in inSlots) checkNotNull(card(instance)) {
             "The Windows image knows a PCI card KairoX86 does not build in the board's slot ${"%02X".format(instance.device)}: ${instance.id}"
         }
-        val agp = if (board.agp) instances.filter { it.device == null }.mapNotNull { card(it) }.filter { it.kind == Kind.AGP_VIDEO }.distinctBy { it.device } else emptyList()
-        val pciVideo = inSlots.filter { it.device == board.slots[0] && card(it)!!.kind == Kind.VIDEO }.map { card(it)!! }
-        val videos = agp + pciVideo
+        val agpInstances = if (board.agp) instances.filter { it.device == null && card(it)?.kind == Kind.AGP_VIDEO } else emptyList()
+        val pciVideoInstances = inSlots.filter { it.device == board.slots[0] && card(it)!!.kind == Kind.VIDEO }
+        val videos = (agpInstances + pciVideoInstances).map { card(it)!! }.distinctBy { it.device }
         check(videos.size == 1) {
             if (videos.isEmpty()) "The Windows image knows no video card KairoX86 builds on the ${board.machine}"
             else "The Windows image knows several video cards on the ${board.machine}: ${videos.joinToString { it.device }}"
         }
         val video = videos.single()
-        settings += Setting("Video", "gfxcard", video.device)
-        // A Voodoo sits in the slot after the video card's, the first when that is on AGP
-        val voodooSlot = board.slots[if (video.kind == Kind.AGP_VIDEO) 0 else 1]
+        // The video card Windows has its own driver for, or else the legacy display it uses (KairoX86#229)
+        val ownDriver = (agpInstances + pciVideoInstances).any { driverFits(registry, it.key, it.id) }
+        val legacy = if (ownDriver) null else legacyDisplay(registry)
+        settings += Setting("Video", "gfxcard", legacy ?: video.device)
+        // A Voodoo sits in the slot after the video card's, the first when that is on AGP or not on PCI
+        val voodooSlot = board.slots[if (legacy != null || video.kind == Kind.AGP_VIDEO) 0 else 1]
         for (instance in inSlots) {
             val at = card(instance)!!
             check(instance.device == voodooSlot || at.kind != Kind.VOODOO) {
                 "The Windows image knows a Voodoo in slot ${"%02X".format(instance.device)} of the ${board.machine}, where 86Box puts it in ${"%02X".format(voodooSlot)}"
             }
-            check(at.kind == Kind.VOODOO || instance.device == board.slots[0] && at === video) {
+            check(at.kind == Kind.VOODOO || legacy == null && instance.device == board.slots[0] && at === video) {
                 "The Windows image knows ${at.device} in slot ${"%02X".format(instance.device)} of the ${board.machine}, with ${video.device} as its video card"
             }
         }
@@ -160,6 +173,37 @@ object Win9xMachine {
         settings += Setting("Storage controllers", "ide_ter", if ("00000000" in ide) "1" else null)
         settings += Setting("Storage controllers", "ide_qua", if ("00000001" in ide) "1" else null)
         return Machine(board, settings)
+    }
+
+    /** The class key of a device's driver ([instance]'s Driver, such as Display\0001). */
+    private fun driverKey(registry: Win9xRegistry, instance: Win9xRegistry.Key): Win9xRegistry.Key? =
+        instance.string("Driver")?.let { registry.key("System\\CurrentControlSet\\Services\\Class\\$it") }
+
+    /**
+     * Whether [instance]'s driver is not known to be another device's: false only when its class key's
+     * MatchingDeviceId names a device other than [id] ("PCI\" and the ID, or the start of it). Windows 95
+     * keeps no MatchingDeviceId, and an instance whose driver the registry does not name has no other's.
+     */
+    private fun driverFits(registry: Win9xRegistry, instance: Win9xRegistry.Key, id: String): Boolean {
+        val matching = driverKey(registry, instance)?.string("MatchingDeviceId") ?: return true
+        return id.startsWith(matching.removePrefix("PCI\\").removePrefix("pci\\"), ignoreCase = true)
+    }
+
+    /**
+     * The legacy display Windows uses when its PCI or AGP video card has no driver of its own: the
+     * display adapter it detected (Enum\Root\*PNP09xx) with a driver for it, as 86Box's card for that
+     * driver's chip ([LEGACY_DISPLAYS]). None, or a chip KairoX86 does not build, fails.
+     */
+    private fun legacyDisplay(registry: Win9xRegistry): String {
+        val displays = registry.key("Enum\\Root")?.children.orEmpty().filter { it.name.startsWith("*PNP09", ignoreCase = true) }
+            .flatMap { id -> id.children.map { id.name to it } }
+            .filter { (id, instance) -> driverKey(registry, instance)?.string("MatchingDeviceId").equals(id, ignoreCase = true) }
+        check(displays.size == 1) {
+            if (displays.isEmpty()) "The Windows image's video card has no driver of its own, and it knows no legacy display with one"
+            else "The Windows image knows several legacy displays: ${displays.joinToString { it.first }}"
+        }
+        val chip = driverKey(registry, displays.single().second)?.child("INFO")?.string("ChipType")
+        return checkNotNull(LEGACY_DISPLAYS[chip]) { "The Windows image's legacy display is a ${chip ?: "chip it does not name"}, which KairoX86 does not build" }
     }
 
     /**
