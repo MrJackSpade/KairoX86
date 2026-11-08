@@ -6011,6 +6011,34 @@ KAIROX86_VOODOO_ARM64_EXACT = [
      '\n    /* cc_add: add clocal back, or a_local in every channel (KairoX86#289: as the C code and the x86-64 recompiler) */\n    if (cc_add == CC_ADD_CLOCAL) {\n        addlong(ARM64_ADD_V4H(0, 0, 1));\n    } else if (cc_add == CC_ADD_ALOCAL) {\n        addlong(ARM64_DUP_V4H_GPR(3, 15));\n        addlong(ARM64_ADD_V4H(0, 0, 3));\n    }\n'),
 ]
 
+# KairoX86#308: the IBM PGC's POLY draws its polygon, filled with the area pattern under PRMFIL, else its outline in
+# the line pattern closed back to the first corner, as its other primitives draw; it read the corners and drew nothing.
+KAIROX86_PGC_POLY = [
+    ('86box/src/video/vid_pgc.c',
+     '        if (!pgc_param_coord(dev, &y[n]))\n            return;\n    }\n}\n',
+     "        if (!pgc_param_coord(dev, &y[n]))\n            return;\n    }\n    if (count == 0)\n        return;\n\n    /* KairoX86#308: drawn as the PGC's other primitives are, filled under PRMFIL (the area pattern), else its\n       outline in the line pattern, closed back to the first corner */\n    if (dev->fill_mode)\n        pgc_fill_polygon(dev, count, x, y);\n    else {\n        uint16_t mask = dev->line_pattern;\n        for (uint8_t n = 1; n < count; n++)\n            mask = pgc_draw_line(dev, x[n - 1], y[n - 1], x[n], y[n], mask);\n        pgc_draw_line(dev, x[count - 1], y[count - 1], x[0], y[0], mask);\n    }\n}\n"),
+]
+
+# KairoX86#309: the IBM PGC's TEXT in ASCII mode takes its string as characters (text_char): the delimiter is the first
+# one after the blanks, then the characters as sent, case kept, up to the same delimiter. It read a decimal number for
+# the delimiter, rejected the quote and drew nothing.
+KAIROX86_PGC_TEXT_ASCII = [
+    ('86box/src/video/vid_pgc.c',
+     "}\n\n/*\n * TEXT draws a string in the card's own font, justified about the current\n",
+     "}\n\n/* KairoX86#309: one character of an ASCII-mode TEXT string, as the host sent it (input_char would upper-case it) */\nstatic int\ntext_char(pgc_t *dev, uint8_t *val)\n{\n    if (!dev->inputbyte(dev, val))\n        return 0;\n    *val &= 0x7f;\n    return 1;\n}\n\n/*\n * TEXT draws a string in the card's own font, justified about the current\n"),
+    ('86box/src/video/vid_pgc.c',
+     '\n    if (!pgc_param_byte(dev, &delim))\n        return;\n\n    while (count < sizeof(buf)) {\n        if (!pgc_param_byte(dev, &ch))\n            return;\n',
+     "\n    /* KairoX86#309: in ASCII mode the string comes as characters, not numbers: its delimiter is the first one after\n       the blanks, then the characters as sent, case kept, up to the same delimiter */\n    const int ascii = dev->ascii_mode && !dev->clcur;\n\n    if (ascii) {\n        do {\n            if (!text_char(dev, &delim))\n                return;\n        } while ((delim == ' ') || (delim == '\\r') || (delim == '\\n') || (delim == '\\t'));\n    } else if (!pgc_param_byte(dev, &delim))\n        return;\n\n    while (count < sizeof(buf)) {\n        if (ascii ? !text_char(dev, &ch) : !pgc_param_byte(dev, &ch))\n            return;\n"),
+]
+
+# KairoX86#331: the IBM PGC's TJUST reads its two parameters as every byte parameter is read (pgc_param_byte):
+# decimal in ASCII mode, from the list in a command list. It read them raw, so ASCII mode's TJUST 2,2 was a range error.
+KAIROX86_PGC_TJUST = [
+    ('86box/src/video/vid_pgc.c',
+     '\n    if (!dev->inputbyte(dev, &param[0]))\n        return;\n    if (!dev->inputbyte(dev, &param[1]))\n        return;\n',
+     '\n    /* KairoX86#331: as every byte parameter is read (decimal in ASCII mode, from the list in a command list) */\n    if (!pgc_param_byte(dev, &param[0]))\n        return;\n    if (!pgc_param_byte(dev, &param[1]))\n        return;\n'),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -6142,6 +6170,9 @@ PATCHES = {
     'kairox86-gpu-r128-adreno-cas': KAIROX86_GPU_R128_ADRENO_CAS,
     'kairox86-gpu-r128-drawn-report': KAIROX86_GPU_R128_DRAWN_REPORT,
     'kairox86-voodoo-arm64-exact': KAIROX86_VOODOO_ARM64_EXACT,
+    'kairox86-pgc-poly': KAIROX86_PGC_POLY,
+    'kairox86-pgc-text-ascii': KAIROX86_PGC_TEXT_ASCII,
+    'kairox86-pgc-tjust': KAIROX86_PGC_TJUST,
 }
 
 ADDED = [

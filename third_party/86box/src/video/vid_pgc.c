@@ -826,6 +826,16 @@ text_ink(pgc_t *dev, int prim, int x, int y, int pen_w, int pen_h, const uint8_t
     }
 }
 
+/* KairoX86#309: one character of an ASCII-mode TEXT string, as the host sent it (input_char would upper-case it) */
+static int
+text_char(pgc_t *dev, uint8_t *val)
+{
+    if (!dev->inputbyte(dev, val))
+        return 0;
+    *val &= 0x7f;
+    return 1;
+}
+
 /*
  * TEXT draws a string in the card's own font, justified about the current
  * point by TJUST and sized by TSIZE. The card holds the face as stroke
@@ -856,11 +866,20 @@ hndl_text(pgc_t *dev)
     int      fig_h;
     int      width;
 
-    if (!pgc_param_byte(dev, &delim))
+    /* KairoX86#309: in ASCII mode the string comes as characters, not numbers: its delimiter is the first one after
+       the blanks, then the characters as sent, case kept, up to the same delimiter */
+    const int ascii = dev->ascii_mode && !dev->clcur;
+
+    if (ascii) {
+        do {
+            if (!text_char(dev, &delim))
+                return;
+        } while ((delim == ' ') || (delim == '\r') || (delim == '\n') || (delim == '\t'));
+    } else if (!pgc_param_byte(dev, &delim))
         return;
 
     while (count < sizeof(buf)) {
-        if (!pgc_param_byte(dev, &ch))
+        if (ascii ? !text_char(dev, &ch) : !pgc_param_byte(dev, &ch))
             return;
         if (ch == delim)
             break;
@@ -1629,6 +1648,19 @@ hndl_poly(pgc_t *dev)
         if (!pgc_param_coord(dev, &y[n]))
             return;
     }
+    if (count == 0)
+        return;
+
+    /* KairoX86#308: drawn as the PGC's other primitives are, filled under PRMFIL (the area pattern), else its
+       outline in the line pattern, closed back to the first corner */
+    if (dev->fill_mode)
+        pgc_fill_polygon(dev, count, x, y);
+    else {
+        uint16_t mask = dev->line_pattern;
+        for (uint8_t n = 1; n < count; n++)
+            mask = pgc_draw_line(dev, x[n - 1], y[n - 1], x[n], y[n], mask);
+        pgc_draw_line(dev, x[count - 1], y[count - 1], x[0], y[0], mask);
+    }
 }
 
 /* Parse but don't execute a POLY command (for adding to a command list) */
@@ -1957,9 +1989,10 @@ hndl_tjust(pgc_t *dev)
 {
     uint8_t param[2];
 
-    if (!dev->inputbyte(dev, &param[0]))
+    /* KairoX86#331: as every byte parameter is read (decimal in ASCII mode, from the list in a command list) */
+    if (!pgc_param_byte(dev, &param[0]))
         return;
-    if (!dev->inputbyte(dev, &param[1]))
+    if (!pgc_param_byte(dev, &param[1]))
         return;
 
     if (param[0] >= 1 && param[0] <= 3 && param[1] >= 1 && param[1] <= 3) {

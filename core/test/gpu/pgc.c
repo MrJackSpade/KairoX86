@@ -30,7 +30,7 @@ static void send(const char *s) {
     send_bytes((const u8 *) s, n);
 }
 
-/* Text, in hex mode (ASCII mode's TEXT takes no delimiter character): coordinates as an integer and a fraction word */
+/* Text, in hex mode: coordinates as an integer and a fraction word */
 /* The ImageManager 1024's block moves (blkmov_row), in each draw mode, from a picture of lines and fills */
 static const char *const im1024_pass =
     "CLEARS 9 PRMFIL 1 COLOR 12 MOVE 10,10 RECT 150,120 COLOR 14 MOVE 60,40 CIRCLE 40 PRMFIL 0 COLOR 15 MOVE 0,0 "
@@ -49,6 +49,11 @@ static const u8 text_pass[] = {
     0x85, 1, 1, 0xd2,                                   /* TJUST 1 1, CA: ASCII again */
 };
 
+/* The same text in ASCII mode, each string between delimiters (KairoX86#309): the same picture as text_pass */
+static const char *const text_ascii_pass =
+    "CLEARS 7 COLOR 15 TSIZE 16 MOVE 20,400 TEXT 'PGC GPU 0123' TSIZE 32 MOVE 40,250 TEXT 'ABCabc' TJUST 2,2 "
+    "TSIZE 8 MOVE 320,100 TEXT 'centred!' TJUST 1,1 ";
+
 static const char *const passes[] = {
     /* Lines every way, with line patterns */
     "CLEARS 1 COLOR 14 MOVE 320,240 DRAW 620,250 MOVE 320,240 DRAW 330,470 MOVE 320,240 DRAW 10,230 MOVE 320,240 "
@@ -64,7 +69,7 @@ static const char *const passes[] = {
     /* Circles and ellipses, outlined and filled */
     "CLEARS 5 COLOR 11 MOVE 160,240 CIRCLE 120 MOVE 480,240 PRMFIL 1 CIRCLE 100 COLOR 6 MOVE 320,100 ELIPSE 200,60 "
     "MOVE 320,380 PRMFIL 0 ELIPSE 80,90 ",
-    /* Polygons, filled and outlined (the PGC's POLY draws nothing yet: KairoX86#308) */
+    /* Polygons, filled and outlined (KairoX86#308) */
     "CLEARS 6 COLOR 12 PRMFIL 1 POLY 5 50,50 300,80 250,400 120,300 20,200 PRMFIL 0 COLOR 14 "
     "POLY 6 350,50 600,60 620,300 500,450 400,300 330,200 ",
     /* Flood and boundary fills */
@@ -88,5 +93,7 @@ void test_main(void) {
     }
     send("CX ");
     send_bytes(text_pass, sizeof(text_pass));
+    wait_ticks(4);
+    send(text_ascii_pass);
     wait_ticks(4);
 }
