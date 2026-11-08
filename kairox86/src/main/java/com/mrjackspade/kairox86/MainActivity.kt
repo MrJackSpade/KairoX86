@@ -235,6 +235,9 @@ class MainActivity : MachineActivity<X86Entry>() {
      * floppy, such as a game's save disk, is an image of its own, on every drive's Other page
      * (KairoX86#162).
      */
+    /** New game (KairoX86#332): a preset or a custom PC through its hardware, or a blank floppy (X86NewGame). */
+    override val newGameWorkflow by lazy { X86NewGame.workflow(this) }
+
     override val blankDisks: List<BlankDisk> by lazy {
         X86Presets.blankDisks(this) + X86BlankFloppy.all.map { floppy ->
             BlankDisk.Image(floppy.id, UiText.res(FrontendR.string.kairo_blank_floppy, floppy.label), "img", floppy::write)

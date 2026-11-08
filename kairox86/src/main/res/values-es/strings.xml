@@ -122,6 +122,13 @@
     <string name="preset_486">PC 486 para DOS</string>
     <!-- EN: Pentium Windows 9x PC -->
     <string name="preset_win9x">PC Pentium para Windows 9x</string>
+    <!-- New game (KairoX86#332): a PC with no preset's defaults, and the workflow's pages for the processor and memory and for the cards. -->
+    <!-- EN: Custom PC -->
+    <string name="preset_custom">PC personalizado</string>
+    <!-- EN: Processor and memory -->
+    <string name="new_game_processor_memory">Procesador y memoria</string>
+    <!-- EN: Cards -->
+    <string name="new_game_cards">Tarjetas</string>
     <!-- A machine setting (86box.cfg time_sync): the clock the guest reads. -->
     <!-- EN: Clock -->
     <string name="setting_clock">Reloj</string>

@@ -278,6 +278,10 @@ put_cards(const struct kind *kind, int m)
         const device_t *device = kind->device(card);
         if (!strcmp(id, "internal") && kind->onboard != ONBOARD_ALWAYS && !(kind->onboard && machine_has_flags(m, kind->onboard)))
             continue;
+        /* "external" is only the second monitor's "card on another output" (vid_table.c's device_external):
+           as the video card it is no display at all. */
+        if ((kind->onboard == MACHINE_VIDEO) && !strcmp(id, "external"))
+            continue;
         /* A board whose video is its only video takes no other (86Box's config keeps it internal). */
         if ((kind->onboard == MACHINE_VIDEO) && machine_has_flags(m, MACHINE_VIDEO_ONLY) && strcmp(id, "internal"))
             continue;

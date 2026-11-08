@@ -122,6 +122,13 @@
     <string name="preset_486">حاسوب 486 لنظام DOS</string>
     <!-- EN: Pentium Windows 9x PC -->
     <string name="preset_win9x">حاسوب Pentium لنظام Windows 9x</string>
+    <!-- New game (KairoX86#332): a PC with no preset's defaults, and the workflow's pages for the processor and memory and for the cards. -->
+    <!-- EN: Custom PC -->
+    <string name="preset_custom">حاسوب مخصص</string>
+    <!-- EN: Processor and memory -->
+    <string name="new_game_processor_memory">المعالج والذاكرة</string>
+    <!-- EN: Cards -->
+    <string name="new_game_cards">البطاقات</string>
     <!-- A machine setting (86box.cfg time_sync): the clock the guest reads. -->
     <!-- EN: Clock -->
     <string name="setting_clock">الساعة</string>

@@ -82,6 +82,10 @@
     <string name="preset_xt" translatable="false">IBM PC XT</string>
     <string name="preset_486">486 DOS PC</string>
     <string name="preset_win9x">Pentium Windows 9x PC</string>
+    <!-- New game (KairoX86#332): a PC with no preset's defaults, and the workflow's pages for the processor and memory and for the cards. -->
+    <string name="preset_custom">Custom PC</string>
+    <string name="new_game_processor_memory">Processor and memory</string>
+    <string name="new_game_cards">Cards</string>
     <!-- A machine setting (86box.cfg time_sync): the clock the guest reads. -->
     <string name="setting_clock">Clock</string>
     <string name="setting_clock_local">Local time</string>
