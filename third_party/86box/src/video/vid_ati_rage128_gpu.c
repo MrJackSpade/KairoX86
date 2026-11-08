@@ -10962,6 +10962,9 @@ rage128_gpu_close(rage128_t *dev)
     gpu_prof_interval(g, 1);
 
     gpu_stats_core(dev, g);
+    /* How many triangles the GPU kernels drew, for the graphics batch
+       (core/test/gpu/compare.py sums every engine's report, KairoX86#283) */
+    fprintf(stderr, "kairo-gpu-r128: %llu triangles drawn\n", (unsigned long long) g->st_tris);
     gpu_stats_prof_waits(g);
     gpu_stats_2d(g);
     gpu_stats_coverage(g);

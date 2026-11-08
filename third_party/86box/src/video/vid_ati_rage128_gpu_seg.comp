@@ -381,11 +381,47 @@ zw_st(bool s, uint w, uint v)
     if (s) zstgw[w] = v; else texw[w] = v;
 }
 
+/* The stencil word cur with its byte at bit ssw through stencil op sop
+   (1 zero, 2 replace with ref, 3 saturating increment, 4 saturating
+   decrement) under write mask swm: cur itself when the byte stays */
 uint
-zw_cas(bool s, uint w, uint cur, uint nv)
+sten_word(uint cur, uint ssw, uint sop, uint ref, uint swm)
 {
-    return s ? atomicCompSwap(zstgw[w], cur, nv)
-             : atomicCompSwap(texw[w], cur, nv);
+    uint sb = (cur >> ssw) & 0xffu;
+    uint sn = sb;
+
+    switch (sop) {
+        case 1u: sn = 0u;                            break;
+        case 2u: sn = ref;                           break;
+        case 3u: sn = sb == 0xffu ? 0xffu : sb + 1u; break;
+        default: sn = sb == 0u ? 0u : sb - 1u;       break;
+    }
+    sn = (sb & ~swm) | (sn & swm);
+    return (cur & ~(0xffu << ssw)) | (sn << ssw);
+}
+
+/* sten_word applied to word w of the Z stage (s) or of VRAM through a
+   compare-and-swap loop. Each buffer runs its own loop: a compare-and-
+   swap whose comparator is chosen between the two buffers' loads
+   crashes the Adreno 740's shader compiler (KairoX86#328). */
+void
+zw_sten_atomic(bool s, uint w, uint ssw, uint sop, uint ref, uint swm)
+{
+    if (s) {
+        for (;;) {
+            uint cur = zstgw[w];
+            uint nv  = sten_word(cur, ssw, sop, ref, swm);
+            if (nv == cur || atomicCompSwap(zstgw[w], cur, nv) == cur)
+                break;
+        }
+    } else {
+        for (;;) {
+            uint cur = texw[w];
+            uint nv  = sten_word(cur, ssw, sop, ref, swm);
+            if (nv == cur || atomicCompSwap(texw[w], cur, nv) == cur)
+                break;
+        }
+    }
 }
 
 uint
@@ -1662,25 +1698,7 @@ pixel(int si, int ti, uint i)
                         && (zp_op == zf_op || zp_op == 0u || zf_op == 0u);
 
         if (s_atomic && sop != 0u) {
-            for (;;) {
-                uint cur = zw_ld(zstg, w);
-                uint sb  = (cur >> ssw) & 0xffu;
-                uint sn  = sb;
-
-                switch (sop) {
-                    case 1u: sn = 0u;                            break;
-                    case 2u: sn = tris[ti].sten_rm & 0xffu;      break;
-                    case 3u: sn = sb == 0xffu ? 0xffu : sb + 1u; break;
-                    default: sn = sb == 0u ? 0u : sb - 1u;       break;
-                }
-                sn = (sb & ~swm) | (sn & swm);
-                if (sn == sb)
-                    break;
-                if (zw_cas(zstg, w, cur,
-                           (cur & ~(0xffu << ssw))
-                               | (sn << ssw)) == cur)
-                    break;
-            }
+            zw_sten_atomic(zstg, w, ssw, sop, tris[ti].sten_rm & 0xffu, swm);
         } else if (!s_atomic) {
             uint snew = sbuf;
 
