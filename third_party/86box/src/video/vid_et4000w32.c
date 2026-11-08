@@ -3060,7 +3060,6 @@ et4000w32p_close(void *priv)
 
     if (et4000->k_gpu != NULL) {
         kairo_seg_close(et4000->k_gpu->seg); /* KairoX86#254 */
-        kairo_seg_run_close(et4000->k_gpu->run);
         free(et4000->k_gpu);
     }
     svga_close(&et4000->svga);

@@ -1076,8 +1076,6 @@ wd90c33_close(wd90c33_t *wd)
         picintc(1 << 9);
     if (wd->k_gpu != NULL) {
         kairo_seg_close(wd->k_gpu->seg); /* KairoX86#267 */
-        for (int i = 0; i < 3; i++)
-            kairo_seg_run_close(wd->k_gpu->run[i]);
         free(wd->k_gpu);
     }
     free(wd);

@@ -4496,8 +4496,6 @@ tgui_close(void *priv)
 
     if (tgui->k_gpu != NULL) {
         kairo_seg_close(tgui->k_gpu->seg); /* KairoX86#274 */
-        for (int i = 0; i < 3; i++)
-            kairo_seg_run_close(tgui->k_gpu->run[i]);
         free(tgui->k_gpu);
     }
     svga_close(&tgui->svga);

@@ -3445,8 +3445,6 @@ chips_69000_close(void *priv)
     i2c_gpio_close(chips->i2c);
     if (chips->k_gpu != NULL) {
         kairo_seg_close(chips->k_gpu->seg); /* KairoX86#249 */
-        for (int i = 0; i < 3; i++)
-            kairo_seg_run_close(chips->k_gpu->run[i]);
         free(chips->k_gpu);
     }
     svga_close(&chips->svga);

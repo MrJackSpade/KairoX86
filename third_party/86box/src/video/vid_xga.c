@@ -4161,8 +4161,6 @@ xga_close(void *priv)
             xga_gpu_t *g = xga->k_gpu; /* KairoX86#280 */
 
             kairo_seg_close(g->seg);
-            for (int i = 0; i < 2; i++)
-                kairo_seg_run_close(g->run[i]);
             free(g);
             kairo_gpu_free(xga->vram);
         } else

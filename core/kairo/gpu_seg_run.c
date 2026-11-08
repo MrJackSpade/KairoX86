@@ -40,6 +40,17 @@ run_flush_cb(void *ctx)
     kairo_seg_run_flush((kairo_seg_run_t *) ctx);
 }
 
+/* The run freed by its batch's close (kairo_seg_close), after the batch's last drain flushed it */
+static void
+run_close_cb(void *ctx)
+{
+    kairo_seg_run_t *r = (kairo_seg_run_t *) ctx;
+
+    pthread_mutex_destroy(&r->lock);
+    free(r->words);
+    free(r);
+}
+
 /* Whether the run's pixels not yet in the batch draw or read any of len bytes at addr */
 static bool
 run_open_cb(void *ctx, uint32_t addr, uint32_t len)
@@ -85,18 +96,8 @@ kairo_seg_run_open(kairo_seg_t *seg, uint32_t vram_mask, uint32_t pixel_bytes, u
     pthread_mutexattr_destroy(&attr);
     if (r->words == NULL)
         fatal("A run of pixels on the GPU: no memory\n");
-    kairo_seg_add_flush(seg, run_flush_cb, run_open_cb, r);
+    kairo_seg_add_flush(seg, run_flush_cb, run_open_cb, run_close_cb, r);
     return r;
-}
-
-void
-kairo_seg_run_close(kairo_seg_run_t *r)
-{
-    if (r == NULL)
-        return;
-    pthread_mutex_destroy(&r->lock);
-    free(r->words);
-    free(r);
 }
 
 void

@@ -11867,8 +11867,6 @@ s3_close(void *priv)
 
     if (s3->k_gpu != NULL) {
         kairo_seg_close(s3->k_gpu->seg); /* KairoX86#271 */
-        for (int i = 0; i < 4; i++)
-            kairo_seg_run_close(s3->k_gpu->run[i]);
         free(s3->k_gpu);
     }
     svga_close(&s3->svga);

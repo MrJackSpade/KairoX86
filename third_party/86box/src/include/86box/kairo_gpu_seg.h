@@ -53,10 +53,12 @@ uint32_t kairo_seg_stream(kairo_seg_t *s, const uint32_t *words, uint32_t count)
 
 /* A card's own work in progress (a row partly drawn) recorded before every drain, so a drain draws everything the
    card has done: fn(ctx) is called first, outside the batch's lock. open(ctx, addr, len), if not NULL, says whether
-   that work draws or reads any of len bytes at addr: kairo_seg_touch there records it first. A batch takes up to
-   KAIRO_SEG_FLUSHES of them (a card's runs each add one). */
+   that work draws or reads any of len bytes at addr: kairo_seg_touch there records it first. close(ctx), if not
+   NULL, makes ctx the batch's: kairo_seg_close calls it after the batch's last drain, so nothing flushes ctx once it
+   is closed. A batch takes up to KAIRO_SEG_FLUSHES of them (a card's runs each add one). */
 #define KAIRO_SEG_FLUSHES 8
-void kairo_seg_add_flush(kairo_seg_t *s, void (*fn)(void *ctx), bool (*open)(void *ctx, uint32_t addr, uint32_t len), void *ctx);
+void kairo_seg_add_flush(kairo_seg_t *s, void (*fn)(void *ctx), bool (*open)(void *ctx, uint32_t addr, uint32_t len),
+                         void (*close)(void *ctx), void *ctx);
 /* How many times the batch has been drawn: a card's operation started before a drain is not in the batch after it */
 uint64_t kairo_seg_generation(const kairo_seg_t *s);
 
@@ -72,13 +74,13 @@ void kairo_seg_touch(kairo_seg_t *s, uint32_t addr, uint32_t len);
    KAIRO_SEG_RUN_READS slots of a pixel's bytes, KAIRO_SEG_RUN_NONE for none) decides how: in order where the run
    reads what it draws or its pixels cross a word, and the batch drawn first where the run reads what the batch draws
    or draws what it reads. op(ctx, in_order) puts the card's operation
-   record in the batch (kairo_seg_op) before the run's segment. Each run is one of the batch's flushes (kairo_seg_add_flush). */
+   record in the batch (kairo_seg_op) before the run's segment. Each run is one of the batch's flushes (kairo_seg_add_flush),
+   and the batch's: kairo_seg_close draws it and frees it (KairoX86#329). */
 #define KAIRO_SEG_RUN_READS 4
 #define KAIRO_SEG_RUN_NONE  0xffffffffu
 typedef struct kairo_seg_run kairo_seg_run_t;
 kairo_seg_run_t *kairo_seg_run_open(kairo_seg_t *seg, uint32_t vram_mask, uint32_t pixel_bytes, uint32_t words_per,
                                     uint32_t reads, void (*op)(void *ctx, bool in_order), void *ctx);
-void             kairo_seg_run_close(kairo_seg_run_t *r);
 /* A pixel drawn at addr: its words and where the pixels it reads lie, one per slot */
 void kairo_seg_run_pixel(kairo_seg_run_t *r, uint32_t addr, const uint32_t *words, const uint32_t *reads);
 /* The run so far into the batch */

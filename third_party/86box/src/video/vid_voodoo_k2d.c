@@ -146,8 +146,6 @@ voodoo_k2d_close(voodoo_t *voodoo)
     if (g == NULL)
         return;
     kairo_seg_close(g->seg);
-    for (int i = 0; i < 4; i++)
-        kairo_seg_run_close(g->run[i]);
     thread_close_mutex(g->lock);
     free(g);
     voodoo->k2d = NULL;

@@ -3506,7 +3506,6 @@ pgc_close_common(void *priv)
         free(dev->cga_vram);
     if (dev->k_gpu != NULL) { /* KairoX86#268 */
         kairo_seg_close(dev->k_gpu->seg);
-        kairo_seg_run_close(dev->k_gpu->run);
         free(dev->k_gpu);
         dev->k_gpu = NULL;
         kairo_gpu_free(dev->vram);

@@ -3532,8 +3532,6 @@ mystique_k_close(mystique_t *mystique)
     if (mystique->k_gpu == NULL)
         return;
     kairo_seg_close(mystique->k_gpu->seg);
-    for (int i = 0; i < 4; i++)
-        kairo_seg_run_close(mystique->k_gpu->run[i]);
     thread_close_mutex(mystique->k_gpu->lock);
     free(mystique->k_gpu);
     mystique->k_gpu = NULL;

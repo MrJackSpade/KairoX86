@@ -5625,7 +5625,6 @@ gd54xx_close(void *priv)
 
     if (gd54xx->k_gpu != NULL) {
         kairo_seg_close(gd54xx->k_gpu->seg); /* KairoX86#250 */
-        kairo_seg_run_close(gd54xx->k_gpu->run);
         free(gd54xx->k_gpu);
     }
     svga_close(&gd54xx->svga);

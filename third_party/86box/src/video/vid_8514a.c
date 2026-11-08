@@ -424,8 +424,6 @@ ibm8514_k_close(svga_t *svga)
     if (dev->k_gpu == NULL)
         return;
     kairo_seg_close(dev->k_gpu->seg);
-    for (int i = 0; i < 2; i++)
-        kairo_seg_run_close(dev->k_gpu->run[i]);
     free(dev->k_gpu);
     dev->k_gpu = NULL;
 }

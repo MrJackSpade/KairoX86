@@ -6516,8 +6516,6 @@ s3_virge_close(void *priv)
     kairo_virge_gpu_close(virge->k_gpu); /* KairoX86#272 */
     if (virge->k2d != NULL) {
         kairo_seg_close(virge->k2d->seg);
-        for (int i = 0; i < 3; i++)
-            kairo_seg_run_close(virge->k2d->run[i]);
         thread_close_mutex(virge->k2d->lock);
         free(virge->k2d);
     }

@@ -371,8 +371,6 @@ gxm_k_close(gxm_video_t *dev)
         return;
     gxm_k_flush(dev);
     kairo_seg_drain(dev->k.seg);
-    for (int i = 0; i < 2; i++)
-        kairo_seg_run_close(dev->k.run[i]);
     kairo_seg_close(dev->k.seg);
     dev->k.seg    = NULL;
     dev->k.issued = 0;

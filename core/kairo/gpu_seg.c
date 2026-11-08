@@ -51,6 +51,7 @@ struct kairo_seg {
     struct {
         void (*fn)(void *ctx);
         bool (*open)(void *ctx, uint32_t addr, uint32_t len);
+        void (*close)(void *ctx); /* the batch owns ctx: closed by kairo_seg_close, after the last drain (NULL: not) */
         void *ctx;
     } flushes[KAIRO_SEG_FLUSHES];
     uint32_t            n_flushes;
@@ -172,13 +173,15 @@ drain_locked(kairo_seg_t *s)
 }
 
 void
-kairo_seg_add_flush(kairo_seg_t *s, void (*fn)(void *ctx), bool (*open)(void *ctx, uint32_t addr, uint32_t len), void *ctx)
+kairo_seg_add_flush(kairo_seg_t *s, void (*fn)(void *ctx), bool (*open)(void *ctx, uint32_t addr, uint32_t len),
+                    void (*close)(void *ctx), void *ctx)
 {
     if (s->n_flushes == KAIRO_SEG_FLUSHES)
         fatal("%s on the GPU: more than %d flushes\n", s->name, KAIRO_SEG_FLUSHES);
-    s->flushes[s->n_flushes].fn   = fn;
-    s->flushes[s->n_flushes].open = open;
-    s->flushes[s->n_flushes].ctx  = ctx;
+    s->flushes[s->n_flushes].fn    = fn;
+    s->flushes[s->n_flushes].open  = open;
+    s->flushes[s->n_flushes].close = close;
+    s->flushes[s->n_flushes].ctx   = ctx;
     s->n_flushes++;
 }
 
@@ -321,6 +324,10 @@ kairo_seg_close(kairo_seg_t *s)
     if (s == NULL)
         return;
     kairo_seg_drain(s);
+    /* What the batch owns (a card's runs), closed once nothing can flush them again */
+    for (uint32_t i = 0; i < s->n_flushes; i++)
+        if (s->flushes[i].close != NULL)
+            s->flushes[i].close(s->flushes[i].ctx);
     fprintf(stderr, "kairo-gpu-%s: %llu operations drawn\n", s->name, s->drawn);
     kairo_gpu_kernel_free(s->kernel);
     kairo_gpu_buffer_free(s->ops);
