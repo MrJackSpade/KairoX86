@@ -82,6 +82,7 @@ static jmp_buf             stopped;   /* where do_stop() returns to on the host'
 static bool                running;   /* a call into 86Box is on the host's stack, with stopped set */
 static atomic_bool         dead;      /* the machine stopped: nothing runs it again */
 static bool                closed;    /* pc_close ended 86Box's threads */
+static bool                modules_started; /* pc_init_modules ran: 86Box's devices and their threads exist */
 static int                 frame_ms;  /* the guest time the last frame lasted */
 static int                 nvr_ms;    /* guest time since the CMOS was last saved */
 static int                 halted_ms; /* guest time the processor has sat on a HLT with interrupts off */
@@ -1448,6 +1449,7 @@ api_start(const char *vm_folder, const char *rom_folder, const struct KairoX86Ho
         time_sync = 0;
     /* The GPU, if the machine's Hardware acceleration is on (KairoX86#232), before any card needs it */
     kairo_gpu_open();
+    modules_started = true; /* set first: a fatal inside pc_init_modules leaves some started (api_stop closes them) */
     pc_init_modules();
     /* pc_init_modules seeded 86Box's random numbers from the host (random_init). */
     if (repeatable)
@@ -1586,10 +1588,14 @@ api_stop(void)
         return;
     }
     running = true;
-    /* pc_close saves the configuration: with the machine's own clock setting and its own media. */
-    time_sync = configured_time_sync;
-    media_restore();
-    pc_close(NULL);
+    /* KairoX86#230: a start that failed before 86Box's devices started has none to close; one that failed after has
+       their threads (the floppy and hard disk sounds, the renderers) running, ended here as after any machine */
+    if (modules_started) {
+        /* pc_close saves the configuration: with the machine's own clock setting and its own media. */
+        time_sync = configured_time_sync;
+        media_restore();
+        pc_close(NULL);
+    }
     running = false;
     /* After pc_close: every card freed its GPU objects */
     release_machine();

@@ -34,6 +34,9 @@ std::unique_ptr<X86Machine> X86Machine::create(const Config &config, std::string
     KairoX86Host host{impl.get(), &Impl::on_fatal, &Impl::on_notice};
     if (!impl->api->start(config.machine_folder.c_str(), config.rom_folder.c_str(), &host, config.seed)) {
         error = impl->fatal.empty() ? "86Box could not start the machine" : impl->fatal;
+        // KairoX86#230: a start that failed part-way may have started 86Box's threads (the floppy sound's): they end
+        // before the library copy goes, as a running machine's do
+        impl->api->stop();
         return nullptr;
     }
     return std::unique_ptr<X86Machine>(new X86Machine(std::move(impl)));
