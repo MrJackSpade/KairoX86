@@ -5,6 +5,9 @@ every frame compared: by hash, and a differing frame by its picture within a sma
 fails). A mismatch writes a diff image beside the run and fails. Cards run --jobs at a time.
 
   compare.py <ROM set> <game_profile> <hardware_query> <test floppies> <out folder> [--cards id,...] [--tests name,...]
+  With --device <adb serial> the runs are on that Android device: --remote (default /data/local/tmp/kx86/gpu) holds
+  bin/ (the release core's game_profile, libkairox86_86box.so and libc++_shared.so), roms/ and tests/; hardware_query
+  and the ROM set given are the PC's, which list the cards.
              [--frames n] [--shots n] [--a off|on] [--b off|on] [--jobs n]
 
 Each card runs on its bus's test board (the bus from the core's hardware list): PCI and AGP cards on the 686BX,
@@ -161,9 +164,51 @@ def machine_config(board, card, test, accel, name):
             f"[KairoX86]\nhardware_acceleration = {1 if accel == 'on' else 0}\n")
 
 
+def adb(args, *command, check=True):
+    """adb against the --device: its output; a failure raises with what adb said"""
+    out = subprocess.run(['adb', '-s', args.device, *command], capture_output=True, text=True, encoding='utf-8',
+                         errors='replace', env=dict(os.environ, MSYS_NO_PATHCONV='1'))
+    if check and out.returncode != 0:
+        raise RuntimeError(f'adb {" ".join(command)[:120]} failed ({out.returncode}): {(out.stdout + out.stderr).strip()[-300:]}')
+    return out
+
+
+def remote_folder(args, folder):
+    """A run folder's place on the --device: --remote/runs/<its path under the out folder>"""
+    return f"{args.remote}/runs/{folder.relative_to(Path(args.out)).as_posix()}"
+
+
+def run_game_profile(args, folder, machine, work, test, frames, board):
+    """game_profile over the machine folder, here or on the --device (the test's image copied from --remote/tests):
+    its stdout, stderr and exit code, its hashes in folder/hashes.txt"""
+    end = TEST_END_8086 if BOARDS_8086.get(board, ('286',))[0] != '286' else TEST_END
+    script = SCRIPT.get(board, '-')
+    if not args.device:
+        out = subprocess.run([args.game_profile, args.roms, str(work), str(machine), str(frames), script, '--shots',
+                              str(args.shots), '--hashes', str(folder / 'hashes.txt'), '--until-halt', end],
+                             capture_output=True, text=True, cwd=os.path.dirname(args.game_profile))
+        return out.stdout, out.stderr, out.returncode
+    r = remote_folder(args, folder)
+    adb(args, 'shell', f'rm -rf {r} && mkdir -p {r}/work')
+    adb(args, 'push', str(machine), f'{r}/')
+    out = adb(args, 'shell', f"cp {args.remote}/tests/{test}.img {r}/machine/ && cd {args.remote}/bin && "
+                             f"LD_LIBRARY_PATH=. ./game_profile {args.remote}/roms {r}/work {r}/machine {frames} '{script}' "
+                             f"--shots {args.shots} --hashes {r}/hashes.txt --until-halt {end} 2>{r}/stderr.txt; echo exit=$?",
+              check=False)
+    lines = out.stdout.splitlines()
+    if not lines or not lines[-1].startswith('exit='):
+        raise RuntimeError(f'adb shell gave no exit status: {(out.stdout + out.stderr).strip()[-300:]}')
+    code = int(lines[-1][len('exit='):])
+    stderr = adb(args, 'shell', f'cat {r}/stderr.txt').stdout
+    if code == 0:
+        adb(args, 'pull', f'{r}/hashes.txt', str(folder / 'hashes.txt'))
+    return '\n'.join(lines[:-1]) + '\n', stderr, code
+
+
 def run(args, folder, config, test, board):
     """Runs one test under game_profile until it halts at its end (runtime.c's TEST_END); returns its hashes, by frame
-    and 'state' (the guest's state at the end), and its work folder (the pictures)."""
+    and 'state' (the guest's state at the end), and its work folder (the pictures; from a --device, pulled as
+    compare_runs needs them)."""
     machine, work = folder / 'machine', folder / 'work'
     for f in (machine, work):
         if f.exists():
@@ -172,11 +217,14 @@ def run(args, folder, config, test, board):
     (machine / '86box.cfg').write_text(config, newline='\n')
     if board in NVR:
         shutil.copytree(NVR[board], machine / 'nvr')
-    shutil.copy(Path(args.tests_folder) / f'{test}.img', machine)
-    out = subprocess.run([args.game_profile, args.roms, str(work), str(machine), str(max(args.frames, BOARD_FRAMES.get(board, 0))), SCRIPT.get(board, '-'),
-                          '--shots', str(args.shots), '--hashes', str(folder / 'hashes.txt'), '--until-halt',
-                          TEST_END_8086 if BOARDS_8086.get(board, ('286',))[0] != '286' else TEST_END],
-                         capture_output=True, text=True, cwd=os.path.dirname(args.game_profile))
+    if not args.device:
+        shutil.copy(Path(args.tests_folder) / f'{test}.img', machine)
+
+    class Out:
+        """the run's output"""
+    out = Out()
+    out.stdout, out.stderr, out.returncode = run_game_profile(args, folder, machine, work, test,
+                                                              max(args.frames, BOARD_FRAMES.get(board, 0)), board)
     (folder / 'run.log').write_text(out.stdout + out.stderr)
     if out.returncode != 0:
         raise RuntimeError(f'game_profile failed ({out.returncode}): {(out.stdout + out.stderr).strip()[-300:]}')
@@ -206,7 +254,8 @@ def run(args, folder, config, test, board):
     # every "kairo-gpu-<engine>: N <work> drawn" report, summed
     hashes['gpu_3d'] = sum(int(line.split()[1]) for line in out.stderr.splitlines()
                            if line.startswith('kairo-gpu-') and line.endswith(' drawn'))
-    shutil.rmtree(work / 'machine')
+    if not args.device:
+        shutil.rmtree(work / 'machine')
     return hashes, work
 
 
@@ -236,6 +285,9 @@ def compare_runs(args, ha, wa, hb, wb, folder):
         if ha[frame] == hb[frame]:
             continue
         shot_a, shot_b = wa / f'frame-{frame}.bmp', wb / f'frame-{frame}.bmp'
+        if args.device:
+            for shot in (shot_a, shot_b):
+                adb(args, 'pull', f'{remote_folder(args, shot.parent.parent)}/work/{shot.name}', str(shot), check=False)
         if not shot_a.exists():
             return f'frame {frame} differs, and no picture of it was kept'
         why = compare_frame(shot_a, shot_b, folder / f'diff-{frame}.png')
@@ -258,6 +310,10 @@ def main():
     p.add_argument('--a', default='off')
     p.add_argument('--b', default='on')
     p.add_argument('--jobs', type=int, default=8)
+    # On an Android device (adb serial): its folder holding bin/ (game_profile and its libraries), roms/ and tests/;
+    # the ROM set given is the PC's copy, which hardware_query (run here) lists the cards from
+    p.add_argument('--device')
+    p.add_argument('--remote', default='/data/local/tmp/kx86/gpu')
     args = p.parse_args()
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -315,6 +371,8 @@ def main():
                 found.append((card, test, problem))
             else:
                 shutil.rmtree(folder)
+                if args.device:
+                    adb(args, 'shell', f'rm -rf {remote_folder(args, folder)}')
             on = hb if args.b == 'on' else ha
             drawn = (f"GPU lines {on['gpu_lines']}" + (f", 3D {on['gpu_3d']}" if on['gpu_3d'] else '')
                      + (f", built {', '.join(on['gpu_kernels'])}" if on['gpu_kernels'] else ''))
