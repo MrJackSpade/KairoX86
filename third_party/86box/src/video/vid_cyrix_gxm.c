@@ -1334,6 +1334,28 @@ gxm_csc(int y, int u, int v)
 
 /* The CS5530's mix of a line: the video window over the graphics, then the
    gamma RAM for whichever stream does not bypass it. */
+/* The bits the display controller sends of a graphics pixel, for the key compare: 6 a color from the palette, 5 or 6
+   in 16 BPP */
+static uint32_t
+gxm_key_sig(const gxm_video_t *dev)
+{
+    const int bpp16 = !(dev->dc[DC_OUTPUT_CFG] & OC_8BPP) && !(dev->dc[DC_TIMING_CFG] & TC_PLNR);
+
+    return bpp16 ? ((dev->dc[DC_OUTPUT_CFG] & OC_16FMT) ? 0xf8f8f8 : 0xf8fcf8) : 0xfcfcfc;
+}
+
+/* KairoX86#315: whether graphics pixels leave the gamma RAM as they went in (bypassed, or an identity table) */
+static int
+gxm_gamma_identity(const gxm_video_t *dev)
+{
+    if (dev->display_cfg & DCFG_GFX_BYPASS)
+        return 1;
+    for (int i = 0; i < 256; i++)
+        if ((dev->gamma[i] & 0xffffff) != ((uint32_t) i * 0x010101))
+            return 0;
+    return 1;
+}
+
 /* KairoX86#315: the video window on line y: its source lines, width, vertical phase and columns (gxm_output_line's);
    returns whether it shows on the line (x0 to x1 empty when not) */
 static bool
@@ -1384,16 +1406,28 @@ gxm_video_window(const gxm_video_t *dev, int y, uint32_t *src, int *width_out, i
     return x1 > x0;
 }
 
+/* KairoX86#315: the video window's pixel xi of the line (gxm_output_line's): sampled, filtered, converted */
+static uint32_t
+gxm_video_pixel(gxm_video_t *dev, const uint32_t *src, int width, int yph, int xi)
+{
+    int c[3];
+    int n[3];
+
+    gxm_overlay_sample(dev, src[0], width, xi, c);
+    if (yph) {
+        gxm_overlay_sample(dev, src[1], width, xi, n);
+        for (int i = 0; i < 3; i++)
+            c[i] = ((c[i] * (8 - yph)) + (n[i] * yph)) >> 3;
+    }
+    return (dev->vid[VID_CONFIG] & VC_CSC_BYPASS) ? (uint32_t) ((c[0] << 16) | (c[1] << 8) | c[2]) : gxm_csc(c[0], c[1], c[2]);
+}
+
 static void
 gxm_output_line(gxm_video_t *dev, uint32_t *line, int y)
 {
-    const uint32_t cfg   = dev->vid[VID_CONFIG];
     const uint32_t key   = dev->vid[VID_KEY];
     const uint32_t kmask = dev->vid[VID_MASK];
-    /* The bits the display controller sends of a graphics pixel, for the key
-       compare: 6 a color from the palette, 5 or 6 in 16 BPP. */
-    const int      bpp16 = !(dev->dc[DC_OUTPUT_CFG] & OC_8BPP) && !(dev->dc[DC_TIMING_CFG] & TC_PLNR);
-    const uint32_t sig   = bpp16 ? ((dev->dc[DC_OUTPUT_CFG] & OC_16FMT) ? 0xf8f8f8 : 0xf8fcf8) : 0xfcfcfc;
+    const uint32_t sig   = gxm_key_sig(dev);
     uint32_t       src[2];
     int            width;
     int            yph;
@@ -1402,8 +1436,6 @@ gxm_output_line(gxm_video_t *dev, uint32_t *line, int y)
 
     gxm_video_window(dev, y, src, &width, &yph, &x0, &x1);
     for (int x = 0; x < dev->hdisp; x++) {
-        int      c[3];
-        int      n[3];
         uint32_t vid;
         int      show;
 
@@ -1412,13 +1444,7 @@ gxm_output_line(gxm_video_t *dev, uint32_t *line, int y)
             continue;
         }
 
-        gxm_overlay_sample(dev, src[0], width, x - x0, c);
-        if (yph) {
-            gxm_overlay_sample(dev, src[1], width, x - x0, n);
-            for (int i = 0; i < 3; i++)
-                c[i] = ((c[i] * (8 - yph)) + (n[i] * yph)) >> 3;
-        }
-        vid = (cfg & VC_CSC_BYPASS) ? ((c[0] << 16) | (c[1] << 8) | c[2]) : gxm_csc(c[0], c[1], c[2]);
+        vid = gxm_video_pixel(dev, src, width, yph, x - x0);
 
         /* Graphics matching the key let the video through; video matching it
            lets the graphics through. */
@@ -1435,9 +1461,9 @@ gxm_output_line(gxm_video_t *dev, uint32_t *line, int y)
 }
 
 /* KairoX86#315: line y (gxm_render_line's, read as it reads the frame buffer) to the GPU's scanout queue, its colours
-   through the gamma RAM as gxm_output_line takes them; returns whether the GPU draws it. Not with the display off, the
-   cursor or the video window on the line, nor the 5-5-5 16-bit format (its channels in other places than the 5-6-5
-   table, KAIRO_SCAN_16CLUT, takes). */
+   through the gamma RAM as gxm_output_line takes them, the cursor and the video window a patch over it; returns
+   whether the GPU draws it. A line with the display off is black. Not a line with both the cursor and the window, nor
+   an XOR cursor or a graphics-keyed window past a gamma RAM that is not the identity. */
 static bool
 gxm_render_line_gpu(gxm_video_t *dev, int y)
 {
@@ -1447,9 +1473,86 @@ gxm_render_line_gpu(gxm_video_t *dev, int y)
     int       x0;
     int       x1;
 
-    if (!kairo_gpu_on || !gxm_display_on(dev) || gxm_cursor_on_line(dev, y) || gxm_video_window(dev, y, src, &width, &yph, &x0, &x1) ||
-        (dev->hdisp <= 0) || (dev->hdisp > 2048))
+    static uint32_t ax[2048 * KAIRO_PATCH_WORDS];
+    int             p_lo = 0, p_hi = 0; /* the patch's pixels */
+    uint32_t        p_key = 0, p_mask = 0;
+
+    if (!kairo_gpu_on || (dev->hdisp <= 0) || (dev->hdisp > 2048))
         return false;
+    if (!gxm_display_on(dev)) { /* gxm_render_line's black line */
+        static const uint32_t black[1] = { 0x00000000 };
+        uint32_t *w = kairo_gpu_scan(buffer32, buffer32->kairo_gpu, (uint32_t) (buffer32->line[y] - buffer32->dat), KAIRO_SCAN_BITS,
+                                     (uint32_t) dev->hdisp, ((uint32_t) dev->hdisp + 31) / 32, black, 1, 1, 0, 0);
+        memset(w, 0, (((size_t) dev->hdisp + 31) / 32) * 4);
+        kairo_gpu_scan_commit();
+        return true;
+    }
+    const bool cursor = gxm_cursor_on_line(dev, y);
+    const bool window = gxm_video_window(dev, y, src, &width, &yph, &x0, &x1);
+    if (cursor && window)
+        return false;
+    if (cursor) { /* gxm_render_cursor's pixels, their colours then through the gamma RAM as gxm_output_line takes them */
+        const int cx = dev->dc[DC_CURSOR_X] & 0x7ff;
+        const int xo = (dev->dc[DC_CURSOR_X] >> 11) & 0x1f;
+        const int row = y - (int) (dev->dc[DC_CURSOR_Y] & 0x3ff);
+        const int ident = gxm_gamma_identity(dev);
+
+        p_lo = (cx < 0) ? 0 : cx;
+        p_hi = (cx + 32 - xo > dev->hdisp) ? dev->hdisp : (cx + 32 - xo);
+        for (int k = p_lo; k < p_hi; k++) {
+            uint32_t *w = &ax[k * KAIRO_PATCH_WORDS];
+            w[0] = 0xffffffff, w[1] = 0, w[2] = 0, w[3] = 0;
+        }
+        for (int half = 0; half < 2; half++) {
+            const uint32_t dw = *(uint32_t *) gxm_gmem(dev, (dev->dc[DC_CURS_ST_OFFSET] & 0x3ffffc) + (row << 3) + (half << 2));
+
+            for (int i = 0; i < 16; i++) {
+                const int px = (half << 4) + i;
+                const int x  = cx + px - xo;
+                const int a  = (dw >> (31 - i)) & 1;
+                const int xr = (dw >> (15 - i)) & 1;
+
+                if ((px < xo) || (x < 0) || (x >= dev->hdisp) || (a && !xr))
+                    continue;
+                if (a && !ident)
+                    return false; /* an XOR pixel past a gamma RAM that is not the identity */
+                uint32_t *w = &ax[x * KAIRO_PATCH_WORDS];
+                if (!a)
+                    w[0] = 0, w[1] = gxm_gamma(dev, dev->pal_rgb[0x100 + xr]);
+                else
+                    w[1] = 0x00ffffff;
+            }
+        }
+        if (p_hi <= p_lo)
+            p_lo = p_hi = 0;
+    }
+    if (window) { /* gxm_output_line's window: its pixels shown, by the video's key or the graphics' (the patch's key) */
+        const uint32_t key   = dev->vid[VID_KEY];
+        const uint32_t kmask = dev->vid[VID_MASK];
+        const int      vkey  = !!(dev->display_cfg & DCFG_VID_KEY);
+
+        if (!vkey && !gxm_gamma_identity(dev))
+            return false; /* the graphics compared before the gamma RAM, drawn past it */
+        p_lo = (x0 < 0) ? 0 : x0;
+        p_hi = (x1 > dev->hdisp) ? dev->hdisp : x1;
+        if (!vkey) {
+            p_mask = gxm_key_sig(dev) & kmask;
+            p_key  = key & p_mask;
+        }
+        for (int x = p_lo; x < p_hi; x++) {
+            const uint32_t vid  = gxm_video_pixel(dev, src, width, yph, x - x0);
+            const uint32_t fin  = (dev->display_cfg & DCFG_GFX_BYPASS) ? gxm_gamma_ram(dev, vid) : vid;
+            uint32_t      *w    = &ax[x * KAIRO_PATCH_WORDS];
+
+            if (vkey) {
+                const int show = ((vid ^ key) & kmask) != 0;
+                w[0] = show ? 0 : 0xffffffff, w[1] = show ? fin : 0, w[2] = 0, w[3] = 0;
+            } else
+                w[0] = 0xffffffff, w[1] = 0, w[2] = 1, w[3] = fin;
+        }
+        if (p_hi <= p_lo)
+            p_lo = p_hi = 0;
+    }
     const int      pxdb   = !!(dev->dc[DC_TIMING_CFG] & TC_PXDB);
     const int      bpp16  = !(dev->dc[DC_OUTPUT_CFG] & OC_8BPP);
     const int      ch4s   = !!(dev->dc[DC_GENERAL_CFG] & GC_CH4S);
@@ -1471,17 +1574,16 @@ gxm_render_line_gpu(gxm_video_t *dev, int y)
         uint32_t *planes = kairo_gpu_scan(bitmap, bitmap->kairo_gpu, out, KAIRO_SCAN_PLANES, (uint32_t) dev->hdisp, cells, colours, 16, 0, 0, flags);
         for (uint32_t c = 0; c < cells; c++, addr += 4)
             planes[c] = *(uint32_t *) gxm_gmem(dev, addr);
-    } else if (bpp16) { /* 5-6-5: each channel through its own column of the table */
-        if (dev->dc[DC_OUTPUT_CFG] & OC_16FMT)
-            return false;
+    } else if (bpp16) { /* 5-6-5 or 5-5-5: each channel through its own column of the table */
+        const int f555 = !!(dev->dc[DC_OUTPUT_CFG] & OC_16FMT);
         for (int i = 0; i < 256; i++) {
             const uint32_t r5 = (uint32_t) i >> 3;
-            const uint32_t g6 = (uint32_t) i >> 2;
-            colours[i] = gxm_gamma(dev, (((r5 << 3) | (r5 >> 2)) << 16) | (((g6 << 2) | (g6 >> 4)) << 8) | ((r5 << 3) | (r5 >> 2)));
+            const uint32_t g  = f555 ? ((((uint32_t) i >> 3) << 3) | ((uint32_t) i >> 5)) : ((((uint32_t) i >> 2) << 2) | ((uint32_t) i >> 6));
+            colours[i] = gxm_gamma(dev, (((r5 << 3) | (r5 >> 2)) << 16) | (g << 8) | ((r5 << 3) | (r5 >> 2)));
         }
         const uint32_t n     = pxdb ? ((uint32_t) dev->hdisp + 1) / 2 : (uint32_t) dev->hdisp;
-        uint16_t      *words = (uint16_t *) kairo_gpu_scan(bitmap, bitmap->kairo_gpu, out, KAIRO_SCAN_16CLUT, (uint32_t) dev->hdisp, (n + 1) / 2,
-                                                           colours, 256, 0, 0, flags);
+        uint16_t      *words = (uint16_t *) kairo_gpu_scan(bitmap, bitmap->kairo_gpu, out, f555 ? KAIRO_SCAN_15CLUT : KAIRO_SCAN_16CLUT,
+                                                           (uint32_t) dev->hdisp, (n + 1) / 2, colours, 256, 0, 0, flags);
         for (uint32_t i = 0; i < n; i++, addr += 2)
             words[i] = *(uint16_t *) gxm_gmem(dev, addr);
     } else { /* a byte a pixel through the palette and its blink mask; chain 4 every fourth dword */
@@ -1496,6 +1598,14 @@ gxm_render_line_gpu(gxm_video_t *dev, int y)
         }
     }
     kairo_gpu_scan_commit();
+    if (p_hi > p_lo) { /* the cursor or the window over the line; any pixel the patch did not take, drawn here */
+        uint32_t from;
+        uint32_t to;
+        kairo_gpu_scan_patch(bitmap, out + (uint32_t) p_lo, (uint32_t) (p_hi - p_lo), &ax[p_lo * KAIRO_PATCH_WORDS], p_key, p_mask, &from, &to);
+        for (int x = p_lo; x < p_hi; x++)
+            if (((out + (uint32_t) x) < from) || ((out + (uint32_t) x) >= to))
+                bitmap->line[y][x] = kairo_gpu_patch_pixel(bitmap->line[y][x], &ax[x * KAIRO_PATCH_WORDS], p_key, p_mask);
+    }
     return true;
 }
 

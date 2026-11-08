@@ -127,13 +127,13 @@ ega_render_text_gpu(ega_t *ega, uint32_t *p)
 }
 
 /* KairoX86#234: the graphics line from p on (ega_render_graphics', read as it reads it) to the GPU's
-   scanout queue; returns whether the GPU draws it, ega->memaddr moved as the drawing moves it. Not with
-   the CRTC in reset (the CPU draws black). */
+   scanout queue; returns whether the GPU draws it, ega->memaddr moved as the drawing moves it. With the CRTC in reset
+   the line is black (every colour), its memory walked as the CPU walks it. */
 static bool
 ega_render_graphics_gpu(ega_t *ega, uint32_t *p)
 {
     const bool crtcreset = ((ega->crtc[0x17] & 0x80) == 0);
-    if (!kairo_gpu_on || crtcreset)
+    if (!kairo_gpu_on)
         return false;
     const bool    doublewidth = ((ega->seqregs[1] & 8) != 0);
     const bool    cga2bpp     = ((ega->gdcreg[5] & 0x20) != 0);
@@ -150,7 +150,7 @@ ega_render_graphics_gpu(ega_t *ega, uint32_t *p)
     uint32_t       colours[16];
     for (uint32_t c = 0; c < 16; c++) {
         const uint32_t v = ((c & ega->plane_mask & ~blinkmask) | ((c | ~ega->plane_mask) & blinkmask & blinkval)) ^ blinkmask;
-        colours[c]       = ega->pallook[ega->egapal[v]];
+        colours[c]       = crtcreset ? 0x00000000 : ega->pallook[ega->egapal[v]];
     }
     uint32_t *words      = kairo_gpu_scan(buffer32, buffer32->kairo_gpu, (uint32_t) (p - buffer32->dat), KAIRO_SCAN_PLANES,
                                           cells * (uint32_t) charwidth, cells, colours, 16, 0, 0, doublewidth ? KAIRO_SCAN_WIDE : 0);

@@ -182,14 +182,13 @@ nga_graphics_colours(const nga_t *nga, int *cols, uint16_t *dat2)
 }
 
 /* KairoX86#244: line [line]'s characters or pixels (nga_poll's, read as it reads them) to the GPU's scanout queue,
-   coloured as video_process_8 will colour them; returns whether the GPU draws them. Not with the light pen, which
-   reads the picture back. */
+   coloured as video_process_8 will colour them; returns whether the GPU draws them. */
 static bool
 nga_render_gpu(nga_t *nga, int line, uint16_t cursoraddr)
 {
     cga_t *cga = &nga->cga;
 
-    if (!kairo_gpu_on || cga->composite || cga_lightpen_enabled)
+    if (!kairo_gpu_on || cga->composite)
         return false;
     const int hdisp = cga->crtc[CGA_CRTC_HDISP];
     if (hdisp <= 0)

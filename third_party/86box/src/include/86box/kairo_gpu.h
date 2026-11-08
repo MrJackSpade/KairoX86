@@ -180,6 +180,10 @@ enum {
        composite signal, count + 10 values (signed) from 5 before its first pixel; a: 1 for the luma-only decode;
        palette: the sharpness, then the I and Q weights of red, green and blue (signed) */
     KAIRO_SCAN_COMPOSITE,
+    /* KairoX86#315: 15 bits a pixel (555), 2 a dword, each channel through its own column of the palette (256 colours):
+       red from palette[(c >> 7) & F8h], green from palette[(c >> 2) & F8h], blue from palette[(c << 3) & F8h] (the
+       Cyrix MediaGX's 5-5-5 format through its gamma RAM) */
+    KAIRO_SCAN_15CLUT,
 };
 
 /* Each pixel drawn twice across */
@@ -188,7 +192,8 @@ enum {
 #define KAIRO_SCAN_WIDE4 2u
 
 /* Queues a line of bitmap (its CPU pointer, to tell bitmaps apart; bitmap_gpu its buffer) starting at
-   pixel out, drawing count pixels; returns where its words dwords go. palette (palette_count colours,
+   pixel out, drawing count pixels, the first b of them not (a line clipped at its start); returns where its words
+   dwords go. palette (palette_count colours,
    at most 256) is kept with it, or none when NULL. A line out of the queue's order (a new frame,
    another bitmap) drains the queue first, as does a full one. The queue stays locked until
    kairo_gpu_scan_commit, after the caller wrote the dwords: a drain on another thread (a card handing

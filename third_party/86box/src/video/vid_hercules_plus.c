@@ -556,7 +556,7 @@ herculesplus_render_gpu(herculesplus_t *dev, uint16_t cursoraddr)
         return false;
     bitmap_t      *bitmap = buffer32;
     const uint32_t out    = (uint32_t) (bitmap->line[dev->displine] - bitmap->dat);
-    if ((columns == 0) || (graphics && herc_blend)) {
+    if (columns == 0) {
         /* The CPU draws the line: a queued drawing of the row (the frame restarted) first */
         kairo_gpu_scan_touch(bitmap, out, (uint32_t) bitmap->w);
         return false;
@@ -565,6 +565,23 @@ herculesplus_render_gpu(herculesplus_t *dev, uint16_t cursoraddr)
         uint32_t base = (dev->scanline & 3) * 0x2000;
         if ((dev->ctrl & HERCULESPLUS_CTRL_PAGE1) && (dev->ctrl2 & HERCULESPLUS_CTRL2_PAGE1))
             base += 0x8000;
+        if (herc_blend) { /* KairoX86#259: the blend's codes, 2 bits a pixel, as video_blend draws them */
+            const uint32_t colours[4] = { pal_lookup[0], pal_lookup[7], pal_lookup[15], pal_lookup[0] };
+            uint8_t       *bytes      = (uint8_t *) kairo_gpu_scan(bitmap, bitmap->kairo_gpu, out, KAIRO_SCAN_BITS, columns * 16,
+                                                                   (columns * 4 + 3) / 4, colours, 4, 2, 0, 0);
+            for (uint32_t x = 0; x < columns; x++) {
+                const uint32_t at = ((dev->memaddr << 1) & 0x1fff) + base;
+                for (uint32_t h = 0; h < 2; h++) {
+                    uint8_t codes[8];
+                    video_blend_codes((dev->ctrl & 8) ? dev->vram[at + h] : 0, (x == 0) && (h == 0), codes); /* its x 0 first */
+                    bytes[x * 4 + h * 2]     = (uint8_t) ((codes[0] << 6) | (codes[1] << 4) | (codes[2] << 2) | codes[3]);
+                    bytes[x * 4 + h * 2 + 1] = (uint8_t) ((codes[4] << 6) | (codes[5] << 4) | (codes[6] << 2) | codes[7]);
+                }
+                dev->memaddr++;
+            }
+            kairo_gpu_scan_commit();
+            return true;
+        }
         const uint32_t colours[2] = { pal_lookup[0], pal_lookup[7] };
         uint8_t       *bytes      = (uint8_t *) kairo_gpu_scan(bitmap, bitmap->kairo_gpu, out, KAIRO_SCAN_BITS, columns * 16,
                                                                (columns * 2 + 3) / 4, colours, 2, 1, 0, 0);

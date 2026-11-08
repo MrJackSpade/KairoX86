@@ -506,30 +506,43 @@ pixel_to_color(uint8_t *pixels32, uint8_t pos)
     }
 }
 
+/* The blend's carry: the last pixel of the group before (KairoX86#257: shared by video_blend_codes' callers) */
+static unsigned int blend_carry = 0;
+
+void
+video_blend_codes(uint8_t bits, int reset, uint8_t *codes)
+{
+    uint32_t     pixels32_1;
+    uint32_t     pixels32_2;
+    unsigned int val1;
+    unsigned int val2;
+
+    if (reset)
+        blend_carry = 0;
+
+    val1        = bits;
+    val2        = (val1 >> 1) + blend_carry;
+    blend_carry = (val1 & 1) << 7;
+    pixels32_1  = cga_2_table[val1 >> 4] + cga_2_table[val2 >> 4];
+    pixels32_2  = cga_2_table[val1 & 0xf] + cga_2_table[val2 & 0xf];
+    for (uint8_t xx = 0; xx < 4; xx++) {
+        codes[xx]       = ((uint8_t *) &pixels32_1)[xx] & 0x03;
+        codes[xx | 4]   = ((uint8_t *) &pixels32_2)[xx] & 0x03;
+    }
+}
+
 void
 video_blend_monitor(int x, int y, int monitor_index)
 {
-    uint32_t            pixels32_1;
-    uint32_t            pixels32_2;
-    unsigned int        val1;
-    unsigned int        val2;
-    static unsigned int carry = 0;
+    static const uint32_t colour[4] = { 0x00, 0x07, 0x0f, 0x00 }; /* pixel_to_color's */
+    uint8_t               codes[8];
 
     if (!herc_blend)
         return;
 
-    if (!x)
-        carry = 0;
-
-    val1       = pixels8(&(monitors[monitor_index].target_buffer->line[y][x]));
-    val2       = (val1 >> 1) + carry;
-    carry      = (val1 & 1) << 7;
-    pixels32_1 = cga_2_table[val1 >> 4] + cga_2_table[val2 >> 4];
-    pixels32_2 = cga_2_table[val1 & 0xf] + cga_2_table[val2 & 0xf];
-    for (uint8_t xx = 0; xx < 4; xx++) {
-        monitors[monitor_index].target_buffer->line[y][x + xx]       = pixel_to_color((uint8_t *) &pixels32_1, xx);
-        monitors[monitor_index].target_buffer->line[y][x + (xx | 4)] = pixel_to_color((uint8_t *) &pixels32_2, xx);
-    }
+    video_blend_codes(pixels8(&(monitors[monitor_index].target_buffer->line[y][x])), !x, codes);
+    for (uint8_t xx = 0; xx < 8; xx++)
+        monitors[monitor_index].target_buffer->line[y][x + xx] = colour[codes[xx]];
 }
 
 void

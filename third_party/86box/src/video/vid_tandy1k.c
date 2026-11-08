@@ -425,8 +425,13 @@ tandy_render_gpu(tandy_t *dev, int line, int hos_offs, uint16_t cursoraddr)
     t1kvid_t      *vid   = dev->vid;
     const uint32_t cells = vid->crtc[1];
 
-    if (!kairo_gpu_on || vid->composite || (hos_offs < 0) || (cells == 0))
+    if (!kairo_gpu_on || vid->composite || (cells == 0))
         return false;
+    /* KairoX86#321: a line scrolled left past its start is clipped there (its first -hos_offs pixels not drawn), as
+       vid_render clips it; not the first row's, which has no pixels before it */
+    if ((hos_offs < 0) && ((buffer32->line[line] - buffer32->dat) < -hos_offs))
+        return false;
+    const uint32_t clip = (hos_offs < 0) ? (uint32_t) -hos_offs : 0;
     bitmap_t *bitmap = buffer32;
     uint32_t  colours[16];
     uint32_t  words[256];
@@ -524,8 +529,9 @@ tandy_render_gpu(tandy_t *dev, int line, int hos_offs, uint16_t cursoraddr)
         flags = two ? KAIRO_SCAN_WIDE : 0;
     }
     for (int r = 0; r < rows; r++) {
-        uint32_t *at = kairo_gpu_scan(bitmap, bitmap->kairo_gpu, (uint32_t) (&bitmap->line[line + r][hos_offs] - bitmap->dat), kind,
-                                      count, n, (ncol != 0) ? colours : pal_lookup, (ncol != 0) ? ncol : 256, bits, 0, flags);
+        uint32_t *at = kairo_gpu_scan(bitmap, bitmap->kairo_gpu, (uint32_t) ((bitmap->line[line + r] - bitmap->dat) + hos_offs), kind,
+                                      count, n, (ncol != 0) ? colours : pal_lookup, (ncol != 0) ? ncol : 256, bits,
+                                      (clip < count) ? clip : count, flags);
         memcpy(at, words, n * sizeof(uint32_t));
         kairo_gpu_scan_commit();
     }

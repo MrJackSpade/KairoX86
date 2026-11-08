@@ -341,13 +341,33 @@ cga_sample_luma(bitmap_t* target_buffer, uint32_t x, uint32_t y)
     return total_luma / 25.0;
 }
 
+/* KairoX86#241: the light pen's latch over a cell of line (cga_render's loops' test): its pixels from x0, each
+   step apart (a doubled pixel's pair tested from its first), the first at the pen latched with the cell's address */
+static void
+cga_k_lightpen_cell(cga_t *cga, int line, int x0, int pixels, int step, int pair)
+{
+    if (!cga_lightpen_enabled || cga->lp_latch_found || (mouse_tablet_in_proximity <= 0))
+        return;
+    for (int i = 0; i < pixels; i++) {
+        const int x = x0 + (i * step);
+        if (cga_is_in_lightpen(cga, x, line) || (pair && cga_is_in_lightpen(cga, x + 1, line))) {
+            cga->lp_latch_found_y       = line;
+            cga->lp_latch_found_x       = x;
+            cga->lp_latch_found_memaddr = cga->memaddr;
+            cga->lp_latch_found         = true;
+            return;
+        }
+    }
+}
+
 /* KairoX86#241: line [line]'s characters or pixels (cga_render's, read as it reads them) to the GPU's
    scanout queue (86box/kairo_gpu.h), coloured as video_process_8 will colour them; returns whether the
-   GPU draws them. Not with composite output or the light pen, which read the picture back. */
+   GPU draws them, the light pen's latch made as cga_render makes it. Not with composite output, which reads the
+   picture back. */
 static bool
 cga_render_gpu(cga_t *cga, int line)
 {
-    if (!kairo_gpu_on || cga->composite || cga_lightpen_enabled)
+    if (!kairo_gpu_on || cga->composite)
         return false;
     bitmap_t       *bitmap     = buffer32;
     uint32_t       *pixels     = &bitmap->line[line][8];
@@ -387,6 +407,10 @@ cga_render_gpu(cga_t *cga, int line)
                 bg = (attr >> 4) + 16;
             const uint32_t flip = drawcursor ? 0b1111 : 0;
             cells[x] = fontdat[chr + cga->fontbase][cga->scanline & 7] | ((fg ^ flip) << 8) | ((bg ^ flip) << 16);
+            if (highres)
+                cga_k_lightpen_cell(cga, line, (x * 8) + 8, 8, 1, 0);
+            else
+                cga_k_lightpen_cell(cga, line, (x * 16) + 8, 8, 2, 1);
             cga->memaddr++;
         }
         kairo_gpu_scan_commit();
@@ -424,6 +448,10 @@ cga_render_gpu(cga_t *cga, int line)
         const uint32_t at = ((cga->memaddr << 1) & 0x1fff) + ((cga->scanline & 1) * 0x2000);
         bytes[x * 2]       = enabled ? cga->vram[at] : 0;
         bytes[x * 2 + 1]   = enabled ? cga->vram[at + 1] : 0;
+        if (hires)
+            cga_k_lightpen_cell(cga, line, (x * 16) + 8, 16, 1, 0);
+        else
+            cga_k_lightpen_cell(cga, line, (x * 16) + 8, 8, 2, 1);
         cga->memaddr++;
     }
     kairo_gpu_scan_commit();

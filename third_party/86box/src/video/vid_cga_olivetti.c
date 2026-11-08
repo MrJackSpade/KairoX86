@@ -201,14 +201,13 @@ ogc_read(uint32_t addr, void *priv)
 }
 
 /* KairoX86#245: line [line]'s characters or pixels (ogc_poll's, read as it reads them) to the GPU's scanout queue,
-   coloured as video_process_8 will colour them; returns whether the GPU draws them. Not with the light pen, which
-   reads the picture back. */
+   coloured as video_process_8 will colour them; returns whether the GPU draws them. */
 static bool
 ogc_render_gpu(ogc_t *ogc, int line, uint16_t cursoraddr)
 {
     cga_t *cga = &ogc->cga;
 
-    if (!kairo_gpu_on || cga->composite || cga_lightpen_enabled)
+    if (!kairo_gpu_on || cga->composite)
         return false;
     const int hdisp = cga->crtc[CGA_CRTC_HDISP];
     if (hdisp <= 0)

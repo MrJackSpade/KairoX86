@@ -476,13 +476,13 @@ f82c425_k_colour(uint32_t *palette, uint32_t *n, uint32_t c)
 }
 
 /* KairoX86#316: the panel's line (f82c425_text_row's or f82c425_cgaline6/4's, read as they read it) to the GPU's
-   scanout queue in the colours they draw; returns whether the GPU draws it. Text only with characters 8 dots high
-   (the CPU draws as many dots across as the character is high), not with the light pen (it reads the picture
-   back), nor (it never happens) with more than 16 colours on a line. */
+   scanout queue in the colours they draw; returns whether the GPU draws it. Its text at any character height, as the
+   CPU draws as many dots of a cell as the character is high. Not (it never happens) with more than 16 colours on a
+   line. */
 static bool
 f82c425_render_gpu(f82c425_t *f82c425)
 {
-    if (!kairo_gpu_on || cga_lightpen_enabled)
+    if (!kairo_gpu_on)
         return false;
     bitmap_t      *bitmap  = buffer32;
     const uint32_t out     = (uint32_t) (bitmap->line[f82c425->displine] - bitmap->dat);
@@ -504,7 +504,8 @@ f82c425_render_gpu(f82c425_t *f82c425)
     const int columns = f82c425->cga.crtc[CGA_CRTC_HDISP];
     if ((mode != 0x00) && (mode != 0x01))
         return false;
-    if (((f82c425->cga.crtc[CGA_CRTC_MAX_SCANLINE_ADDR] + 1) != 8) || (columns <= 0) || (columns > 128))
+    const int sl = f82c425->cga.crtc[CGA_CRTC_MAX_SCANLINE_ADDR] + 1; /* the dots f82c425_text_row draws of a cell */
+    if ((columns <= 0) || (columns > 128))
         return false;
     const uint8_t  scanline   = (f82c425->displine) & 7;
     const uint16_t addr       = ((memaddr & ~1) + (f82c425->displine >> 3) * columns) * 2;
@@ -514,7 +515,7 @@ f82c425_render_gpu(f82c425_t *f82c425)
     int            cursorline;
     uint32_t       palette[16];
     uint32_t       n = 0;
-    uint32_t       cells[128];
+    uint32_t       cells[128 + 4];
 
     if ((f82c425->cga.crtc[CGA_CRTC_CURSOR_START] & 0x60) == 0x20)
         cursorline = 0;
@@ -535,10 +536,40 @@ f82c425_render_gpu(f82c425_t *f82c425)
         cells[x] = fontdat[chr][scanline] | ((uint32_t) f << 8) | ((uint32_t) b << 16);
         ++ma;
     }
-    uint32_t *line = kairo_gpu_scan(bitmap, bitmap->kairo_gpu, out, KAIRO_SCAN_TEXT, (uint32_t) columns * (wide ? 16 : 8), (uint32_t) columns,
+    /* Over 8 dots a cell, the last cell's dots past the line: its background (the font has no bits there) */
+    const uint32_t cw    = wide ? 16 : 8;
+    const uint32_t tail  = (sl > 8) ? (uint32_t) (sl - 8) * (wide ? 2 : 1) : 0;
+    const uint32_t extra = (tail + cw - 1) / cw;
+    const uint32_t last  = (cells[columns - 1] >> 16) & 0xff;
+    for (uint32_t i = 0; i < extra; i++)
+        cells[columns + i] = (last << 8) | (last << 16);
+    /* Under 8, each cell's dots past them as they were: read back before the line is queued */
+    static uint32_t ax[128 * 16 * KAIRO_PATCH_WORDS];
+    const uint32_t  drawn = (sl < 8) ? (uint32_t) (sl < 0 ? 0 : sl) * (wide ? 2 : 1) : cw;
+    const uint32_t  width = (uint32_t) columns * cw;
+    if (drawn < cw) {
+        kairo_gpu_scan_touch(bitmap, out, width);
+        for (uint32_t i = 0; i < width; i++) {
+            uint32_t *w = &ax[i * KAIRO_PATCH_WORDS];
+            if ((i % cw) < drawn)
+                w[0] = 0xffffffff, w[1] = 0;
+            else
+                w[0] = 0, w[1] = bitmap->line[f82c425->displine][i];
+            w[2] = 0, w[3] = 0;
+        }
+    }
+    uint32_t *line = kairo_gpu_scan(bitmap, bitmap->kairo_gpu, out, KAIRO_SCAN_TEXT, width + tail, (uint32_t) columns + extra,
                                     palette, n, 8, 0, wide ? KAIRO_SCAN_WIDE : 0);
-    memcpy(line, cells, (size_t) columns * sizeof(uint32_t));
+    memcpy(line, cells, ((size_t) columns + extra) * sizeof(uint32_t));
     kairo_gpu_scan_commit();
+    if (drawn < cw) {
+        uint32_t from;
+        uint32_t to;
+        kairo_gpu_scan_patch(bitmap, out, width, ax, 0, 0, &from, &to);
+        for (uint32_t i = 0; i < width; i++)
+            if (((out + i) < from) || ((out + i) >= to))
+                bitmap->line[f82c425->displine][i] = kairo_gpu_patch_pixel(bitmap->line[f82c425->displine][i], &ax[i * KAIRO_PATCH_WORDS], 0, 0);
+    }
     return true;
 }
 

@@ -677,6 +677,7 @@ v6355_render(v6355_t *v6355, int line)
     int      drawcursor;
     uint32_t cols[4];
     uint8_t  pixel[640];
+    uint32_t vals[640]; /* KairoX86#247: the line's values between its borders, as the CPU writes them */
 
     /* KairoX86#247: a line the GPU still has to draw is drawn before the CPU draws on it again */
     if (kairo_gpu_on)
@@ -704,10 +705,10 @@ v6355_render(v6355_t *v6355, int line)
             drawcursor = ((v6355->ma == ca) && v6355->con && v6355->cursoron);
             if (drawcursor) {
                 for (c = 0; c < 8; c++)
-                   ((uint32_t *) buffer32->line[line])[(x << 3) + c + 8] = pixel[(x << 3) + c] ^ 0xffffff;
+                    vals[(x << 3) + c] = pixel[(x << 3) + c] ^ 0xffffff;
             } else {
                 for (c = 0; c < 8; c++)
-                   ((uint32_t *)buffer32->line[line])[(x << 3) + c + 8] = pixel[(x << 3) + c];
+                    vals[(x << 3) + c] = pixel[(x << 3) + c];
             }
 
             v6355->ma++;
@@ -721,10 +722,10 @@ v6355_render(v6355_t *v6355, int line)
             drawcursor = ((v6355->ma == ca) && v6355->con && v6355->cursoron);
             if (drawcursor) {
                 for (c = 0; c < 16; c++)
-                    ((uint32_t *) buffer32->line[line])[(x << 4) + c + 8] = pixel[(x << 4) + c] ^ 0xffffff;
+                    vals[(x << 4) + c] = pixel[(x << 4) + c] ^ 0xffffff;
             } else {
                 for (c = 0; c < 16; c++)
-                    ((uint32_t *)buffer32->line[line])[(x << 4) + c + 8] = pixel[(x << 4) + c];
+                    vals[(x << 4) + c] = pixel[(x << 4) + c];
             }
 
             v6355->ma++;
@@ -739,7 +740,7 @@ v6355_render(v6355_t *v6355, int line)
 
         for (x = 0; x < (width / 16); x++) {
             for (c = 0; c < 16; c++)
-            ((uint32_t *) buffer32->line[line])[(x << 4) + c + 8] = pixel[(x << 4) + c];
+                vals[(x << 4) + c] = pixel[(x << 4) + c];
         }
     } else {
         /* High-res graphics 
@@ -749,9 +750,30 @@ v6355_render(v6355_t *v6355, int line)
 
         for (x = 0; x < (width / 16); x++) {
             for (c = 0; c < 16; c++)
-            ((uint32_t *) buffer32->line[line])[(x << 4) + c + 8] = pixel[(x << 4) + c];
+                vals[(x << 4) + c] = pixel[(x << 4) + c];
         }
     }
+
+    /* KairoX86#247: a pointer line's values to the GPU, coloured as v6355_render_process colours them (0-31 the
+       indexes, 32-47 a cursor cell's index ^ 0xffffff by its low bits), or written for the CPU to colour */
+    const int n = (width / ((v6355->cgamode & 1) ? 8 : 16)) * ((v6355->cgamode & 1) ? 8 : 16);
+    if (kairo_gpu_on && (v6355->display_type != V6355_COMPOSITE) && (n > 0)) {
+        const bool truecolor = (v6355->display_type == V6355_TRUECOLOR);
+        uint32_t   colours[48];
+        for (int i = 0; i < 32; i++)
+            colours[i] = truecolor ? v6355->v6355pal[i & 0xf] : pal_lookup[i];
+        for (int i = 0; i < 16; i++)
+            colours[32 + i] = truecolor ? v6355->v6355pal[i] : 0x00000000;
+        bitmap_t *bitmap = buffer32;
+        uint8_t  *bytes  = (uint8_t *) kairo_gpu_scan(bitmap, bitmap->kairo_gpu, (uint32_t) (&bitmap->line[line][8] - bitmap->dat),
+                                                      KAIRO_SCAN_8, (uint32_t) n, ((uint32_t) n + 3) / 4, colours, 48, 0xff, 0, 0);
+        for (int i = 0; i < n; i++)
+            bytes[i] = (uint8_t) ((vals[i] <= 0x1f) ? vals[i] : (32 + (vals[i] & 0xf)));
+        kairo_gpu_scan_commit();
+        return;
+    }
+    for (int i = 0; i < n; i++)
+        ((uint32_t *) buffer32->line[line])[i + 8] = vals[i];
 }
 
 static void

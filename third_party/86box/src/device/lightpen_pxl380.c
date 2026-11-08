@@ -24,6 +24,7 @@
 
 #include <86box/86box.h>
 #include <86box/video.h>
+#include <86box/kairo_gpu.h> /* KairoX86#232 */
 #include <86box/mouse.h>
 #include <86box/pic.h>
 #include <86box/timer.h>
@@ -60,6 +61,13 @@ pxl380_sample_luma(bitmap_t* target_buffer, uint32_t x, uint32_t y)
     
     if (!mouse_tablet_in_proximity || mouse_input_mode == 0)
         return 0.0; // simulate lightpen not being pointed at the screen.
+
+    /* KairoX86#232: what the GPU still has to draw over the rows read, drawn first */
+    if (kairo_gpu_on)
+        for (int ky = -2; ky <= 0; ky++) {
+            const uint32_t yy = (((int) y) + ky) & 2047;
+            kairo_gpu_scan_touch(target_buffer, (uint32_t) (target_buffer->line[yy] - target_buffer->dat), (uint32_t) target_buffer->w);
+        }
 
     // Can't sample unrendered lines...
     for (int ky = -2; ky <= 0; ky++) {

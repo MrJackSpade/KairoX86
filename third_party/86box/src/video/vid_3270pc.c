@@ -1109,6 +1109,12 @@ pc3270_render_gpu(pc3270_t *dev)
                 c             = 0xff | (1u << 24) | ((uint32_t) cur << 8) | ((uint32_t) cur << 16);
             }
             cells[x] = c;
+            if (dev->reg189 & 0x20) { /* the readback: the colours the cell draws */
+                if (((c & 0xff) != 0) || (c & (1u << 24)))
+                    pc3270_diag(dev, dev->pal[(c >> 8) & 0xff]);
+                if (((c & 0xff) != 0xff) || !(c & (1u << 24)))
+                    pc3270_diag(dev, dev->pal[(c >> 16) & 0xff]);
+            }
         }
         kairo_gpu_scan_commit();
         return true;
@@ -1130,9 +1136,18 @@ pc3270_render_gpu(pc3270_t *dev)
         }
         uint8_t *bytes = (uint8_t *) kairo_gpu_scan(bitmap, bitmap->kairo_gpu, out, KAIRO_SCAN_BITS, (uint32_t) bytes_n * 8, ((uint32_t) bytes_n + 3) / 4,
                                                     colours, one ? 2 : 4, one ? 1 : 2, 0, one ? 0 : KAIRO_SCAN_WIDE);
-        for (int b = 0; b < bytes_n; b++)
+        unsigned seen = 0;
+        for (int b = 0; b < bytes_n; b++) {
             bytes[b] = dev->apa[(addr + (uint32_t) b) & (PC3270_APA_SIZE - 1)];
+            for (int k = 0; k < 8; k += one ? 1 : 2) /* a 2-bit value's two dots from dot k (the line is doubled) */
+                if (((b * 8) + k) < width)
+                    seen |= 1u << ((bytes[b] >> (one ? (7 - k) : (6 - k))) & (one ? 1 : 3));
+        }
         kairo_gpu_scan_commit();
+        if (dev->reg189 & 0x20) /* the readback: the colours the line draws */
+            for (int v = 0; v < 4; v++)
+                if (seen & (1u << v))
+                    pc3270_diag(dev, colours[v]);
         return true;
     }
     if (((dev->render == pc3270_render_cga_1bpp) || (dev->render == pc3270_render_cga_2bpp)) && (dev->displine < 200)) {
@@ -1150,6 +1165,7 @@ pc3270_render_gpu(pc3270_t *dev)
                 colours[v] = dev->pal[pal[v]];
         }
         colours[4]     = dev->pal[0];
+        unsigned seen  = 0;
         uint8_t *nibs  = (uint8_t *) kairo_gpu_scan(bitmap, bitmap->kairo_gpu, out, KAIRO_SCAN_BITS, (uint32_t) width, ((uint32_t) width / 2 + 4) / 4,
                                                     colours, 5, 4, 0, 0);
         for (int x = 0; x < width; x += 2) {
@@ -1162,10 +1178,16 @@ pc3270_render_gpu(pc3270_t *dev)
                     v = one ? ((data & (0x80 >> (xx & 7))) ? 1 : 0) : ((data >> (6 - (((xx >> 1) & 3) * 2))) & 3);
                 }
                 pair = (uint8_t) ((pair << 4) | v);
+                if (xx < width)
+                    seen |= 1u << v;
             }
             nibs[x / 2] = pair;
         }
         kairo_gpu_scan_commit();
+        if (dev->reg189 & 0x20) /* the readback: the colours the line draws */
+            for (int v = 0; v < 5; v++)
+                if (seen & (1u << v))
+                    pc3270_diag(dev, colours[v]);
         return true;
     }
     return false;
@@ -1190,9 +1212,10 @@ pc3270_poll(void *priv)
             }
             dev->lastline = dev->displine;
 
-            /* KairoX86#311: the GPU draws the line, else the CPU (after what the GPU still has to draw there); not while
-               the diagnostic readback samples the CPU's pixels */
-            if (!(kairo_gpu_on && !(dev->reg189 & 0x20) && pc3270_render_gpu(dev))) {
+            /* KairoX86#311: the GPU draws the line (latching what the diagnostic readback samples of it), else the CPU
+               (after what the GPU still has to draw there) */
+            const int gpu_line = kairo_gpu_on && pc3270_render_gpu(dev);
+            if (!gpu_line) {
                 if (kairo_gpu_on)
                     kairo_gpu_scan_touch(buffer32, (uint32_t) (buffer32->line[dev->displine] - buffer32->dat), (uint32_t) buffer32->w);
                 dev->render(dev);
@@ -1202,7 +1225,7 @@ pc3270_poll(void *priv)
                raster, so it has to sample the rendered scanline -- the APA
                self-test at C000:0647 runs in a graphics mode, and only the
                text renderer knows anything about foreground/background. */
-            if (dev->reg189 & 0x20) {
+            if ((dev->reg189 & 0x20) && !gpu_line) {
                 const uint32_t *p     = (const uint32_t *) buffer32->line[dev->displine];
                 int             width = dev->cols * 9;
 

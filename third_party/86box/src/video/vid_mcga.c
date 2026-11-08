@@ -1115,8 +1115,16 @@ mcga_lcd_present(mcga_t *dev)
             const uint8_t next = dev->lcd_next[target][level[x]];
 
             level[x] = next;
-            line[x]  = dev->lcd_color[next];
         }
+        if (kairo_gpu_on) { /* KairoX86#318: the row's levels to the GPU, coloured there */
+            bitmap_t *bitmap = buffer32;
+            uint8_t  *levels = (uint8_t *) kairo_gpu_scan(bitmap, bitmap->kairo_gpu, (uint32_t) (bitmap->line[y] - bitmap->dat), KAIRO_SCAN_8,
+                                                          MCGA_LCD_WIDTH, MCGA_LCD_WIDTH / 4, dev->lcd_color, MCGA_LCD_LEVELS, 0xff, 0, 0);
+            memcpy(levels, level, MCGA_LCD_WIDTH);
+            kairo_gpu_scan_commit();
+        } else
+            for (int x = 0; x < MCGA_LCD_WIDTH; x++)
+                line[x] = dev->lcd_color[level[x]];
     }
 
     if ((xsize != MCGA_LCD_WIDTH) || (ysize != MCGA_LCD_HEIGHT) || video_force_resize_get()) {

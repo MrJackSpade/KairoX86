@@ -308,6 +308,9 @@ extern void video_setblit(void (*blit)(int, int, int, int, int));
 extern void video_blend(int x, int y);
 extern void video_blit_memtoscreen_8(int x, int y, int w, int h);
 extern void video_blend_monitor(int x, int y, int monitor_index);
+/* KairoX86#257: one 8-pixel group of the blend (bits: its pixels, the leftmost the MSB; reset as video_blend_monitor's
+   x of 0 resets it): each pixel's code, 0, 1 or 2, which video_blend_monitor draws as colour 0, 7 or 15 */
+extern void video_blend_codes(uint8_t bits, int reset, uint8_t *codes);
 extern void video_process_8_monitor(int x, int y, int monitor_index);
 extern void video_blit_memtoscreen_monitor(int x, int y, int w, int h, int monitor_index);
 extern void video_blit_complete_monitor(int monitor_index);

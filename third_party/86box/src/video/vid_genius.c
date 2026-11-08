@@ -129,6 +129,7 @@ typedef struct genius_t {
     int vsynctime;
 
     uint8_t *vram;
+    int k_cpu_line; /* KairoX86#255: a layer of this line drawn by the CPU */
 } genius_t;
 
 static uint8_t genius_pal[4];
@@ -504,6 +505,7 @@ genius_textline(genius_t *genius, uint8_t background, int mda, int cols80)
         return;
     }
 
+    genius->k_cpu_line = 1; /* KairoX86#255 */
     for (int x = 0; x < w; x++) {
 #if 0
     if ((genius->genius_charh & 0x10) && ((addr + 2 * x) > 0x0FFF))
@@ -655,6 +657,7 @@ genius_cgaline(genius_t *genius)
         genius_graphics_gpu(genius, addr, 80, ink_f, ink_b);
         return;
     }
+    genius->k_cpu_line = 1; /* KairoX86#255 */
 
     for (uint8_t x = 0; x < 80; x++) {
         dat = genius->vram[addr];
@@ -694,6 +697,7 @@ genius_hiresline(genius_t *genius)
         genius_graphics_gpu(genius, addr, 91, ink_f, ink_b);
         return;
     }
+    genius->k_cpu_line = 1; /* KairoX86#255 */
 
     for (uint8_t x = 0; x < 91; x++) {
         dat = genius->vram[addr + x];
@@ -737,6 +741,7 @@ genius_poll(void *priv)
             /* Start off with a blank line */
             for (uint16_t x = 0; x < GENIUS_XSIZE; x++)
                 buffer32->line[genius->displine][x] = background;
+            genius->k_cpu_line = 0; /* KairoX86#255 */
 
             /* If graphics display enabled, draw graphics on top
              * of the blanked line */
@@ -762,7 +767,18 @@ genius_poll(void *priv)
             if (genius->mda_ctrl & 8)
                 genius_textline(genius, background, 1, 1);
 
-            video_process_8(GENIUS_XSIZE, genius->displine);
+            if (kairo_gpu_on && genius->k_cpu_line) {
+                /* KairoX86#255: the line the CPU composed, as palette indexes (every layer's values bytes: inks,
+                   attributes and their XORs), coloured by the GPU as video_process_8 colours it */
+                bitmap_t       *bm     = buffer32;
+                const uint32_t *pixels = bm->line[genius->displine];
+                uint8_t        *bytes  = (uint8_t *) kairo_gpu_scan(bm, bm->kairo_gpu, (uint32_t) (bm->line[genius->displine] - bm->dat),
+                                                                    KAIRO_SCAN_8, GENIUS_XSIZE, (GENIUS_XSIZE + 3) / 4, pal_lookup, 256, 0xff, 0, 0);
+                for (uint32_t x = 0; x < GENIUS_XSIZE; x++)
+                    bytes[x] = (uint8_t) pixels[x];
+                kairo_gpu_scan_commit();
+            } else
+                video_process_8(GENIUS_XSIZE, genius->displine);
             video_lightpen_check_trigger_strobe(0, genius->displine, 0, 0, 53216000.0, monitor_index_global);
         }
         genius->displine++;

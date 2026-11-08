@@ -454,12 +454,12 @@ t1000_k_colour(uint32_t *palette, uint32_t *n, uint32_t c)
 }
 
 /* KairoX86#313: the panel's line (t1000_text_row80/40's or t1000_cgaline6/4's, read as they read it) to the GPU's
-   scanout queue in the colours they draw; returns whether the GPU draws it. Not with the light pen, which reads the
-   picture back, nor (it never happens) a text line of more than 16 colours. */
+   scanout queue in the colours they draw; returns whether the GPU draws it. Not (it never happens) a text line of more than
+   16 colours. */
 static bool
 t1000_render_gpu(t1000_t *t1000)
 {
-    if (!kairo_gpu_on || cga_lightpen_enabled)
+    if (!kairo_gpu_on)
         return false;
     bitmap_t      *bitmap  = buffer32;
     const uint32_t out     = (uint32_t) (bitmap->line[t1000->displine] - bitmap->dat);

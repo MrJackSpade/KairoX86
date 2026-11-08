@@ -54,7 +54,7 @@ BOARDS_8086 = {
     't1200': ('8086', 7159092, 2048), 'pc1512': ('8086', 8000000, 640), 'pc1640': ('8086', 7159092, 640),
     'pc2086': ('8086', 7159092, 640), 'pc3086': ('8086', 7159092, 640), 'pc200': ('8086', 7159092, 640),
     'ppc512': ('8086', 7159092, 640), 'ibm5140': ('80c88', 4772728, 640), 'v86p': ('8086', 7159092, 1024),
-    'ibmps2_m25': ('8086', 8000000, 640), 'ibmps2_m30': ('8086', 8000000, 640), 'ibm3270pc': ('8088', 4772728, 640),
+    'ibmps2_m25': ('8086', 8000000, 640), 'ibmps2_m30': ('8086', 8000000, 640), 'ibm7690': ('8086', 8000000, 640), 'ibm3270pc': ('8088', 4772728, 640),
     'ibm5550': ('8086', 8000000, 640), 'portableiii': ('286', 8000000, 640), 't3100e': ('286', 12500000, 1024),
     'tandy2000': ('80186', 8000000, 768),
 }
@@ -77,7 +77,7 @@ SCRIPT = {'ibmps2_m80_type3': '3100:+0x3b,3106:-0x3b',
           # the MediaGX board's CMOS unset: F1 to continue
           'p5gxm': '600:+0x3b,606:-0x3b,1200:+0x3b,1206:-0x3b',
           **{m: '800:+0x3b,806:-0x3b,1600:+0x3b,1606:-0x3b,2400:+0x3b,2406:-0x3b,3200:+0x3b,3206:-0x3b,4000:+0x3b,4006:-0x3b'
-             for m in ('ibm3270pc', 'v86p', 'ibmps2_m30', 'portableiii', 't3100e', 'ibm5140')},
+             for m in ('ibm3270pc', 'v86p', 'ibmps2_m30', 'ibm7690', 'portableiii', 't3100e', 'ibm5140')},
           # its CMOS unset too: "CMOS checksum error", F1 to continue
           'nupro592': '600:+0x3b,606:-0x3b',
           # its CMOS unset: F1 runs Setup, left without saving (Esc, Y, Enter)
@@ -102,9 +102,17 @@ ADD_ONS = {
     '8514a_ati': ('8514a = 1\n', '\n[IBM 8514/A clone (ISA)]\nextensions = 1\n', 'vga'),
     'xga_mca': ('xga = 1\n', '\n[XGA (MCA)]\ntype = 0\n', 'internal'),
     'xga2_mca': ('xga = 1\n', '\n[XGA (MCA)]\ntype = 1\n', 'internal'),
+    # The Hercules and Hercules Plus with their blend option off (on by default; KairoX86#257, #259)
+    'hercules_noblend': ('', '\n[Hercules]\nblend = 0\n', 'hercules'),
+    'hercules_plus_noblend': ('', '\n[Hercules Plus]\nblend = 0\n', 'hercules_plus'),
+    # The IBM CGA with its light pen attached (KairoX86#241)
+    'cga_lightpen': ('', '', 'cga'),
 }
 # The add-ons' boards, where not the 686BX
-ADD_ON_BOARD = {'xga_mca': 'ibmps2_m80_type3', 'xga2_mca': 'ibmps2_m80_type3'}
+ADD_ON_BOARD = {'xga_mca': 'ibmps2_m80_type3', 'xga2_mca': 'ibmps2_m80_type3', 'hercules_noblend': '486ap4',
+                'hercules_plus_noblend': '486ap4', 'cga_lightpen': '486ap4'}
+# The add-ons' pointing devices, where not none
+ADD_ON_MOUSE = {'cga_lightpen': 'cga_lightpen'}
 # Each bus's board; any other bus (ISA, VLB, none) the 486's
 BUS_BOARD = {'pci': '686bx', 'agp': '686bx', 'mca': 'ibmps2_m80_type3'}
 # Cards whose software path fails on their bus's board, each on one where it works until its bug is fixed
@@ -144,7 +152,7 @@ def machine_config(board, card, test, accel, name):
     return (f"[Machine]\n{BOARDS[board]}cpu_use_dynarec = 1\nfpu_type = internal\ntime_sync = disabled\n\n"
             f"[Video]\n{video}{voodoo}\n[Input devices]\n"
             # The 8086 machines take their own keyboards (an XT-class board reads no PS/2 keyboard)
-            + ("" if board in BOARDS_8086 else "keyboard_type = keyboard_ps2\n") + "mouse_type = none\n\n"
+            + ("" if board in BOARDS_8086 else "keyboard_type = keyboard_ps2\n") + f"mouse_type = {ADD_ON_MOUSE.get(card, 'none')}\n\n"
             f"[Storage controllers]\nhdc = none\n\n"
             f"[Floppy and CD-ROM drives]\nfdd_01_type = {BOARD_FDD.get(board, '525_2dd' if board in BOARDS_8086 else '35_2hd')}\n"
             f"fdd_01_fn = {test}.img\nfdd_02_type = none\n\n"

@@ -397,6 +397,7 @@ quadcolor_render_gpu(quadcolor_t *quadcolor, int line)
 static void
 quadcolor_render(quadcolor_t *quadcolor, int line)
 {
+    static uint32_t vals[4096]; /* KairoX86#246: the line between its borders, as the CPU writes it */
     uint16_t cursoraddr  = (quadcolor->crtc[CGA_CRTC_CURSOR_ADDR_LOW] | (quadcolor->crtc[CGA_CRTC_CURSOR_ADDR_HIGH] << 8)) & DEVICE_VRAM_MASK;
     int      drawcursor;
     int      x;
@@ -445,13 +446,13 @@ quadcolor_render(quadcolor_t *quadcolor, int line)
             if (drawcursor) {
                 for (column = 0; column < 8; column++) {
                     dat = (cols[(fontdat[chr + quadcolor->fontbase][charline] & (1 << (column ^ 7))) ? 1 : 0] ^ 15);
-                    buffer32->line[line][(x << 3) + column + 8] =
+                    vals[(x << 3) + column] =
                         dat | get_next_qc2_pixel(quadcolor);
                 }
             } else {
                 for (column = 0; column < 8; column++) {
                     dat = cols[(fontdat[chr + quadcolor->fontbase][charline] & (1 << (column ^ 7))) ? 1 : 0];
-                    buffer32->line[line][(x << 3) + column + 8] =
+                    vals[(x << 3) + column] =
                         dat | get_next_qc2_pixel(quadcolor);
                 }
             }
@@ -478,17 +479,17 @@ quadcolor_render(quadcolor_t *quadcolor, int line)
             if (drawcursor) {
                 for (column = 0; column < 8; column++) {
                     dat = (cols[(fontdat[chr + quadcolor->fontbase][charline] & (1 << (column ^ 7))) ? 1 : 0] ^ 15);
-                    buffer32->line[line][(x << 4) + (column << 1) + 8] =
+                    vals[(x << 4) + (column << 1)] =
                         dat | get_next_qc2_pixel(quadcolor);
-                    buffer32->line[line][(x << 4) + (column << 1) + 9] =
+                    vals[(x << 4) + (column << 1) + 1] =
                         dat | get_next_qc2_pixel(quadcolor);
                 }
             } else {
                 for (column = 0; column < 8; column++) {
                     dat = cols[(fontdat[chr + quadcolor->fontbase][charline] & (1 << (column ^ 7))) ? 1 : 0];
-                    buffer32->line[line][(x << 4) + (column << 1) + 8] =
+                    vals[(x << 4) + (column << 1)] =
                         dat | get_next_qc2_pixel(quadcolor);
-                    buffer32->line[line][(x << 4) + (column << 1) + 9] =
+                    vals[(x << 4) + (column << 1) + 1] =
                         dat | get_next_qc2_pixel(quadcolor);
                 }
             }
@@ -520,8 +521,8 @@ quadcolor_render(quadcolor_t *quadcolor, int line)
                 dat = 0;
             quadcolor->memaddr++;
             for (column = 0; column < 8; column++) {
-                buffer32->line[line][(x << 4) + (column << 1) + 8] = cols[dat >> 14] | get_next_qc2_pixel(quadcolor);
-                buffer32->line[line][(x << 4) + (column << 1) + 9] = cols[dat >> 14] | get_next_qc2_pixel(quadcolor);
+                vals[(x << 4) + (column << 1)] = cols[dat >> 14] | get_next_qc2_pixel(quadcolor);
+                vals[(x << 4) + (column << 1) + 1] = cols[dat >> 14] | get_next_qc2_pixel(quadcolor);
                 dat <<= 2;
             }
         }
@@ -541,11 +542,26 @@ quadcolor_render(quadcolor_t *quadcolor, int line)
                 dat = quadcolor->quadcolor_ctrl & 15;
             quadcolor->memaddr++;
             for (column = 0; column < 16; column++) {
-                buffer32->line[line][(x << 4) + column + 8] = cols[dat >> 15] | get_next_qc2_pixel(quadcolor);
+                vals[(x << 4) + column] = cols[dat >> 15] | get_next_qc2_pixel(quadcolor);
                 dat <<= 1;
             }
         }
     }
+
+    /* KairoX86#246: the line's values to the GPU with the second plane on, coloured as video_process_8 colours them,
+       or written for the CPU to colour */
+    const int n = quadcolor->crtc[CGA_CRTC_HDISP] * ((quadcolor->cgamode & CGA_MODE_FLAG_HIGHRES) ? 8 : 16);
+    if (kairo_gpu_on && quadcolor->quadcolor_2_oe && !quadcolor->composite && (n > 0)) {
+        bitmap_t *bitmap = buffer32;
+        uint8_t  *bytes  = (uint8_t *) kairo_gpu_scan(bitmap, bitmap->kairo_gpu, (uint32_t) (&bitmap->line[line][8] - bitmap->dat),
+                                                      KAIRO_SCAN_8, (uint32_t) n, ((uint32_t) n + 3) / 4, pal_lookup, 256, 0xff, 0, 0);
+        for (int i = 0; i < n; i++)
+            bytes[i] = (uint8_t) vals[i];
+        kairo_gpu_scan_commit();
+        return;
+    }
+    for (int i = 0; i < n; i++)
+        buffer32->line[line][i + 8] = vals[i];
 }
 
 static void
