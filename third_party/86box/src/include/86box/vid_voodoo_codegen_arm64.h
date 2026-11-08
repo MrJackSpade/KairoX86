@@ -236,7 +236,7 @@ arm64_codegen_check_emit_bounds(int block_pos, int emit_size)
  * ======================================================================== */
 /* IMM7_X: encode a signed byte offset for STP/LDP of 64-bit (X) register pairs.
  * The instruction stores offset/8 in bits [21:15] (7-bit scaled immediate). */
-#define IMM7_X(imm_data) (((imm_data >> 3) & 0x7f) << 15)
+#define IMM7_X(imm_data) ((((imm_data) >> 3) & 0x7f) << 15)
 #define IMM12(imm_data)  ((imm_data) << 10)
 #define IMM16(imm_data)  ((imm_data) << 5)
 
@@ -248,10 +248,10 @@ arm64_codegen_check_emit_bounds(int block_pos, int emit_size)
 /* ========================================================================
  * Section 4: Offset Encoding Helpers
  * ======================================================================== */
-#define OFFSET14(offset)  (((offset >> 2) << 5) & 0x0007ffe0)
-#define OFFSET19(offset)  (((offset >> 2) << 5) & 0x00ffffe0)
-#define OFFSET20(offset)  (((offset & 3) << 29) | ((((offset) & 0x1fffff) >> 2) << 5))
-#define OFFSET26(offset)  ((offset >> 2) & 0x03ffffff)
+#define OFFSET14(offset)  ((((offset) >> 2) << 5) & 0x0007ffe0)
+#define OFFSET19(offset)  ((((offset) >> 2) << 5) & 0x00ffffe0)
+#define OFFSET20(offset)  ((((offset) & 3) << 29) | ((((offset) & 0x1fffff) >> 2) << 5))
+#define OFFSET26(offset)  (((offset) >> 2) & 0x03ffffff)
 
 #define OFFSET12_B(offset) ((offset) << 10)
 #define OFFSET12_H(offset) (((offset) >> 1) << 10)
@@ -492,10 +492,10 @@ arm64_codegen_check_emit_bounds(int block_pos, int emit_size)
  * ======================================================================== */
 
 /* LSL Wd, Wn, #imm */
-#define ARM64_LSL_IMM(d, n, imm) (0x53000000 | IMMR((-imm) & 0x1F) | IMMS(31 - (imm)) | Rn(n) | Rd(d))
+#define ARM64_LSL_IMM(d, n, imm) (0x53000000 | IMMR((-(imm)) & 0x1F) | IMMS(31 - (imm)) | Rn(n) | Rd(d))
 
 /* LSL Xd, Xn, #imm -- 64-bit */
-#define ARM64_LSL_IMM_X(d, n, imm) (0xD3400000 | IMMR((-imm) & 0x3F) | IMMS(63 - (imm)) | Rn(n) | Rd(d))
+#define ARM64_LSL_IMM_X(d, n, imm) (0xD3400000 | IMMR((-(imm)) & 0x3F) | IMMS(63 - (imm)) | Rn(n) | Rd(d))
 
 /* LSR Wd, Wn, #imm */
 #define ARM64_LSR_IMM(d, n, imm) (0x53000000 | IMMR(imm) | IMMS(31) | Rn(n) | Rd(d))
@@ -670,10 +670,10 @@ arm64_codegen_check_emit_bounds(int block_pos, int emit_size)
 #define ARM64_LDP_OFF_W(t1, t2, n, imm) (0x29400000 | ((((imm) >> 2) & 0x7F) << 15) | Rt2(t2) | Rn(n) | Rt(t1))
 
 /* STP Dt1, Dt2, [Xn, #imm] -- SIMD store pair (64-bit NEON) */
-#define ARM64_STP_D(t1, t2, n, imm) (0x6D000000 | (((imm >> 3) & 0x7F) << 15) | Rt2(t2) | Rn(n) | Rt(t1))
+#define ARM64_STP_D(t1, t2, n, imm) (0x6D000000 | ((((imm) >> 3) & 0x7F) << 15) | Rt2(t2) | Rn(n) | Rt(t1))
 
 /* LDP Dt1, Dt2, [Xn, #imm] -- SIMD load pair (64-bit NEON) */
-#define ARM64_LDP_D(t1, t2, n, imm) (0x6D400000 | (((imm >> 3) & 0x7F) << 15) | Rt2(t2) | Rn(n) | Rt(t1))
+#define ARM64_LDP_D(t1, t2, n, imm) (0x6D400000 | ((((imm) >> 3) & 0x7F) << 15) | Rt2(t2) | Rn(n) | Rt(t1))
 
 /* ========================================================================
  * Section 20: Branch and Control Flow
@@ -1311,6 +1311,12 @@ codegen_texture_fetch(uint8_t *code_block, voodoo_t *voodoo, voodoo_params_t *pa
             PATCH_FORWARD_CBxZ(div_skip_pos);
         }
 
+        /* KairoX86#289: both shifts rounded, as the C code's voodoo_tmu_fetch and the x86-64 recompiler round them
+           (else texels land one off at texel edges): x10 = 1 << 13, added to S and T */
+        addlong(ARM64_MOVZ_X_HW(10, 0x2000, 0));
+        addlong(ARM64_ADD_REG_X(5, 5, 10));
+        addlong(ARM64_ADD_REG_X(6, 6, 10));
+
         /* ASR x5, x5, #14 -- S >>= 14 */
         addlong(ARM64_ASR_IMM_X(5, 5, 14));
         /* ASR x6, x6, #14 -- T >>= 14 */
@@ -1320,6 +1326,11 @@ codegen_texture_fetch(uint8_t *code_block, voodoo_t *voodoo, voodoo_params_t *pa
         addlong(ARM64_MUL_X(5, 5, 4));
         /* MUL x6, x6, x4 -- T *= quotient */
         addlong(ARM64_MUL_X(6, 6, 4));
+
+        /* KairoX86#289: x10 = 1 << 29, the second shift's rounding */
+        addlong(ARM64_MOVZ_X_HW(10, 0x2000, 1));
+        addlong(ARM64_ADD_REG_X(5, 5, 10));
+        addlong(ARM64_ADD_REG_X(6, 6, 10));
 
         /* ASR x5, x5, #30 -- S >>= 30 (final tex_s) */
         addlong(ARM64_ASR_IMM_X(5, 5, 30));
@@ -1956,6 +1967,10 @@ voodoo_generate(uint8_t *code_block, voodoo_t *voodoo, voodoo_params_t *params, 
     int z_skip_pos       = 0;
     int a_skip_pos       = 0;
     int amask_skip_pos   = 0;
+    /* KairoX86#289: whether the block needs a_other, a_local and the combined alpha, as the x86-64 recompiler
+       decides it (the alpha mask, the colour combine and the alpha planes need them too, not only the alpha test
+       and blend) */
+    int alpha_used       = voodoo_codegen_alpha_used(params);
     int stipple_skip_pos = 0;
     int chroma_skip_pos  = 0;
     int depth_jump_pos   = 0;
@@ -3140,7 +3155,7 @@ voodoo_generate(uint8_t *code_block, voodoo_t *voodoo, voodoo_params_t *params, 
      * Only needed if alpha test or alpha blend is enabled.
      * alphaMode bit 0 = alpha test enable, bit 4 = alpha blend enable.
      * ---------------------------------------------------------------- */
-    if (params->alphaMode & ((1 << 0) | (1 << 4))) {
+    if (alpha_used) {
         /* a_other (EBX) -> w14 */
         switch (a_sel) {
             case A_SEL_ITER_A:
@@ -3309,7 +3324,7 @@ voodoo_generate(uint8_t *code_block, voodoo_t *voodoo, voodoo_params_t *params, 
      * At this point w12 = (cca_zero_other ? 0 : a_other) - (cca_sub_clocal ? a_local : 0)
      * w14 = a_other, w15 = a_local
      * ---------------------------------------------------------------- */
-    if (params->alphaMode & ((1 << 0) | (1 << 4))) {
+    if (alpha_used) {
         if (!(cca_mselect == 0 && cca_reverse_blend == 0)) {
             /* w4 = cca blend factor */
             switch (cca_mselect) {
@@ -3341,20 +3356,16 @@ voodoo_generate(uint8_t *code_block, voodoo_t *voodoo, voodoo_params_t *params, 
 
     /* Broadcast alpha combine result (w12) to v3 for CC_MSELECT_AOTHER before cca_add modifies it */
     if (!(cc_mselect == 0 && cc_reverse_blend == 0) && cc_mselect == CC_MSELECT_AOTHER) {
-        if (params->alphaMode & ((1 << 0) | (1 << 4))) {
-            addlong(ARM64_DUP_V4H_GPR(3, 12));
-        } else {
-            addlong(ARM64_MOVI_V2D_ZERO(3));
-        }
+        addlong(ARM64_DUP_V4H_GPR(3, 12));
     }
 
     /* cca_add: add a_local to result */
-    if (cca_add && (params->alphaMode & ((1 << 0) | (1 << 4)))) {
+    if (cca_add && alpha_used) {
         addlong(ARM64_ADD_REG(12, 12, 15));
     }
 
     /* Clamp alpha result to [0, 0xFF] */
-    if (params->alphaMode & ((1 << 0) | (1 << 4))) {
+    if (alpha_used) {
         addlong(ARM64_MOVZ_W(10, 0xFF));
         addlong(ARM64_BIC_REG_ASR(12, 12, 12, 31));  /* zero if negative */
         addlong(ARM64_CMP_IMM(12, 0xFF));
@@ -3384,36 +3395,7 @@ voodoo_generate(uint8_t *code_block, voodoo_t *voodoo, voodoo_params_t *params, 
                 break;
             case CC_MSELECT_ALOCAL:
                 /* Broadcast a_local (w15) to all 4 lanes of v3 */
-                if (params->alphaMode & ((1 << 0) | (1 << 4))) {
-                    addlong(ARM64_DUP_V4H_GPR(3, 15));
-                } else {
-                    /* Need to compute a_local if not done above */
-                    switch (cca_localselect) {
-                        case CCA_LOCALSELECT_ITER_A:
-                            addlong(ARM64_LDR_W(4, 0, STATE_ia));
-                            addlong(ARM64_ASR_IMM(4, 4, 12));
-                            addlong(ARM64_MOVZ_W(10, 0xFF));
-                            addlong(ARM64_BIC_REG_ASR(4, 4, 4, 31));   /* zero if negative */
-                            addlong(ARM64_CMP_IMM(4, 0xFF));
-                            addlong(ARM64_CSEL(4, 10, 4, COND_HI));    /* cap at 0xFF */
-                            break;
-                        case CCA_LOCALSELECT_COLOR0:
-                            addlong(ARM64_LDRB_IMM(4, 1, PARAMS_color0 + 3));
-                            break;
-                        case CCA_LOCALSELECT_ITER_Z:
-                            addlong(ARM64_LDR_W(4, 0, STATE_z));
-                            addlong(ARM64_ASR_IMM(4, 4, 20));
-                            addlong(ARM64_MOVZ_W(10, 0xFF));
-                            addlong(ARM64_BIC_REG_ASR(4, 4, 4, 31));   /* zero if negative */
-                            addlong(ARM64_CMP_IMM(4, 0xFF));
-                            addlong(ARM64_CSEL(4, 10, 4, COND_HI));    /* cap at 0xFF */
-                            break;
-                        default:
-                            addlong(ARM64_MOVZ_W(4, 0xFF));
-                            break;
-                    }
-                    addlong(ARM64_DUP_V4H_GPR(3, 4));
-                }
+                addlong(ARM64_DUP_V4H_GPR(3, 15));
                 break;
             case CC_MSELECT_AOTHER:
                 /* Already copied to v3 above */
@@ -3448,9 +3430,12 @@ voodoo_generate(uint8_t *code_block, voodoo_t *voodoo, voodoo_params_t *params, 
         addlong(ARM64_SQXTN_4H_4S(0, 17));
     }
 
-    /* cc_add: add clocal back */
-    if (cc_add == 1) {
+    /* cc_add: add clocal back, or a_local in every channel (KairoX86#289: as the C code and the x86-64 recompiler) */
+    if (cc_add == CC_ADD_CLOCAL) {
         addlong(ARM64_ADD_V4H(0, 0, 1));
+    } else if (cc_add == CC_ADD_ALOCAL) {
+        addlong(ARM64_DUP_V4H_GPR(3, 15));
+        addlong(ARM64_ADD_V4H(0, 0, 3));
     }
 
     /* Pack to unsigned bytes (with saturation): SQXTUN v0.8B, v0.8H */
