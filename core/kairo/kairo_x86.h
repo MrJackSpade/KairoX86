@@ -158,7 +158,20 @@ struct KairoX86Api {
 	void (*reset)(void);
 	/* Stops the machine, saving its CMOS: the copy is then done and the host unloads it. */
 	void (*stop)(void);
+
+	/* KairoX86#330: the frame handed over on the GPU instead of screen(), with no copy by the processor (Android, with
+	 * Hardware acceleration on: core/kairo/gpu_frame.c). gpu_frames turns it on, between frames: true when the machine
+	 * hands its frames over so from then on (screen() then has none), false when it cannot (screen() goes on).
+	 * gpu_frame_slot names the slot (0 to KAIRO_X86_FRAME_SLOTS - 1) the next frame is copied to; a slot the host
+	 * still shows is never named. gpu_frame, after run_frame: the slot the last frame went to (-1 before any) and its
+	 * buffer (an AHardwareBuffer the slot holds until it is copied to again at another size), the picture's size, the
+	 * bitmap pixels each picture pixel stands for across and down (the buffer holds width * across by height * down
+	 * of them), and how many frames have been copied so far. */
+	bool (*gpu_frames)(void);
+	void (*gpu_frame_slot)(int slot);
+	void *(*gpu_frame)(int *slot, int *width, int *height, int *across, int *down, uint64_t *number);
 };
+#define KAIRO_X86_FRAME_SLOTS 4
 
 #if defined(_WIN32)
 #define KAIRO_X86_EXPORT __declspec(dllexport)

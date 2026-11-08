@@ -9,6 +9,9 @@
 #include "kairo/machine_core.h"
 #include "kairo/relative_warp.h"
 #include "x86_machine.h"
+#ifdef __ANDROID__
+#include "x86_picture.h"
+#endif
 
 namespace {
 
@@ -31,7 +34,13 @@ class X86Core : public kairo::MachineCore {
 public:
     // The keyboard's model is fixed for the run: its settings apply on the next start.
     explicit X86Core(std::unique_ptr<X86Machine> machine)
-        : machine_(std::move(machine)), details_("keyboard=" + machine_->keyboard_model() + ";" + machine_->started()) {}
+        : machine_(std::move(machine)), details_("keyboard=" + machine_->keyboard_model() + ";" + machine_->started()) {
+#ifdef __ANDROID__
+        // KairoX86#330: with Hardware acceleration on, the frames reach the presenter on the GPU, never copied by the
+        // processor; the machine says whether it can (its GPU has Android's hardware buffers)
+        if (machine_->gpu_frames()) picture_ = std::make_unique<kairox86::X86Picture>(*machine_);
+#endif
+    }
 
     bool run_frame() override {
         // Whether the program asks the mouse driver for the position: direct touch then places the
@@ -47,10 +56,21 @@ public:
             if (dx != 0 || dy != 0) machine_->mouse_move(dx, dy);
         }
         ++frames_;
+#ifdef __ANDROID__
+        if (picture_) picture_->reserve();
+#endif
         return machine_->run_frame(error_);
     }
     std::string error() override { return error_; }
+    // With the picture on the GPU (gpu_picture), no pixels here (machine_core.h)
     const uint8_t *frame(uint32_t &width, uint32_t &height) override { return machine_->frame(width, height); }
+#ifdef __ANDROID__
+    kairo::GpuPicture *gpu_picture() override { return picture_.get(); }
+    // The picture on the GPU signs the frame it shows exactly as the processor's copy would be signed
+    uint64_t screen_signature() override {
+        return picture_ ? picture_->signature() : kairo::MachineCore::screen_signature();
+    }
+#endif
     // 86Box's pixels are 0x00RRGGBB words: B, G, R, A in memory; the presenter reorders them.
     bool frame_bgra() override { return true; }
     double frame_seconds() override { return machine_->frame_seconds(); }
@@ -165,6 +185,10 @@ public:
 
 private:
     std::unique_ptr<X86Machine> machine_;
+#ifdef __ANDROID__
+    // KairoX86#330: the picture on the GPU, when the machine hands its frames over so (destroyed before the machine)
+    std::unique_ptr<kairox86::X86Picture> picture_;
+#endif
     const std::string details_;
     std::string error_;
     std::array<bool, kKeyCodes> keys_{};

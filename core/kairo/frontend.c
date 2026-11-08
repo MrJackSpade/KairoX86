@@ -102,6 +102,17 @@ static int             picture_alloc;
 static int             picture_width;
 static int             picture_height;
 
+/* KairoX86#330: the picture on the GPU instead (api_gpu_frames): each frame copied by the GPU from the card's bitmap
+   into the slot the host named (gpu_frame.c), never by the processor. Set and read between frames, written on 86Box's
+   blit thread while a frame runs. */
+static bool               frames_on;
+static kairo_gpu_frame_t *frame_slots[KAIRO_X86_FRAME_SLOTS];
+static int                frame_next = -1; /* the slot the next frame goes to */
+static int                frame_slot = -1; /* the slot the last frame went to */
+static void              *frame_buffer;    /* its buffer */
+static int                frame_across = 1, frame_down = 1;
+static uint64_t           frames_copied;
+
 /* The joysticks the host gives, which joystick_process hands to the game port. */
 static int input_axes[KAIRO_X86_JOYSTICK_AXES];
 static int input_buttons[KAIRO_X86_JOYSTICK_BUTTONS];
@@ -472,6 +483,80 @@ release_mappings(void)
 
 /* ---- Video ---- */
 
+/* The picture copied by the processor into [picture], one of each of the [across] x [down] bitmap pixels that stand
+   for one of the machine's (KairoX86#37). */
+static void
+picture_copy(const bitmap_t *target, int x, int y, int w, int h, int across, int down)
+{
+    pthread_mutex_lock(&picture_lock);
+    if ((w * h) > picture_alloc) {
+        uint32_t *grown = realloc(picture, (size_t) w * (size_t) h * sizeof(uint32_t));
+        if (grown == NULL) {
+            /* The last picture stays as it was; the machine ends with why. */
+            pthread_mutex_unlock(&picture_lock);
+            machine_over("The PC stopped: no memory for its picture");
+            return;
+        }
+        picture       = grown;
+        picture_alloc = w * h;
+    }
+#ifdef KAIROX86_CHECK_NATIVE_SIZE
+    /* A test build (KairoX86#37): every line's pixels come in runs of [across] alike, whatever the
+       runs' phase, so keeping one of each loses nothing; a frame where they do not is reported. */
+    if (across > 1) {
+        static unsigned frames_checked;
+        frames_checked++;
+        for (int row = 0; row < (h * down); row++) {
+            const uint32_t *line     = &target->line[y + row][x];
+            bool            alike[2] = { true, true };
+            for (int phase = 0; phase < 2; phase++)
+                for (int column = phase; (column + 1) < (w * across); column += across)
+                    if (line[column] != line[column + 1])
+                        alike[phase] = false;
+            if (!alike[0] && !alike[1]) {
+                fprintf(stderr, "KAIROX86_CHECK_NATIVE_SIZE: frame %u, line %d of %dx%d: pixels not in pairs\n",
+                        frames_checked, row, w * across, h * down);
+                break;
+            }
+        }
+    }
+#endif
+    for (int row = 0; row < h; row++) {
+        const uint32_t *line = &target->line[y + (row * down)][x];
+        if (across == 1)
+            memcpy(&picture[row * w], line, (size_t) w * sizeof(uint32_t));
+        else
+            for (int column = 0; column < w; column++)
+                picture[(row * w) + column] = line[column * across];
+    }
+    picture_width  = w;
+    picture_height = h;
+    pthread_mutex_unlock(&picture_lock);
+}
+
+/* KairoX86#330: the frame copied by the GPU into the slot the host named, whole (w * across by h * down bitmap pixels:
+   the presenter keeps one of each); the processor touches none of it. */
+static void
+picture_slot(const bitmap_t *target, int x, int y, int w, int h, int across, int down)
+{
+    if ((frame_next < 0) || (frame_next >= KAIRO_X86_FRAME_SLOTS))
+        fatal("The PC stopped: a frame with no slot named for it\n");
+    if (target->kairo_gpu == NULL)
+        fatal("The PC stopped: a frame on the GPU from a bitmap the GPU does not share\n");
+    const kairo_gpu_buffer_t *bitmap = target->kairo_gpu;
+    if (frame_slots[frame_next] == NULL)
+        frame_slots[frame_next] = kairo_gpu_frame_new();
+    const size_t offset = (size_t) ((const uint8_t *) &target->line[y][x] - (const uint8_t *) bitmap->data);
+    frame_buffer  = kairo_gpu_frame_copy(frame_slots[frame_next], bitmap, offset, (uint32_t) (w * across),
+                                         (uint32_t) (h * down), (uint32_t) target->w);
+    frame_slot    = frame_next;
+    frame_across  = across;
+    frame_down    = down;
+    picture_width = w;
+    picture_height = h;
+    frames_copied++;
+}
+
 /* On 86Box's blit thread: the video card finished a frame in its bitmap. */
 static void
 blit(int x, int y, int w, int h, int monitor_index)
@@ -488,53 +573,12 @@ blit(int x, int y, int w, int h, int monitor_index)
         const int down   = (monitors[monitor_index].mon_kairo_y_div > 1) ? monitors[monitor_index].mon_kairo_y_div : 1;
         w /= across;
         h /= down;
-        pthread_mutex_lock(&picture_lock);
-        bool room = true;
-        if ((w * h) > picture_alloc) {
-            uint32_t *grown = realloc(picture, (size_t) w * (size_t) h * sizeof(uint32_t));
-            if (grown == NULL) {
-                /* The last picture stays as it was; the machine ends with why. */
-                room = false;
-                machine_over("The PC stopped: no memory for its picture");
-            } else {
-                picture       = grown;
-                picture_alloc = w * h;
-            }
-        }
-        if (room) {
-#ifdef KAIROX86_CHECK_NATIVE_SIZE
-            /* A test build (KairoX86#37): every line's pixels come in runs of [across] alike, whatever the
-               runs' phase, so keeping one of each loses nothing; a frame where they do not is reported. */
-            if (across > 1) {
-                static unsigned frames_checked;
-                frames_checked++;
-                for (int row = 0; row < (h * down); row++) {
-                    const uint32_t *line = &target->line[y + row][x];
-                    bool            alike[2] = { true, true };
-                    for (int phase = 0; phase < 2; phase++)
-                        for (int column = phase; (column + 1) < (w * across); column += across)
-                            if (line[column] != line[column + 1])
-                                alike[phase] = false;
-                    if (!alike[0] && !alike[1]) {
-                        fprintf(stderr, "KAIROX86_CHECK_NATIVE_SIZE: frame %u, line %d of %dx%d: pixels not in pairs\n",
-                                frames_checked, row, w * across, h * down);
-                        break;
-                    }
-                }
-            }
-#endif
-            for (int row = 0; room && (row < h); row++) {
-                const uint32_t *line = &target->line[y + (row * down)][x];
-                if (across == 1)
-                    memcpy(&picture[row * w], line, (size_t) w * sizeof(uint32_t));
-                else
-                    for (int column = 0; column < w; column++)
-                        picture[(row * w) + column] = line[column * across];
-            }
-            picture_width  = w;
-            picture_height = h;
-        }
-        pthread_mutex_unlock(&picture_lock);
+        if (!frames_on)
+            picture_copy(target, x, y, w, h, across, down);
+        else if ((w > 0) && (h > 0))
+            picture_slot(target, x, y, w, h, across, down);
+        else
+            picture_width = picture_height = 0; /* nothing to show, as the processor's copy records it */
     }
     video_blit_complete_monitor(monitor_index);
 }
@@ -546,7 +590,40 @@ api_screen(int *width, int *height, int *pitch)
     *width  = picture_width;
     *height = picture_height;
     *pitch  = picture_width;
-    return picture;
+    /* With the frames on the GPU, no pixels here: only the picture's size (KairoX86#330) */
+    return frames_on ? NULL : picture;
+}
+
+/* KairoX86#330: the frame on the GPU (kairo_x86.h gpu_frames) */
+static bool
+api_gpu_frames(void)
+{
+    if (!kairo_gpu_frames_available())
+        return false;
+    frames_on = true;
+    fprintf(stderr, "kairo-gpu: frames handed over on the GPU (hardware buffers)\n");
+    return true;
+}
+
+static void
+api_gpu_frame_slot(int slot)
+{
+    if ((slot < 0) || (slot >= KAIRO_X86_FRAME_SLOTS))
+        fatal("The PC stopped: frame slot %d named, not 0 to %d\n", slot, KAIRO_X86_FRAME_SLOTS - 1);
+    frame_next = slot;
+}
+
+static void *
+api_gpu_frame(int *slot, int *width, int *height, int *across, int *down, uint64_t *number)
+{
+    /* Between frames, after run_frame waited for the blit */
+    *slot   = frame_slot;
+    *width  = picture_width;
+    *height = picture_height;
+    *across = frame_across;
+    *down   = frame_down;
+    *number = frames_copied;
+    return frame_buffer;
 }
 
 /* The host's thread holds blit_lock (pc_run takes it around the CPU's block): a fatal() inside the
@@ -1473,6 +1550,27 @@ api_reset(void)
     running   = false;
 }
 
+/* What outlives 86Box's devices, let go once they are closed (or the machine stopped): the frame slots (KairoX86#330), main
+   RAM, which may be memory the GPU shares (KairoX86#315), the GPU itself, the mappings and the code blocks. */
+static void
+release_machine(void)
+{
+    if (frames_on)
+        fprintf(stderr, "kairo-gpu: %llu frames copied on the GPU\n", (unsigned long long) frames_copied);
+    for (int i = 0; i < KAIRO_X86_FRAME_SLOTS; i++) {
+        kairo_gpu_frame_free(frame_slots[i]);
+        frame_slots[i] = NULL;
+    }
+    frames_on    = false;
+    frame_next   = -1;
+    frame_slot   = -1;
+    frame_buffer = NULL;
+    mem_release_ram();
+    kairo_gpu_close();
+    release_mappings();
+    release_blocks();
+}
+
 /* Ends 86Box's threads and saves its CMOS, also after it stopped (a fatal error, the guest turning
    the PC off, a halt), so its library copy can go. */
 static void
@@ -1484,10 +1582,7 @@ api_stop(void)
     atomic_store(&dead, true);
     if (setjmp(stopped)) {
         running = false;
-        mem_release_ram(); /* KairoX86#315: main RAM may be memory the GPU shares */
-        kairo_gpu_close();
-        release_mappings();
-        release_blocks();
+        release_machine();
         return;
     }
     running = true;
@@ -1496,11 +1591,8 @@ api_stop(void)
     media_restore();
     pc_close(NULL);
     running = false;
-    /* After pc_close: every card freed its GPU objects; main RAM, which may be memory the GPU shares (KairoX86#315) */
-    mem_release_ram();
-    kairo_gpu_close();
-    release_mappings();
-    release_blocks();
+    /* After pc_close: every card freed its GPU objects */
+    release_machine();
 }
 
 static const struct KairoX86Api api = {
@@ -1533,6 +1625,9 @@ static const struct KairoX86Api api = {
     .media_drive     = api_media_drive,
     .reset           = api_reset,
     .stop            = api_stop,
+    .gpu_frames      = api_gpu_frames,
+    .gpu_frame_slot  = api_gpu_frame_slot,
+    .gpu_frame       = api_gpu_frame,
 };
 
 KAIRO_X86_EXPORT const struct KairoX86Api *

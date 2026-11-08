@@ -22,6 +22,9 @@
 #endif
 
 #define VK_NO_PROTOTYPES
+#ifdef __ANDROID__
+#    define VK_USE_PLATFORM_ANDROID_KHR /* the hardware buffers' extension (KairoX86#330) */
+#endif
 #include <vulkan/vulkan.h>
 
 #include <86box/86box.h>
@@ -278,15 +281,38 @@ kairo_gpu_open(void)
     if (extension == NULL)
         fatal("The PC stopped: no memory for the GPU's extensions\n");
     vk_check(vkEnumerateDeviceExtensionProperties(gpu.physical, NULL, &extensions, extension), "vkEnumerateDeviceExtensionProperties");
-    for (uint32_t i = 0; i < extensions; i++)
+    /* The device's extensions: host memory imported where the GPU has it (a card's own backend, KairoX86#239), and on
+       Android the hardware buffers the presenter shows a frame from (KairoX86#330, gpu_frame.c), which need both */
+    int android_buffer = 0, foreign_queue = 0;
+    for (uint32_t i = 0; i < extensions; i++) {
         if (!strcmp(extension[i].extensionName, VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME))
             gpu.vulkan.host_memory = 1;
+#ifdef __ANDROID__
+        if (!strcmp(extension[i].extensionName, VK_ANDROID_EXTERNAL_MEMORY_ANDROID_HARDWARE_BUFFER_EXTENSION_NAME))
+            android_buffer = 1;
+        if (!strcmp(extension[i].extensionName, VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME))
+            foreign_queue = 1;
+#endif
+    }
     free(extension);
+    const char *enabled[3];
+    uint32_t    enabled_count = 0;
+    if (gpu.vulkan.host_memory)
+        enabled[enabled_count++] = VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME;
+#ifdef __ANDROID__
+    if (android_buffer && foreign_queue) {
+        enabled[enabled_count++]    = VK_ANDROID_EXTERNAL_MEMORY_ANDROID_HARDWARE_BUFFER_EXTENSION_NAME;
+        enabled[enabled_count++]    = VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME;
+        gpu.vulkan.android_buffers = 1;
+    }
+#else
+    (void) android_buffer;
+    (void) foreign_queue;
+#endif
     VkPhysicalDevice16BitStorageFeatures storage16_on = { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES,
                                                           .storageBuffer16BitAccess = storage16.storageBuffer16BitAccess };
     VkPhysicalDeviceFeatures2            on           = { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, .pNext = &storage16_on };
     on.features.shaderInt64 = has.features.shaderInt64;
-    const char *const host_memory = VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME;
 
     const float                   priority   = 1.0f;
     const VkDeviceQueueCreateInfo queue_info = { .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
@@ -294,8 +320,8 @@ kairo_gpu_open(void)
                                                  .pQueuePriorities = &priority };
     const VkDeviceCreateInfo device_info = { .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO, .pNext = &on, .queueCreateInfoCount = 1,
                                              .pQueueCreateInfos = &queue_info,
-                                             .enabledExtensionCount = gpu.vulkan.host_memory ? 1u : 0u,
-                                             .ppEnabledExtensionNames = gpu.vulkan.host_memory ? &host_memory : NULL };
+                                             .enabledExtensionCount = enabled_count,
+                                             .ppEnabledExtensionNames = enabled_count ? enabled : NULL };
     vk_check(vkCreateDevice(gpu.physical, &device_info, NULL, &gpu.device), "vkCreateDevice");
 #define KAIRO_VK_LOAD_DEVICE(name)                                                      \
     name = (PFN_##name) vkGetDeviceProcAddr(gpu.device, #name);                         \
@@ -332,6 +358,7 @@ void
 kairo_gpu_close(void)
 {
     if (gpu.device != VK_NULL_HANDLE) {
+        kairo_gpu_frames_close();
         kairo_gpu_scanout_close();
         kairo_gpu_voodoo_close();
         kairo_gpu_virge_close();

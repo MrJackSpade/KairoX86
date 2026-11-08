@@ -38,8 +38,23 @@ public:
     // The guest time the last frame lasted.
     double frame_seconds() const;
     // The latest picture: rows of width pixels, 0x00RRGGBB words (B, G, R, A bytes); null before
-    // the first frame.
+    // the first frame, and once the frames go to the GPU (gpu_frames), when only its size is given.
     const uint8_t *frame(uint32_t &width, uint32_t &height) const;
+
+    // KairoX86#330 (kairo_x86.h): the frames handed over on the GPU, never copied by the processor; false when this
+    // machine cannot (frame() then goes on). Between frames.
+    bool gpu_frames();
+    // The slot (0 to KAIRO_X86_FRAME_SLOTS - 1) the next frame is copied to, before run_frame.
+    void gpu_frame_slot(int slot);
+    // After run_frame: the last frame's slot (-1 before any), and its buffer (an AHardwareBuffer the slot holds), the
+    // picture's size, the bitmap pixels each picture pixel stands for, and how many frames have been copied.
+    struct GpuFrame {
+        int      slot = -1;
+        void    *buffer = nullptr;
+        uint32_t width = 0, height = 0, across = 1, down = 1;
+        uint64_t number = 0;
+    };
+    GpuFrame gpu_frame() const;
     int sample_rate() const;
     // Takes up to max_frames interleaved stereo frames produced so far.
     uint32_t read_audio(int16_t *stereo, uint32_t max_frames);

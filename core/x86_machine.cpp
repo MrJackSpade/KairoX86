@@ -57,6 +57,21 @@ const uint8_t *X86Machine::frame(uint32_t &width, uint32_t &height) const {
     return reinterpret_cast<const uint8_t *>(pixels);
 }
 
+bool X86Machine::gpu_frames() { return impl_->api->gpu_frames(); }
+
+void X86Machine::gpu_frame_slot(int slot) { impl_->api->gpu_frame_slot(slot); }
+
+X86Machine::GpuFrame X86Machine::gpu_frame() const {
+    GpuFrame frame;
+    int width = 0, height = 0, across = 1, down = 1;
+    frame.buffer = impl_->api->gpu_frame(&frame.slot, &width, &height, &across, &down, &frame.number);
+    frame.width = uint32_t(width);
+    frame.height = uint32_t(height);
+    frame.across = uint32_t(across);
+    frame.down = uint32_t(down);
+    return frame;
+}
+
 int X86Machine::sample_rate() const { return impl_->api->sample_rate(); }
 
 uint32_t X86Machine::read_audio(int16_t *stereo, uint32_t max_frames) {

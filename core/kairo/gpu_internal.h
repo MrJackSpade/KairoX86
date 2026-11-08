@@ -7,6 +7,7 @@
 #ifndef KAIRO_GPU_INTERNAL_H
 #define KAIRO_GPU_INTERNAL_H
 
+void kairo_gpu_frames_close(void); /* gpu_frame.c, KairoX86#330 */
 void kairo_gpu_scanout_close(void);
 void kairo_gpu_voodoo_close(void);
 void kairo_gpu_virge_close(void);

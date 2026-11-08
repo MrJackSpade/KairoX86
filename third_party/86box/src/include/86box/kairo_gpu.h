@@ -71,8 +71,23 @@ typedef struct kairo_gpu_vulkan {
     int      int64;
     int      storage16;
     int      host_memory;
+    int      android_buffers; /* KairoX86#330: Android's hardware buffers imported (gpu_frame.c) */
 } kairo_gpu_vulkan_t;
 const kairo_gpu_vulkan_t *kairo_gpu_vulkan(void);
+
+/* KairoX86#330: frame slots the presenter shows the picture from without the processor copying it (core/kairo/gpu_frame.c):
+   each an Android hardware buffer (AHardwareBuffer, R8G8B8A8) the GPU copies a card's bitmap into, which the presenter
+   samples as a GL texture. kairo_gpu_frames_available: whether this device has them (Android, the device's hardware
+   buffer extensions on). kairo_gpu_frame_copy copies width x height pixels of bitmap, from byte offset on, pitch pixels
+   from one row to the next, into the slot (made that size first: its buffer then a new one) and waits for the copy;
+   it returns the slot's buffer, which the slot holds a reference to until it is remade or freed: a presenter that
+   keeps it takes its own (AHardwareBuffer_acquire). Slots are freed before the device (kairo_gpu_close). */
+typedef struct kairo_gpu_frame kairo_gpu_frame_t;
+int                kairo_gpu_frames_available(void);
+kairo_gpu_frame_t *kairo_gpu_frame_new(void);
+void               kairo_gpu_frame_free(kairo_gpu_frame_t *frame);
+void *kairo_gpu_frame_copy(kairo_gpu_frame_t *frame, const kairo_gpu_buffer_t *bitmap, size_t offset, uint32_t width,
+                           uint32_t height, uint32_t pitch);
 void                      kairo_gpu_queue_lock(void);
 void                      kairo_gpu_queue_unlock(void);
 uint64_t                  kairo_gpu_buffer_handle(const kairo_gpu_buffer_t *buffer);

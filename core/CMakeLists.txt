@@ -54,7 +54,7 @@ set(KAIRO_LIBRARY ON)
 set(KAIRO_LIBCHDR ON)
 # The frontend, and its view of the hardware 86Box offers for the machine settings (Kairo#143).
 set(KAIRO_FRONTEND "${CMAKE_CURRENT_LIST_DIR}/kairo/frontend.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/hardware.c"
-    "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_scanout.c"
+    "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_scanout.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_frame.c"
     "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_voodoo.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_virge.c"
     "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_mach64.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_powervr.c"
     "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_seg.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_seg_run.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_mach64_2d.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_p9100.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_et4000w32.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_cl54xx.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_chips69000.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_tgui.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_xga.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_s3.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_ibm8514.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_mga.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_virge2d.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_banshee2d.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_wd90c3x.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_pgc.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_gxm.c"
@@ -156,6 +156,10 @@ add_custom_target(kairox86_shaders DEPENDS ${KAIROX86_SHADER_INCS})
 add_dependencies(plat kairox86_shaders)
 target_include_directories(plat PRIVATE "${KAIROX86_SHADER_OUT}")
 target_link_libraries(86Box chdr-static kairo_zlib)
+if(ANDROID)
+    # The frame slots' hardware buffers (core/kairo/gpu_frame.c, KairoX86#330)
+    target_link_libraries(86Box android)
+endif()
 # A machine owns what it allocates (KairoX86#186): the library's malloc family goes through the
 # frontend's record (core/kairo/frontend.c), which frees what is left when the machine closes.
 target_link_options(86Box PRIVATE "LINKER:--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=free")
