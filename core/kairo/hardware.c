@@ -258,6 +258,16 @@ card_bus(const device_t *device)
 
 /* The cards of [kind] machine [m] takes: those 86Box's device_is_valid allows on its buses, and its
    onboard one ("internal") where the board has it. */
+/* KairoX86's legacy displays (KairoX86#229): video cards with no PCI identity that KairoX86 puts on a PCI
+   board when a Windows image's display is one Windows met by legacy detection at its ports (DOSBox-X's S3
+   Trio64), as kairox86's Win9xMachine.LEGACY_DISPLAYS chooses them. 86Box runs them on any board; its bus
+   check would leave them out of a PCI board's choices, and the machine's own card would not fit. */
+static bool
+legacy_display_fits(const struct kind *kind, const char *id, int m)
+{
+    return (kind->onboard == MACHINE_VIDEO) && !strcmp(id, "s3_trio64_vlb") && machine_has_bus(m, MACHINE_BUS_PCI);
+}
+
 static void
 put_cards(const struct kind *kind, int m)
 {
@@ -271,7 +281,7 @@ put_cards(const struct kind *kind, int m)
         /* A board whose video is its only video takes no other (86Box's config keeps it internal). */
         if ((kind->onboard == MACHINE_VIDEO) && machine_has_flags(m, MACHINE_VIDEO_ONLY) && strcmp(id, "internal"))
             continue;
-        if (!device_is_valid(device, m))
+        if (!device_is_valid(device, m) && !legacy_display_fits(kind, id, m))
             continue;
         put(first ? "{\"id\":" : ",{\"id\":");
         first = false;
