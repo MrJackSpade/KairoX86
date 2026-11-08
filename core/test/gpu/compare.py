@@ -360,19 +360,23 @@ def main():
                 continue
             folder = out / card / test
             try:
-                ha, wa = run(args, folder / f'a-{args.a}', machine_config(board, card, test, args.a, names.get(card)), test, board)
-                hb, wb = run(args, folder / f'b-{args.b}', machine_config(board, card, test, args.b, names.get(card)), test, board)
-            except RuntimeError as e:
-                found.append((card, test, str(e)))
-                print(f'{card} {test}: {e}', flush=True)
-                continue
-            problem = compare_runs(args, ha, wa, hb, wb, folder)
+                try:
+                    ha, wa = run(args, folder / f'a-{args.a}', machine_config(board, card, test, args.a, names.get(card)), test, board)
+                    hb, wb = run(args, folder / f'b-{args.b}', machine_config(board, card, test, args.b, names.get(card)), test, board)
+                except RuntimeError as e:
+                    found.append((card, test, str(e)))
+                    print(f'{card} {test}: {e}', flush=True)
+                    continue
+                problem = compare_runs(args, ha, wa, hb, wb, folder)
+            finally:
+                # The device keeps nothing once the runs are compared (what a failure shows was pulled), pass, fail or
+                # error: kept, a batch's failed runs (machine images and all) filled the RP6's storage
+                if args.device:
+                    adb(args, 'shell', f'rm -rf {remote_folder(args, folder)}')
             if problem:
                 found.append((card, test, problem))
             else:
                 shutil.rmtree(folder)
-                if args.device:
-                    adb(args, 'shell', f'rm -rf {remote_folder(args, folder)}')
             on = hb if args.b == 'on' else ha
             drawn = (f"GPU lines {on['gpu_lines']}" + (f", 3D {on['gpu_3d']}" if on['gpu_3d'] else '')
                      + (f", built {', '.join(on['gpu_kernels'])}" if on['gpu_kernels'] else ''))
