@@ -87,6 +87,8 @@ BOARD_FDD = {'ibm5550': '525_2qd'}
 # Boards that boot images of their own size only: the IBM 5550's IPL load modules (make_tests.py ipl_5550_image)
 FLOPPY_720K = 737280
 BOARD_IMAGE = {'ibm5550': FLOPPY_720K}
+# Boards that run their own tests only: the Tandy 2000 has no IBM-compatible BIOS (no video calls, no tick count)
+BOARD_TESTS = {'tandy2000': ('t2k86',)}
 # Boards' own video settings: the Tandy 2000 with its colour graphics option, so its graphics are tested too
 BOARD_VIDEO = {'tandy2000': '\n[Tandy 2000 (Video)]\ngraphics = 2\n'}
 # Boards' own graphics chips (gfxcard = internal), each named as its chip's device is, on its board
@@ -293,6 +295,8 @@ def main():
         for8086 = board in BOARDS_8086
         for test in tests:
             size = (Path(args.tests_folder) / f'{test}.img').stat().st_size
+            if (board in BOARD_TESTS) and (test not in BOARD_TESTS[board]):
+                continue
             if board in BOARD_IMAGE:
                 if size != BOARD_IMAGE[board]:
                     continue
