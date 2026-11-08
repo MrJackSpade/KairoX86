@@ -9381,9 +9381,7 @@ gpu_device_create(r128_gpu_t *g)
     const kairo_gpu_vulkan_t *k = kairo_gpu_vulkan();
 
     /* KairoX86#239: the core's device, which turns on what the kernels need where the GPU has it. The SPIR-V modules
-       declare Int64 and StorageBuffer16BitAccess. */
-    if (!k->int64)
-        return "the GPU lacks shaderInt64 (the kernel's 64-bit edge/z chain)";
+       declare StorageBuffer16BitAccess; their 64-bit words are uvec2 pairs, so they need no Int64 (KairoX86#326). */
     if (!k->storage16)
         return "the GPU lacks storageBuffer16BitAccess (the u16 vram view)";
     g->dev   = (VkDevice) k->device;

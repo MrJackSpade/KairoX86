@@ -110,7 +110,6 @@
    [2] ATI Technologies, "RAGE 128 Software Development Guide",
        SDK-G04000 Rev 0.01, August 1999. Cited as "SDK: <section>,
        p. <printed page> / PDF <viewer page>". */
-#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 #extension GL_EXT_shader_16bit_storage : require
 
 layout(constant_id = 0) const int V_TEX   = 1;
@@ -1253,10 +1252,11 @@ blend_factor(uint code, float sc[4], float dc[4], precise out float o[4])
     }
 }
 
-int64_t
+/* an edge value's limbs, low word first: a signed 64-bit word of the f64 library (KairoX86#326) */
+uvec2
 edge_i64(uvec2 e)
 {
-    return int64_t(uint64_t(e.x) | (uint64_t(e.y) << 32));
+    return e;
 }
 
 void
@@ -1290,16 +1290,14 @@ pixel(int si, int ti, uint i)
             ef1 = float(e1);
             ef2 = float(e2);
         } else {
-            int64_t e0 = edge_i64(spans[si].e0)
-                       + int64_t(i) * edge_i64(tris[ti].e0dxi);
-            int64_t e1 = edge_i64(spans[si].e1)
-                       + int64_t(i) * edge_i64(tris[ti].e1dxi);
-            int64_t e2 = edge_i64(spans[si].e2)
-                       + int64_t(i) * edge_i64(tris[ti].e2dxi);
+            uvec2 ii = uvec2(i, 0u);
+            uvec2 e0 = u64_add(edge_i64(spans[si].e0), u64_mul(ii, edge_i64(tris[ti].e0dxi)));
+            uvec2 e1 = u64_add(edge_i64(spans[si].e1), u64_mul(ii, edge_i64(tris[ti].e1dxi)));
+            uvec2 e2 = u64_add(edge_i64(spans[si].e2), u64_mul(ii, edge_i64(tris[ti].e2dxi)));
 
-            ef0 = float(e0);
-            ef1 = float(e1);
-            ef2 = float(e2);
+            ef0 = i64_to_float(e0);
+            ef1 = i64_to_float(e1);
+            ef2 = i64_to_float(e2);
         }
     }
     if (!aux_pass(ti, px, spans[si].py))

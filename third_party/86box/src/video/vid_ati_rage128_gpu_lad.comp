@@ -66,7 +66,6 @@
  *
  *          Copyright 2026 skiretic.
  */
-#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 #extension GL_EXT_shader_16bit_storage : require
 
 #include "vid_ati_rage128_gpu_f64.glsl"
@@ -81,10 +80,10 @@ layout(std430, binding = 6) writeonly buffer L { uint lad[]; };
 
 layout(push_constant) uniform P { uint nspans; uint pad; } pc;
 
-uint64_t
+uvec2
 u64_from_limbs(uvec2 v)
 {
-    return uint64_t(v.x) | (uint64_t(v.y) << 32);
+    return v; /* the ABI's limbs, low word first: the library's own form */
 }
 
 /* Table-fog operands, the same split r3d_raster makes: z clamped to
@@ -95,22 +94,22 @@ u64_from_limbs(uvec2 v)
    the mantissa read from the product's bit pattern. The product is at
    most 255.0, so its exponent e is at most 7 and the shift is always
    to the right. */
-uint64_t
-f64_fogix(uint64_t zc)
+uvec2
+f64_fogix(uvec2 zc)
 {
     if (f64_is_nan(zc) || !f64_gt_zero(zc))
         zc = F64_ZERO;
     if (f64_gt_pos(zc, F64_ONE))
         zc = F64_ONE;
-    uint64_t zi = f64_mul(zc, F64_255);
+    uvec2 zi = f64_mul(zc, F64_255);
 
-    if ((zi & ~F64_SIGN) == 0UL)
-        return 0UL;
-    int      e  = int(zi >> 52) - 1023; /* <= 7 */
-    uint64_t m  = (zi & F64_MANT) | F64_HID;
-    int      sh = 20 - e;               /* m * 2^(e-52) * 2^32 */
+    if (u64_is0(zi & F64_MAG))
+        return U64_0;
+    int   e  = f64_exp(zi) - 1023; /* <= 7 */
+    uvec2 m  = (zi & F64_MANT) | F64_HID;
+    int   sh = 20 - e;             /* m * 2^(e-52) * 2^32 */
 
-    return (sh >= 64) ? 0UL : (m >> uint(sh));
+    return (sh >= 64) ? U64_0 : u64_shr(m, sh);
 }
 
 /* Stores one rung at ladder word "at". Without table fog the word is
@@ -121,15 +120,15 @@ f64_fogix(uint64_t zc)
    (rage128_gpu_capture_span), and the shading kernel reads its fog
    operands from these words instead of walking the chain itself. */
 void
-put(uint at, uint64_t z, uint64_t zmaxd, bool fog)
+put(uint at, uvec2 z, uvec2 zmaxd, bool fog)
 {
     uint r = f64_zq(z, zmaxd);
 
     if (fog) {
-        uint64_t fx = f64_fogix(z);
+        uvec2 fx = f64_fogix(z);
 
-        lad[at]      = r | (uint(fx >> 32) << 24);
-        lad[at + 1u] = uint(fx);
+        lad[at]      = r | (fx.y << 24);
+        lad[at + 1u] = fx.x;
     } else
         lad[at] = r;
 }
@@ -145,14 +144,14 @@ main()
 
     int      n    = spans[si].x1 - spans[si].x0 + 1;
     uint     base = spans[si].px_base;
-    uint64_t z    = u64_from_limbs(spans[si].zline);
+    uvec2    z    = u64_from_limbs(spans[si].zline);
     uint     ti   = uint(spans[si].tri);
-    uint64_t dz   = u64_from_limbs(tris[ti].dZdx);
+    uvec2    dz   = u64_from_limbs(tris[ti].dZdx);
     /* The quantize range follows the cell width: a 2-byte cell holds
        16-bit depth (65535), and a 4-byte cell holds 24-bit depth
        (16777215) at either end of the cell. gpu_state_kernel refuses a
        draw whose interpreter zmax disagrees with this. */
-    uint64_t zmaxd = (tris[ti].zbpp == 4u) ? F64_ZMAX24 : F64_65535;
+    uvec2    zmaxd = (tris[ti].zbpp == 4u) ? F64_ZMAX24 : F64_65535;
     /* In the interpreter a NaN z quantizes to 0, and once z or dZdx is
        NaN every later sum is NaN too. A NaN input sends the span to the
        serial walk, which stores zero rungs from the first NaN on; the
@@ -165,26 +164,26 @@ main()
     int  q      = 0;
 
     if (!zpois && !dzpois) {
-        uint     ez  = uint(z >> 52) & 0x7ffu;
-        uint     edz = uint(dz >> 52) & 0x7ffu;
-        uint64_t sz  = z >> 63, sdz = dz >> 63;
+        uint     ez  = uint(f64_exp(z));
+        uint     edz = uint(f64_exp(dz));
+        uint     sz  = f64_sgn(z), sdz = f64_sgn(dz);
         bool     ok  = ez != 0u && ez != 0x7ffu && edz != 0x7ffu;
 
         if (ok && edz == 0u) {
-            if ((dz & 0x000fffffffffffffUL) != 0UL)
+            if (!u64_is0(dz & F64_MANT))
                 ok = false;
             else {
                 /* dZdx is zero, so every rung (and fog pair) is the
                    same value. */
-                uint     r  = f64_zq(z, zmaxd);
-                uint64_t fx = fog ? f64_fogix(z) : 0UL;
+                uint  r  = f64_zq(z, zmaxd);
+                uvec2 fx = fog ? f64_fogix(z) : U64_0;
 
                 if (fog)
-                    r |= uint(fx >> 32) << 24;
+                    r |= fx.y << 24;
                 for (q = int(lane); q < n; q += 32) {
                     lad[base + st * uint(q)] = r;
                     if (fog)
-                        lad[base + st * uint(q) + 1u] = uint(fx);
+                        lad[base + st * uint(q) + 1u] = fx.x;
                 }
                 return;
             }
@@ -198,10 +197,10 @@ main()
             q++;
             if (q >= n)
                 return;
-            uint64_t z1 = f64_add(z, dz);
-            uint     e1 = uint(z1 >> 52) & 0x7ffu;
+            uvec2 z1 = f64_add(z, dz);
+            uint  e1 = uint(f64_exp(z1));
 
-            if (e1 == 0u || e1 == 0x7ffu || (z1 >> 63) != sz) {
+            if (e1 == 0u || e1 == 0x7ffu || f64_sgn(z1) != sz) {
                 z  = z1;
                 ok = false;
                 break;
@@ -216,10 +215,10 @@ main()
                the bits shifted out (tail); hlf is the tail value of
                exactly half a unit. The tail rounds to nearest, ties to
                even, which adds 1 to a's magnitude or not. */
-            int      sh   = int(ez) - int(edz);
-            uint64_t mant = (dz & 0x000fffffffffffffUL) | (1UL << 52);
-            uint64_t a, tail, hlf;
-            int64_t  inc;
+            int   sh   = int(ez) - int(edz);
+            uvec2 mant = (dz & F64_MANT) | F64_HID;
+            uvec2 a, tail, hlf;
+            uvec2 inc; /* signed */
 
             if (sh < 0) {
                 if (-sh > 10) {
@@ -227,71 +226,75 @@ main()
                     ok = false;
                     break;
                 }
-                a    = mant << uint(-sh);
-                tail = 0UL;
-                hlf  = 1UL;
+                a    = u64_shl(mant, -sh);
+                tail = U64_0;
+                hlf  = U64_1;
             } else if (sh > 63) {
-                a    = 0UL;
-                tail = 0UL;
-                hlf  = 1UL;
+                a    = U64_0;
+                tail = U64_0;
+                hlf  = U64_1;
             } else if (sh == 0) {
                 a    = mant;
-                tail = 0UL;
-                hlf  = 1UL;
+                tail = U64_0;
+                hlf  = U64_1;
             } else {
-                a    = mant >> uint(sh);
-                tail = mant & ((1UL << uint(sh)) - 1UL);
-                hlf  = 1UL << uint(sh - 1);
+                a    = u64_shr(mant, sh);
+                tail = mant & u64_sub(u64_shl(U64_1, sh), U64_1);
+                hlf  = u64_shl(U64_1, sh - 1);
             }
             if (sz == sdz) {
-                if (tail > hlf)
-                    inc = int64_t(a) + 1L;
-                else if (tail < hlf)
-                    inc = int64_t(a);
+                if (u64_gt(tail, hlf))
+                    inc = u64_add(a, U64_1);
+                else if (u64_lt(tail, hlf))
+                    inc = a;
                 else
-                    inc = int64_t(a) + (((a & 1UL) != 0UL) ? 1L : 0L);
+                    inc = u64_add(a, ((a.x & 1u) != 0u) ? U64_1 : U64_0);
             } else {
-                if (tail == 0UL)
-                    inc = -int64_t(a);
-                else if (tail > hlf)
-                    inc = -int64_t(a) - 1L;
-                else if (tail < hlf)
-                    inc = -int64_t(a);
+                if (u64_is0(tail))
+                    inc = i64_neg(a);
+                else if (u64_gt(tail, hlf))
+                    inc = u64_sub(i64_neg(a), U64_1);
+                else if (u64_lt(tail, hlf))
+                    inc = i64_neg(a);
                 else
-                    inc = -int64_t(a) - (((a & 1UL) != 0UL) ? 1L : 0L);
+                    inc = u64_sub(i64_neg(a), ((a.x & 1u) != 0u) ? U64_1 : U64_0);
             }
             {
-                uint64_t m   = z1 & 0x000fffffffffffffUL;
-                uint64_t hi  = z1 & 0xfff0000000000000UL;
-                uint64_t k;  /* further steps that stay in the binade */
-                int      cnt;
+                uvec2 m  = z1 & F64_MANT;
+                uvec2 hi = z1 & uvec2(0x00000000u, 0xfff00000u);
+                uvec2 k; /* further steps that stay in the binade */
+                uvec2 dq;
+                uvec2 dr;
+                int   cnt;
 
-                if (inc > 0L)
-                    k = ((1UL << 52) - 1UL - m) / uint64_t(inc);
-                else if (inc < 0L) {
-                    k = m / uint64_t(-inc);
+                if (i64_gt0(inc)) {
+                    u64_divmod(u64_sub(u64_sub(u64_shl(U64_1, 52), U64_1), m), inc, dq, dr);
+                    k = dq;
+                } else if (i64_is_neg(inc)) {
+                    u64_divmod(m, i64_neg(inc), dq, dr);
+                    k = dq;
                     /* A nonzero tail can round below the binade floor
                        at its finer spacing. Exclude that endpoint so
                        the full add owns the crossing step. */
-                    if (tail != 0UL && k > 0UL && m % uint64_t(-inc) == 0UL)
-                        k--;
+                    if (!u64_is0(tail) && !u64_is0(k) && u64_is0(dr))
+                        k = u64_sub(k, U64_1);
                 } else
-                    k = uint64_t(n);
-                cnt = (k + 1UL < uint64_t(n - q)) ? int(k) + 1 : n - q;
+                    k = i64_from_int(n);
+                cnt = u64_lt(u64_add(k, U64_1), i64_from_int(n - q)) ? int(k.x) + 1 : n - q;
                 /* this lane's rungs of the run: q + j with (q + j) % 32 == lane */
                 for (int j = int((lane - uint(q)) & 31u); j < cnt; j += 32)
                     put(base + st * uint(q + j),
-                        hi | uint64_t(int64_t(m) + int64_t(j) * inc), zmaxd, fog);
+                        hi | u64_add(m, u64_mul(i64_from_int(j), inc)), zmaxd, fog);
                 q += cnt;
                 if (q >= n)
                     return;
                 /* The step out of the binade is a full add from the
                    run's last rung; the loop's entry code stores its
                    result as the next rung. */
-                z  = hi | uint64_t(int64_t(m) + int64_t(cnt - 1) * inc);
+                z  = hi | u64_add(m, u64_mul(i64_from_int(cnt - 1), inc));
                 z1 = f64_add(z, dz);
-                e1 = uint(z1 >> 52) & 0x7ffu;
-                if (e1 == 0u || e1 == 0x7ffu || (z1 >> 63) != sz) {
+                e1 = uint(f64_exp(z1));
+                if (e1 == 0u || e1 == 0x7ffu || f64_sgn(z1) != sz) {
                     z  = z1;
                     ok = false;
                     break;
