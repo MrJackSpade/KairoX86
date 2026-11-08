@@ -274,6 +274,48 @@ class X86Library(private val context: Context) {
             check(!done.folder) { context.getString(R.string.machine_create_failed, relative) }
             return DocumentsContract.buildDocumentUriUsingTree(tree, done.id)
         }
+        return writeInto(tree, parent, name, entry, cancelled, progress) { output ->
+            DiskArchive.open(context, Uri.parse(entry.uri), entry.path, entry.size).use { archive ->
+                val member = archive.members.firstOrNull { it.name == entry.zipEntry }
+                    ?: error(context.getString(FrontendR.string.kairo_disk_member_missing, entry.zipEntry))
+                archive.copy(member, output) {
+                    if (cancelled.get()) throw java.util.concurrent.CancellationException("Cancelled")
+                }
+            }
+        }
+    }
+
+    /**
+     * Copies the loose disk image [entry], elsewhere in the games folder, into the machine folder
+     * [folder] of [tree] at its own name (KairoX86#334), so its 86box.cfg can name it as the
+     * machine's own: a session reaches only its machine's folder. A different file of that name
+     * already there is not replaced: the copy fails.
+     */
+    fun copyInto(tree: Uri, folder: String, entry: X86Entry, cancelled: AtomicBoolean, progress: (String) -> Unit): Pair<String, Uri> {
+        check(entry.zipEntry == null) { "${entry.path} is inside an archive" }
+        val name = entry.path.substringAfterLast('/')
+        check(children(tree, folder).none { it.name.equals(name, ignoreCase = true) }) { context.getString(R.string.machine_disk_name_taken, name) }
+        return name to writeInto(tree, folder, name, entry, cancelled, progress) { output ->
+            checkNotNull(context.contentResolver.openInputStream(Uri.parse(entry.uri))) { context.getString(R.string.machine_open_failed, entry.path) }
+                .use { input ->
+                    val buffer = ByteArray(1 shl 20)
+                    while (true) {
+                        if (cancelled.get()) throw java.util.concurrent.CancellationException("Cancelled")
+                        val read = input.read(buffer)
+                        if (read < 0) break
+                        output.write(buffer, 0, read)
+                    }
+                }
+        }
+    }
+
+    /**
+     * Writes [name] into the folder [parent] of [tree] with [write], through a partial file renamed
+     * when it is whole; a partial file a crash left goes first. Returns the file's document.
+     */
+    private fun writeInto(tree: Uri, parent: String, name: String, entry: X86Entry, cancelled: AtomicBoolean,
+                          progress: (String) -> Unit, write: (java.io.OutputStream) -> Unit): Uri {
+        if (cancelled.get()) throw java.util.concurrent.CancellationException("Cancelled")
         progress(context.getString(FrontendR.string.kairo_disk_preparing, entry.displayName))
         // A partial file a crash left goes first: the new one would get another name.
         children(tree, parent).filter { it.name == "$name.part" && !it.folder }.forEach { stale ->
@@ -284,16 +326,8 @@ class X86Library(private val context: Context) {
         val partial = created(DocumentsContract.createDocument(context.contentResolver, DocumentsContract.buildDocumentUriUsingTree(tree, parent),
             "application/octet-stream", "$name.part"), "$name.part")
         return try {
-            DiskArchive.open(context, Uri.parse(entry.uri), entry.path, entry.size).use { archive ->
-                val member = archive.members.firstOrNull { it.name == entry.zipEntry }
-                    ?: error(context.getString(FrontendR.string.kairo_disk_member_missing, entry.zipEntry))
-                checkNotNull(context.contentResolver.openOutputStream(partial, "wt")) { context.getString(R.string.machine_write_failed, name) }
-                    .use { output ->
-                        archive.copy(member, output) {
-                            if (cancelled.get()) throw java.util.concurrent.CancellationException("Cancelled")
-                        }
-                    }
-            }
+            checkNotNull(context.contentResolver.openOutputStream(partial, "wt")) { context.getString(R.string.machine_write_failed, name) }
+                .use(write)
             created(DocumentsContract.renameDocument(context.contentResolver, partial, name), name)
         } catch (failure: Exception) {
             // The partial file goes; the failure that stopped the unpacking is the one reported.
@@ -506,6 +540,33 @@ class X86Library(private val context: Context) {
     }
 
     /**
+     * Puts [disk] in [machine]'s removable drive [slot] (KairoX86#334: Floppy A, Floppy B, the
+     * CD-ROM, as [DRIVE_KEYS] names their 86box.cfg keys), or leaves it empty for null; returns the
+     * 86box.cfg changes, which are made. A disk of the machine's folder is named where it is; one in
+     * an archive is unpacked into the folder ([unpackInto]) and a loose one elsewhere in the games
+     * folder copied in ([copyInto]), so the machine starts with it in as its own.
+     */
+    fun setMedium(machine: X86Entry, tree: Uri, slot: Int, disk: X86Entry?, cancelled: AtomicBoolean,
+                  progress: (String) -> Unit): List<X86Settings.Change> {
+        val key = DRIVE_KEYS[slot]
+        val relative = disk?.let {
+            val prefix = if (machine.path.isEmpty()) "" else "${machine.path}/"
+            when {
+                disk.zipEntry != null -> {
+                    val folder = findFolder(tree, machine.path)
+                    unpackedPath(disk).also { unpacked -> remember(tree, machine, unpacked, unpackInto(tree, folder, disk, cancelled, progress)) }
+                }
+                disk.path.startsWith(prefix) -> disk.path.removePrefix(prefix)
+                else -> copyInto(tree, findFolder(tree, machine.path), disk, cancelled, progress)
+                    .also { (name, uri) -> remember(tree, machine, name, uri) }.first
+            }
+        }
+        val changes = listOf(X86Settings.Change(DRIVES, key, relative))
+        change(machine, tree, changes)
+        return changes
+    }
+
+    /**
      * Adds the disk unpacked to [relative] in [machine]'s folder to the disks the last scan found, so
      * the machine's own disks list it before the next scan does.
      */
@@ -600,6 +661,21 @@ class X86Library(private val context: Context) {
         const val NVR = "nvr"
         /** The 86box.cfg section of the hard disks. */
         const val HARD_DISKS = "Hard disks"
+        /** The 86box.cfg section of the floppy and CD-ROM drives. */
+        const val DRIVES = "Floppy and CD-ROM drives"
+        /** The image keys of the removable drives, by media slot (MainActivity.mediaSlots): Floppy A, Floppy B, the CD-ROM. */
+        val DRIVE_KEYS = listOf("fdd_01_fn", "fdd_02_fn", "cdrom_01_image_path")
+
+        /**
+         * The media slots [config] gives the machine a drive for, as 86Box reads it (config.c, and
+         * so the Disks page, KairoX86#197): floppy drives A and B unless their type is "none" (a
+         * 5¼" DD drive without a key), and the CD-ROM when its parameters name a bus (none without).
+         */
+        fun drives(config: IniText): List<Int> = listOfNotNull(
+            0.takeIf { (config[DRIVES, "fdd_01_type"] ?: "525_2dd") != "none" },
+            1.takeIf { (config[DRIVES, "fdd_02_type"] ?: "525_2dd") != "none" },
+            2.takeIf { config[DRIVES, "cdrom_01_parameters"]?.split(',')?.getOrNull(1)?.trim()?.let { it != "none" } == true })
+
         /** A disk entry's content ID: disks are no games of the catalog. */
         private const val DISK = "disk"
 

@@ -72,7 +72,7 @@ class MainActivity : MachineActivity<X86Entry>() {
          */
         private val configs = java.util.concurrent.ConcurrentHashMap<String, Lazy<IniText>>()
 
-        private fun config(entry: X86Entry): IniText =
+        fun config(entry: X86Entry): IniText =
             configs.computeIfAbsent(entry.id) { lazy { machines.config(entry, libraryTree()) } }.value
 
         fun forget(entryId: String) {
@@ -115,10 +115,57 @@ class MainActivity : MachineActivity<X86Entry>() {
      * machine shows them once it is made (KairoX86#227).
      */
     override fun machineExtraGroups(entry: X86Entry, enabled: () -> Boolean): List<RowGroup> =
-        if (!configStore.ready(entry)) emptyList() else listOf(hardDiskGroup(entry, enabled)) + cardGroups(entry, enabled)
+        if (!configStore.ready(entry)) emptyList() else listOf(disksGroup(entry, enabled)) + cardGroups(entry, enabled)
 
-    /** Whether a hard disk is being set, which may unpack one from an archive (KairoX86#217). */
-    @Volatile private var hardDiskBusy = false
+    /** Whether a disk is being set, which may unpack one from an archive (KairoX86#217) or copy one in (#334). */
+    @Volatile private var diskBusy = false
+
+    /** The machine's disks: its hard disk, then a row for each removable drive it has (KairoX86#334). */
+    private fun disksGroup(entry: X86Entry, enabled: () -> Boolean): RowGroup =
+        RowGroup(getString(FrontendR.string.kairo_media_disks).uppercase(), listOf(hardDiskRow(entry, enabled)) +
+            X86Library.drives(configStore.config(entry)).map { slot -> driveRow(entry, slot, enabled) })
+
+    /** The disk kind removable drive [slot] takes: a floppy in A and B, a CD in the CD-ROM. */
+    private fun driveKind(slot: Int) = if (slot < 2) DiskKind.FLOPPY else DiskKind.CD
+
+    /**
+     * Removable drive [slot] of [entry] (KairoX86#334): while the machine is stopped, the image its
+     * 86box.cfg puts in at the start, none, one of its folder's (or an archive's there), or, on the
+     * Other page, one from anywhere in the games folder, which becomes the machine's own
+     * (X86Library.setMedium). While it runs, the drive itself, as the Disks page changes it: 86Box
+     * keeps what the drive holds in 86box.cfg when the machine ends, so the two stay one.
+     */
+    private fun driveRow(entry: X86Entry, slot: Int, enabled: () -> Boolean): SettingsRow {
+        val label = mediaSlots[slot].label.resolve(this)
+        if (session?.entryId == entry.id && machineRunning)
+            return SettingsRow.choice("drive-$slot", label, mediaChoice(slot),
+                value = { mountedMedia()[slot]?.displayName ?: getString(FrontendR.string.kairo_empty) }, enabled = enabled)
+        fun takes(disk: X86Entry) = disk.playable && X86Library.diskKind(disk.diskName) == driveKind(slot)
+        val spec = GameDisks.choice(this, label, { entry.displayName }, {
+            machineDisks(entry).filter(::takes)
+        }, {
+            val own = machineDisks(entry).map { it.id }.toSet()
+            machines.disks(libraryTree()).filter { takes(it) && it.id !in own }
+        }, {
+            configStore.value(entry, X86Library.DRIVES, X86Library.DRIVE_KEYS[slot])?.takeIf { it.isNotEmpty() }
+                ?.let { idOf(entry, it.replace('\\', '/')) } ?: GameDisks.EMPTY
+        }, insert = { disk -> setDisk(entry) { cancelled, progress -> machines.setMedium(entry, libraryTree(), slot, disk, cancelled, progress) } })
+        return SettingsRow.choice("drive-$slot", label, spec, enabled = { enabled() && !diskBusy })
+    }
+
+    /** The disks of [entry]'s folder, and those in its archives not unpacked yet. */
+    private fun machineDisks(entry: X86Entry): List<X86Entry> {
+        val disks = machines.disks(libraryTree())
+        val ids = disks.map { it.id }.toSet()
+        return disks.filter { disk ->
+            inFolder(entry, disk.path) && (disk.zipEntry == null || idOf(entry, machines.unpackedPath(disk)) !in ids)
+        }
+    }
+
+    private fun inFolder(entry: X86Entry, path: String) = entry.path.isEmpty() || path.startsWith("${entry.path}/")
+
+    /** The ID of the file at [relative] in [entry]'s folder, as the library keys its disks. */
+    private fun idOf(entry: X86Entry, relative: String) = if (entry.path.isEmpty()) relative else "${entry.path}/$relative"
 
     /**
      * The machine's hard disk (KairoX86#217): none, one of its folder's, or, on the Other page, one
@@ -126,34 +173,34 @@ class MainActivity : MachineActivity<X86Entry>() {
      * chosen. A hard disk goes in when the machine starts, so it is a setting, not a drive of the
      * Disks page. Choosing one may unpack a large image, so it runs on a thread of its own.
      */
-    private fun hardDiskGroup(entry: X86Entry, enabled: () -> Boolean): RowGroup {
+    private fun hardDiskRow(entry: X86Entry, enabled: () -> Boolean): SettingsRow {
         val label = getString(FrontendR.string.kairo_hard_disk)
         fun hardDisk(disk: X86Entry) = disk.playable && X86Library.diskKind(disk.diskName) == DiskKind.HARD_DISK
-        fun inFolder(path: String) = entry.path.isEmpty() || path.startsWith("${entry.path}/")
-        fun idOf(relative: String) = if (entry.path.isEmpty()) relative else "${entry.path}/$relative"
         val spec = GameDisks.choice(this, label, { entry.displayName }, {
-            val disks = machines.disks(libraryTree())
-            val ids = disks.map { it.id }.toSet()
             // The folder's hard disks, and those of the archives in it not unpacked yet.
-            disks.filter { disk -> hardDisk(disk) && inFolder(disk.path) && (disk.zipEntry == null || idOf(machines.unpackedPath(disk)) !in ids) }
+            machineDisks(entry).filter(::hardDisk)
         }, {
             machines.disks(libraryTree()).filter { it.zipEntry != null && hardDisk(it) }
         }, {
-            configStore.value(entry, X86Library.HARD_DISKS, "hdd_01_fn")?.takeIf { it.isNotEmpty() }?.let { idOf(it.replace('\\', '/')) }
+            configStore.value(entry, X86Library.HARD_DISKS, "hdd_01_fn")?.takeIf { it.isNotEmpty() }?.let { idOf(entry, it.replace('\\', '/')) }
                 ?: GameDisks.EMPTY
-        }, insert = { disk -> setHardDisk(entry, disk) })
-        return RowGroup(label.uppercase(), listOf(SettingsRow.choice("hard-disk", label, spec,
-            enabled = { enabled() && !hardDiskBusy })))
+        }, insert = { disk ->
+            setDisk(entry) { cancelled, progress -> machines.setHardDisk(entry, libraryTree(), disk, cancelled, progress) }
+        })
+        return SettingsRow.choice("hard-disk", label, spec, enabled = { enabled() && !diskBusy })
     }
 
-    /** Makes [disk] [entry]'s hard disk, or none for null, on a thread: unpacking one may take a while. */
-    private fun setHardDisk(entry: X86Entry, disk: X86Entry?) {
-        if (hardDiskBusy) return
-        hardDiskBusy = true
+    /**
+     * Sets one of [entry]'s disks with [change] on a thread, which returns its 86box.cfg changes:
+     * unpacking or copying one may take a while.
+     */
+    private fun setDisk(entry: X86Entry, change: (AtomicBoolean, (String) -> Unit) -> List<X86Settings.Change>) {
+        if (diskBusy) return
+        diskBusy = true
         pages.refresh()
         Thread {
             val result = runCatching {
-                machines.setHardDisk(entry, libraryTree(), disk, AtomicBoolean(false)) { message -> runOnUiThread { toast(message) } }
+                change(AtomicBoolean(false)) { message -> runOnUiThread { toast(message) } }
             }
             configStore.forget(entry.id)
             // A running machine's 86Box saves its own configuration as it ends: the change goes over it.
@@ -161,12 +208,12 @@ class MainActivity : MachineActivity<X86Entry>() {
                 session?.takeIf { it.entryId == entry.id }?.let { running -> changes.forEach { running.edit(it.section, it.key, it.value) } }
             }
             runOnUiThread {
-                hardDiskBusy = false
+                diskBusy = false
                 toast(result.exceptionOrNull()?.let { it.message ?: getString(FrontendR.string.kairo_save_failed, it.toString()) }
                     ?: getString(FrontendR.string.kairo_saved_machine), long = result.isFailure)
                 pages.refresh()
             }
-        }.apply { name = "KairoX86-hard-disk"; start() }
+        }.apply { name = "KairoX86-disk"; start() }
     }
 
     /** The board's options and each chosen card's, a group each (KairoX86#201). */
