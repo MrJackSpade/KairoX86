@@ -8,14 +8,15 @@ fails). A mismatch writes a diff image beside the run and fails. Cards run --job
   With --device <adb serial> the runs are on that Android device: --remote (default /data/local/tmp/kx86/gpu) holds
   bin/ (the release core's game_profile, libkairox86_86box.so and libc++_shared.so), roms/ and tests/; hardware_query
   and the ROM set given are the PC's, which list the cards.
-             [--frames n] [--shots n] [--a off|on] [--b off|on] [--jobs n]
+             [--frames n] [--shots n] [--a off|on[+rec]] [--b off|on[+rec]] [--jobs n]
 
 Each card runs on its bus's test board (the bus from the core's hardware list): PCI and AGP cards on the 686BX,
 MCA cards (and the MCA XGA and XGA-2, add-ons beside the board's own VGA) on the PS/2 Model 80 type 3 (its CMOS
 unset, so F1 past POST's 161 and 163), the rest (ISA, VLB, the boards' own) on the 486, period boards whose BIOSes
 they suit; a card its board does not take runs on the first that does. The add-on 3D cards (Voodoo Graphics,
 Voodoo2) run beside the 686BX's S3 Trio64. The 3dfx cards' software side draws with 86Box's C rasteriser
-(their recompiler off: KairoX86#289). Every test ends halted at TEST_END: a run that does not get there
+(their recompiler off: KairoX86#289; a mode's +rec turns it on, so --a off --b off+rec checks the recompiler
+against the C rasteriser). Every test ends halted at TEST_END: a run that does not get there
 fails. Frames match when their hashes do, or else when no channel of any pixel differs by more than
 MAX_CHANNEL and at most MAX_SHARE of the pixels differ at all.
 """
@@ -144,7 +145,17 @@ def query(tool, roms, q):
     return json.loads(out.stdout)
 
 
-def machine_config(board, card, test, accel, name):
+def run_mode(mode):
+    """A run's mode (--a, --b): 'off' or 'on' (Hardware acceleration), with '+rec' for the 3dfx cards' recompiler on
+    (KairoX86#289: off+rec against off checks the recompiler against the C rasteriser); whether each is on"""
+    accel, _, extra = mode.partition('+')
+    if accel not in ('off', 'on') or extra not in ('', 'rec'):
+        raise SystemExit(f'unknown run mode {mode!r}: off or on, optionally +rec')
+    return accel == 'on', extra == 'rec'
+
+
+def machine_config(board, card, test, mode, name):
+    accel, recompiler = run_mode(mode)
     video = (f"gfxcard = {card}\n" if card not in ADD_ONS else f"gfxcard = {ADD_ONS[card][2]}\n" + ADD_ONS[card][0])
     if card in ONBOARD:
         video = "gfxcard = internal\n"
@@ -153,6 +164,8 @@ def machine_config(board, card, test, accel, name):
         # A device reads its settings from its name's section, "<name> #<n>" for instance n > 0 (the AGP
         # Banshee is instance 1)
         voodoo = f"\n[{name}]\nrecompiler = 0\n\n[{name} #1]\nrecompiler = 0\n"
+    if recompiler:
+        voodoo = voodoo.replace('recompiler = 0', 'recompiler = 1')
     voodoo += BOARD_VIDEO.get(board, "")
     return (f"[Machine]\n{BOARDS[board]}cpu_use_dynarec = 1\nfpu_type = internal\ntime_sync = disabled\n\n"
             f"[Video]\n{video}{voodoo}\n[Input devices]\n"
@@ -161,7 +174,7 @@ def machine_config(board, card, test, accel, name):
             f"[Storage controllers]\nhdc = none\n\n"
             f"[Floppy and CD-ROM drives]\nfdd_01_type = {BOARD_FDD.get(board, '525_2dd' if board in BOARDS_8086 else '35_2hd')}\n"
             f"fdd_01_fn = {test}.img\nfdd_02_type = none\n\n"
-            f"[KairoX86]\nhardware_acceleration = {1 if accel == 'on' else 0}\n")
+            f"[KairoX86]\nhardware_acceleration = {1 if accel else 0}\n")
 
 
 def adb(args, *command, check=True):
@@ -377,11 +390,12 @@ def main():
                 found.append((card, test, problem))
             else:
                 shutil.rmtree(folder)
-            on = hb if args.b == 'on' else ha
+            gpu_a, gpu_b = run_mode(args.a)[0], run_mode(args.b)[0]
+            on = hb if gpu_b else ha
             drawn = (f"GPU lines {on['gpu_lines']}" + (f", 3D {on['gpu_3d']}" if on['gpu_3d'] else '')
                      + (f", built {', '.join(on['gpu_kernels'])}" if on['gpu_kernels'] else ''))
             print(f'{card} ({board}) {test}: ' + ('match' if problem is None else f'DIFFERS: {problem}')
-                  + (f' ({drawn})' if 'on' in (args.a, args.b) else ''), flush=True)
+                  + (f' ({drawn})' if gpu_a or gpu_b else ''), flush=True)
         return found
 
     with ThreadPoolExecutor(args.jobs) as pool:
