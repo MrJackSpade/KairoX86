@@ -29,7 +29,7 @@ SRC=src/video/vid_ati_rage128_gpu_seg.comp
 LAD=src/video/vid_ati_rage128_gpu_lad.comp
 RMW=src/video/vid_ati_rage128_gpu_rmw.comp
 OV0=src/video/vid_ati_rage128_gpu_ov0.comp
-OUT=src/include/86box/vid_ati_rage128_gpu_spv.h
+OUT=src/include/86box/vid_ati_rage128_gpu_spv_kairo.h
 # glslc prints "shaderc ...", "spirv-tools ...", "glslang ..." then a
 # blank line and the target; the first three lines are its identity
 GLSLC_VER=$($GLSLC --version | head -n 1)

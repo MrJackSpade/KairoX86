@@ -103,7 +103,7 @@ rage128_gpu_mode(void)
 #        include <unistd.h>
 #    endif
 #    include <86box/plat.h>
-#    include <86box/vid_ati_rage128_gpu_spv.h>
+#    include <86box/vid_ati_rage128_gpu_spv_kairo.h> /* KairoX86#325: regenerated with datatype 13 */
 #    include <86box/vid_ati_rage128_gpu_comb.h>
 
 /* Tester telemetry. With R128_GPU_TELEMETRY set, every line this file
@@ -3150,14 +3150,13 @@ gpu_stage_why(const r128_gpu_t *g, const rage128_raster_state_t *rs, int st)
     const r3d_stage_hdr_t *h  = &rs->d.sh[st];
     const uint32_t        *so = st ? rs->sec_stage_off : rs->prim_stage_off;
 
-    /* every datatype the interpreter decodes except 13 (alpha and
-       intensity 8:8), which the GPU kernels do not decode and which
-       stays on the CPU path. 10 (CI16) stays there too: the interpreter
-       has no decoder for it either and samples it as opaque white */
+    /* every datatype the interpreter decodes, 13 (alpha and intensity
+       8:8) included (KairoX86#239). 10 (CI16) stays on the CPU path: the
+       interpreter has no decoder for it and samples it as opaque white */
     if (!(h->dt == 4 || h->dt == 15 || h->dt == 6
           || h->dt == 1 || h->dt == 2 || h->dt == 3
           || h->dt == 5 || h->dt == 7 || h->dt == 8 || h->dt == 9
-          || h->dt == 11 || h->dt == 12 || h->dt == 14
+          || h->dt == 11 || h->dt == 12 || h->dt == 13 || h->dt == 14
           || (h->dt == 0 && h->s3tc <= 3)))
         return 1;
     if (h->top < 0 || h->top > 10)

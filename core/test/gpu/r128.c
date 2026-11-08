@@ -9,8 +9,9 @@
  * transparent; Bresenham lines in every octant. Then at 16 and 32 bits, 3D through the CCE, its packets written by the
  * processor (PIO): Gouraud triangles through the depth test (16-bit Z, kept in the end state too) under four compare
  * functions, alpha-blended ones and the alpha test; textured ones (the picture's format, bilinear, modulated by the
- * vertex colours) as a fan and a strip. The display waits for the CCE before it draws a line (KairoX86#302), so what
- * a picture shows does not depend on the host's threads. The engine's status is never read. Any other card returns at
+ * vertex colours) as a fan and a strip, then the same with a texture of datatype 13 (alpha and intensity 8:8). The
+ * display waits for the CCE before it draws a line (KairoX86#302), so what a picture shows does not depend on the
+ * host's threads. The engine's status is never read. Any other card returns at
  * once.
  *
  * Copyright 2026 MrJackSpade. GPL-2.0-or-later.
@@ -304,16 +305,16 @@ static void p_3d(u32 salt) {
     pm4_end();
 }
 
-/* Textured: the texture (the picture's format, 64 x 64) modulated by the vertex colours, a fan and a strip */
-static void p_tex(u32 salt) {
-    for (u32 i = 0; i < 64 * 64 * bytes / 4; i++)
+/* Textured: the texture (64 x 64 of tex_dt, tex_bytes a texel) modulated by the vertex colours, a fan and a strip */
+static void p_tex_of(u32 salt, u32 tex_dt, u32 tex_bytes) {
+    for (u32 i = 0; i < 64 * 64 * tex_bytes / 4; i++)
         ((volatile u32 *) (fb + TEX_OFF))[i] = pattern(i % 32, i / 32, salt);
     clear_z();
     reg(PM4_BUFFER_CNTL, 0x10000000u);
     reg(PM4_VC_FPU_SETUP, 0x1eu | (2u << 5));
     reg(SCALE_3D_CNTL, (2u << 6) | (1u << 30));
     reg(SETUP_CNTL, 0x00080200u);
-    context((1u << 0) | (1u << 1) | (1u << 4), 2, 0, datatype);
+    context((1u << 0) | (1u << 1) | (1u << 4), 2, 0, tex_dt);
     for (u32 k = 0; k < 2; k++) {
         float xyz[18], st[12];
         u32   argb[6];
@@ -329,6 +330,12 @@ static void p_tex(u32 salt) {
     }
     pm4_end();
 }
+
+/* The picture's format */
+static void p_tex(u32 salt) { p_tex_of(salt, datatype, bytes); }
+
+/* Datatype 13: alpha and intensity 8:8 (KairoX86#325) */
+static void p_tex_ai88(u32 salt) { p_tex_of(salt, 13, 2); }
 
 void test_main(void) {
     __asm__ volatile("fninit");
@@ -374,6 +381,10 @@ void test_main(void) {
         copy_z();
         clear(0x68 + f);
         p_tex(0x28 + f);
+        wait_ticks(4);
+        copy_out();
+        clear(0x70 + f);
+        p_tex_ai88(0x30 + f);
         wait_ticks(4);
         copy_out();
     }

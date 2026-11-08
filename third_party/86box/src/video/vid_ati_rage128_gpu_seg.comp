@@ -613,7 +613,7 @@ yuv_to_argb(uint a, int y, int cb, int cr)
 
 /* rr_texel for every datatype the interpreter decodes, which is all of
    PRIMARY_DATATYPE but 10, CI16 (SDK: Texture Mapping, p. 6-39 / PDF
-   151); code 0, the guide's 2 bpp VQ, carries the S3TC block formats
+   151), 13 (alpha and intensity 8:8, KairoX86#239) included; code 0, the guide's 2 bpp VQ, carries the S3TC block formats
    here, as the interpreter's r3d_texel reads it. Each fetch masks its
    address, then reads linear, like the interpreter; formats that fetch
    several times (RGB888, YUV 4:2:2) mask each fetch the way r3d_texel
@@ -664,6 +664,11 @@ texel(uint dt, uint s3tc, uint palb, bool stgd, uint base, uint mask, uint lw,
         case 8u: /* Y8 gray scale: intensity to RGB, opaque */
             t = tldu8(stgd, taddr(stgd, base, mask, off));
             return 0xff000000u | (t << 16) | (t << 8) | t;
+        case 29u:
+        case 13u: /* alpha and intensity 8:8: alpha the high byte, the
+                     intensity (the low byte) copied to R, G and B */
+            t = tldu16(stgd, taddr(stgd, base, mask, off * 2u));
+            return ((t & 0xff00u) << 16) | ((t & 0xffu) * 0x010101u) | amask;
         case 25u:
         case 9u: /* RGB8 gray scale: intensity in all four channels */
             t = tldu8(stgd, taddr(stgd, base, mask, off));

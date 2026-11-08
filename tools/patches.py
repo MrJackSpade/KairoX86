@@ -5879,6 +5879,28 @@ KAIROX86_GPU_F82 = [
      '\n            /* KairoX86#316: the GPU draws the line, else the CPU, after what the GPU still has to draw there */\n            if (!f82c425_render_gpu(f82c425)) {\n                if (kairo_gpu_on)\n                    kairo_gpu_scan_touch(buffer32, (uint32_t) (buffer32->line[f82c425->displine] - buffer32->dat), (uint32_t) buffer32->w);\n                switch (f82c425->cga.cgamode & 0x13) {\n                    case 0x12:\n                        f82c425_cgaline6(f82c425);\n                        break;\n                    case 0x02:\n                        f82c425_cgaline4(f82c425);\n                        break;\n                    case 0x00:\n                    case 0x01:\n                        f82c425_text_row(f82c425);\n                        break;\n\n                    default:\n                        break;\n                }\n            }\n'),
 ]
 
+# KairoX86#325: the Rage 128 GPU raster draws textures of datatype 13 (alpha and intensity 8:8): the kernel's texel()
+# decodes it as r3d_texel does and gpu_stage_why takes it. Its SPIR-V, regenerated with the recorded toolchain
+# (shaderc v2026.1, SPIRV-Tools v2026.4), is Kairo's own vid_ati_rage128_gpu_spv_kairo.h (ADDED), the snapshot's
+# header removed; the include and the regen script's output name it.
+KAIROX86_GPU_R128_AI88 = [
+    ('86box/src/video/vid_ati_rage128_gpu.c',
+     '#    include <86box/plat.h>\n#    include <86box/vid_ati_rage128_gpu_spv.h>\n#    include <86box/vid_ati_rage128_gpu_comb.h>\n',
+     '#    include <86box/plat.h>\n#    include <86box/vid_ati_rage128_gpu_spv_kairo.h> /* KairoX86#325: regenerated with datatype 13 */\n#    include <86box/vid_ati_rage128_gpu_comb.h>\n'),
+    ('86box/src/video/vid_ati_rage128_gpu.c',
+     '\n    /* every datatype the interpreter decodes except 13 (alpha and\n       intensity 8:8), which the GPU kernels do not decode and which\n       stays on the CPU path. 10 (CI16) stays there too: the interpreter\n       has no decoder for it either and samples it as opaque white */\n    if (!(h->dt == 4 || h->dt == 15 || h->dt == 6\n          || h->dt == 1 || h->dt == 2 || h->dt == 3\n          || h->dt == 5 || h->dt == 7 || h->dt == 8 || h->dt == 9\n          || h->dt == 11 || h->dt == 12 || h->dt == 14\n          || (h->dt == 0 && h->s3tc <= 3)))\n',
+     '\n    /* every datatype the interpreter decodes, 13 (alpha and intensity\n       8:8) included (KairoX86#239). 10 (CI16) stays on the CPU path: the\n       interpreter has no decoder for it and samples it as opaque white */\n    if (!(h->dt == 4 || h->dt == 15 || h->dt == 6\n          || h->dt == 1 || h->dt == 2 || h->dt == 3\n          || h->dt == 5 || h->dt == 7 || h->dt == 8 || h->dt == 9\n          || h->dt == 11 || h->dt == 12 || h->dt == 13 || h->dt == 14\n          || (h->dt == 0 && h->s3tc <= 3)))\n'),
+    ('86box/src/video/vid_ati_rage128_gpu_seg.comp',
+     "   PRIMARY_DATATYPE but 10, CI16 (SDK: Texture Mapping, p. 6-39 / PDF\n   151); code 0, the guide's 2 bpp VQ, carries the S3TC block formats\n   here, as the interpreter's r3d_texel reads it. Each fetch masks its\n",
+     "   PRIMARY_DATATYPE but 10, CI16 (SDK: Texture Mapping, p. 6-39 / PDF\n   151), 13 (alpha and intensity 8:8, KairoX86#239) included; code 0, the guide's 2 bpp VQ, carries the S3TC block formats\n   here, as the interpreter's r3d_texel reads it. Each fetch masks its\n"),
+    ('86box/src/video/vid_ati_rage128_gpu_seg.comp',
+     '            return 0xff000000u | (t << 16) | (t << 8) | t;\n        case 25u:\n',
+     '            return 0xff000000u | (t << 16) | (t << 8) | t;\n        case 29u:\n        case 13u: /* alpha and intensity 8:8: alpha the high byte, the\n                     intensity (the low byte) copied to R, G and B */\n            t = tldu16(stgd, taddr(stgd, base, mask, off * 2u));\n            return ((t & 0xff00u) << 16) | ((t & 0xffu) * 0x010101u) | amask;\n        case 25u:\n'),
+    ('86box/scripts/regen-r128-gpu-spv.sh',
+     'OV0=src/video/vid_ati_rage128_gpu_ov0.comp\nOUT=src/include/86box/vid_ati_rage128_gpu_spv.h\n# glslc prints "shaderc ...", "spirv-tools ...", "glslang ..." then a\n',
+     'OV0=src/video/vid_ati_rage128_gpu_ov0.comp\nOUT=src/include/86box/vid_ati_rage128_gpu_spv_kairo.h\n# glslc prints "shaderc ...", "spirv-tools ...", "glslang ..." then a\n'),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -6005,9 +6027,11 @@ PATCHES = {
     'kairox86-gpu-pc3270-diag': KAIROX86_GPU_PC3270_DIAG,
     'kairox86-gpu-cga-lightpen': KAIROX86_GPU_CGA_LIGHTPEN,
     'kairox86-gpu-ibm7690': KAIROX86_GPU_IBM7690,
+    'kairox86-gpu-r128-ai88': KAIROX86_GPU_R128_AI88,
 }
 
 ADDED = [
+    '86box/src/include/86box/vid_ati_rage128_gpu_spv_kairo.h',
     '86box/src/device/kairo_cassette.c',
     '86box/src/include/86box/kairo_gpu.h',
     '86box/src/include/86box/kairo_gpu_chips69000.h',
@@ -6043,6 +6067,7 @@ ADDED = [
 # (PCE's cassette.c and cassette.h) is replaced by KairoX86's own kairo_cassette.c/.h, with the same
 # calls; VDE networking (net_vde.c, Linux hosts only) is left out.
 REMOVED = [
+    '86box/src/include/86box/vid_ati_rage128_gpu_spv.h',
     '86box/src/device/cassette.c',
     '86box/src/include/86box/cassette.h',
     '86box/src/network/net_vde.c',
