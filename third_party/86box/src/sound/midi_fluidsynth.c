@@ -18,6 +18,8 @@
 #include <86box/sound.h>
 #include <86box/plat_unused.h>
 #include <86box/plat.h>
+#include <86box/mem.h>
+#include <86box/rom.h>
 
 #define BUFFER_SEGMENTS            10
 
@@ -194,6 +196,10 @@ fluidsynth_init(UNUSED(const device_t *info))
     data->synth = new_fluid_synth(data->settings);
 
     const char *sound_font = device_get_config_string("sound_font");
+    /* KairoX86#306: with no SoundFont of the player's, the one the app ships in the ROM set */
+    char kairo_sound_font[1024];
+    if ((!sound_font || (sound_font[0] == 0)) && rom_getfile("roms/sound/kairo/GeneralUser-GS.sf2", kairo_sound_font, sizeof(kairo_sound_font)))
+        sound_font = kairo_sound_font;
 #ifdef __unix__
     if (!sound_font || sound_font[0] == 0)
         sound_font = (access("/usr/share/sounds/sf2/FluidR3_GM.sf2", F_OK) == 0 ? "/usr/share/sounds/sf2/FluidR3_GM.sf2" :
@@ -213,6 +219,9 @@ fluidsynth_init(UNUSED(const device_t *info))
     }
 #endif
     data->sound_font = fluid_synth_sfload(data->synth, sound_font, 1);
+    /* KairoX86#306: a SoundFont that does not load ends the machine with its name, not silent music */
+    if (data->sound_font == FLUID_FAILED)
+        fatal("FluidSynth could not load the SoundFont \"%s\"\n", sound_font ? sound_font : "");
 
     if (device_get_config_int("chorus")) {
 #ifndef USE_OLD_FLUIDSYNTH_API

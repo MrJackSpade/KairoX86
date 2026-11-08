@@ -6,7 +6,9 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -25,6 +27,9 @@ struct Config {
     // Other than 0, a repeatable run (KairoX86#36): 86Box's random numbers from this seed and the
     // guest's clock in guest time. The app runs with 0, as a PC does.
     uint32_t seed = 0;
+    // Where the guest's MIDI goes when its MIDI out device is "MIDI port" (KairoX86#305): each whole
+    // message, on the emulation thread. Without one, nowhere.
+    std::function<void(const uint8_t *message, size_t length)> midi;
 };
 
 class X86Machine {

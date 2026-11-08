@@ -71,6 +71,9 @@ struct KairoX86Host {
 	void (*fatal)(void *context, const char *message);
 	/* A message 86Box would show in a message box and carry on. */
 	void (*notice)(void *context, const char *message);
+	/* One whole MIDI message the guest sent to the "MIDI port" device (KairoX86#305), its bytes as the guest
+	 * wrote them; called on the emulation thread, so it must not wait. */
+	void (*midi)(void *context, const uint8_t *message, int length);
 };
 
 struct KairoX86Api {

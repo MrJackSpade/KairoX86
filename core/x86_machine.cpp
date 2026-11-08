@@ -22,6 +22,11 @@ struct X86Machine::Impl {
         if (self->fatal.empty()) self->fatal = message;
     }
     static void on_notice(void *, const char *) {}
+    std::function<void(const uint8_t *, size_t)> midi;
+    static void on_midi(void *context, const uint8_t *message, int length) {
+        auto *self = static_cast<Impl *>(context);
+        if (self->midi) self->midi(message, size_t(length));
+    }
 };
 
 X86Machine::X86Machine(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
@@ -31,7 +36,8 @@ std::unique_ptr<X86Machine> X86Machine::create(const Config &config, std::string
     impl->library = X86Library::load(error);
     if (!impl->library) return nullptr;
     impl->api = &impl->library->api();
-    KairoX86Host host{impl.get(), &Impl::on_fatal, &Impl::on_notice};
+    impl->midi = config.midi;
+    KairoX86Host host{impl.get(), &Impl::on_fatal, &Impl::on_notice, &Impl::on_midi};
     if (!impl->api->start(config.machine_folder.c_str(), config.rom_folder.c_str(), &host, config.seed)) {
         error = impl->fatal.empty() ? "86Box could not start the machine" : impl->fatal;
         // KairoX86#230: a start that failed part-way may have started 86Box's threads (the floppy sound's): they end

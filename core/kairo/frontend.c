@@ -50,6 +50,7 @@
 #endif
 
 #include "kairo_x86.h"
+#include "kairo_host.h"
 #include "hardware.h"
 #include <86box/kairo_gpu.h>
 
@@ -132,6 +133,12 @@ machine_over(const char *reason)
 {
     report(host.fatal, reason);
     atomic_store(&dead, true);
+}
+
+void
+kairo_host_midi(const uint8_t *message, size_t length)
+{
+    host.midi(host.context, message, (int) length);
 }
 
 /* ---- Sound: every stream resampled to OUTPUT_RATE and mixed ---- */

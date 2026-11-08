@@ -22,11 +22,13 @@
     <string name="d86_45_hz_jmp2_not_populated_73ddb5">45 Hz (JMP2 not populated)</string>
     <string name="d86_4_bit_41a020">4-bit</string>
     <string name="d86_4_mb_b6de6b">4 MB</string>
+    <string name="d86_4th_order_bbe85c">4th Order</string>
     <string name="d86_512_kb_406c35">512 KB</string>
     <string name="d86_60_hz_jmp2_2_ad41bf">60 Hz (JMP2 = 2)</string>
     <string name="d86_64_kb_91ab95">64 KB</string>
     <string name="d86_64_mb_a2319f">64 MB</string>
     <string name="d86_6ch_variant_6_channel_6e13eb">6CH variant (6-channel)</string>
+    <string name="d86_7th_order_ef6b62">7th Order</string>
     <string name="d86_80_conductor_cable_181d75">80-conductor cable</string>
     <string name="d86_8_bit_a35efa">8-bit</string>
     <string name="d86_8_bit_top_pins_closed_required_for_xt_cl_d879cd">8-bit (top pins closed - required for XT-class 8-bit slots)</string>
@@ -50,6 +52,12 @@
     <string name="d86_bus_width_de70d9">Bus width</string>
     <string name="d86_buttons_503d46">Buttons</string>
     <string name="d86_character_set_ab0956">Character set</string>
+    <string name="d86_chorus_6973e1">Chorus</string>
+    <string name="d86_chorus_depth_f470b0">Chorus Depth</string>
+    <string name="d86_chorus_level_5a2afe">Chorus Level</string>
+    <string name="d86_chorus_speed_35f6f2">Chorus Speed</string>
+    <string name="d86_chorus_voices_853663">Chorus Voices</string>
+    <string name="d86_chorus_waveform_88cf25">Chorus Waveform</string>
     <string name="d86_codec_a33676">Codec</string>
     <string name="d86_color_1d0c83">Color</string>
     <string name="d86_color_40x25_5153_cga_386512">Color 40x25 (5153/CGA)</string>
@@ -78,6 +86,7 @@
     <string name="d86_dot_spacing_23d5da">Dot spacing</string>
     <string name="d86_dsp_version_95259a">DSP Version</string>
     <string name="d86_dynamic_recompiler_6a0912">Dynamic recompiler</string>
+    <string name="d86_dynamic_sample_loading_04ca20">Dynamic Sample Loading</string>
     <string name="d86_eisa_slot_088719">EISA slot</string>
     <string name="d86_emu8000_address_481671">EMU8000 Address</string>
     <string name="d86_enable_adlib_ports_da39e8">Enable Adlib ports</string>
@@ -113,11 +122,13 @@
     <string name="d86_ibm_nordic_cp_437_nordic_9a7c8a">IBM Nordic (CP 437-Nordic)</string>
     <string name="d86_ide_controller_ebb99e">IDE Controller</string>
     <string name="d86_initial_ram_size_7018b9">Initial RAM size</string>
+    <string name="d86_interpolation_method_e7ec55">Interpolation Method</string>
     <string name="d86_irq_6dcf08">IRQ</string>
     <string name="d86_korean_kasan_hangulmadang_16_vga_2b3a56">Korean (Kasan Hangulmadang-16 VGA)</string>
     <string name="d86_korean_trigem_286m_11e0b1">Korean (TriGem 286M)</string>
     <string name="d86_korean_trigem_f18876">Korean (TriGem)</string>
     <string name="d86_line_doubling_type_0aaddf">Line doubling type</string>
+    <string name="d86_linear_af502f">Linear</string>
     <string name="d86_linear_framebuffer_base_e0be35">Linear framebuffer base</string>
     <string name="d86_linear_interpolation_353a3b">Linear interpolation</string>
     <string name="d86_low_dma_4f9f60">Low DMA</string>
@@ -132,6 +143,7 @@
     <string name="d86_monochrome_5151_mda_white_b5a462">Monochrome (5151/MDA) (white)</string>
     <string name="d86_mpu_401_address_6545ce">MPU-401 Address</string>
     <string name="d86_new_6403f2">New</string>
+    <string name="d86_nice_ramp_6f2796">Nice ramp</string>
     <string name="d86_non_timed_original_ce4a53">Non-timed (original)</string>
     <string name="d86_none_6eef66">None</string>
     <string name="d86_off_cpu_renderer_fade21">Off (CPU renderer)</string>
@@ -139,6 +151,7 @@
     <string name="d86_old_fbb3c3">Old</string>
     <string name="d86_on_e0049a">On</string>
     <string name="d86_other_languages_80d5c6">Other languages</string>
+    <string name="d86_output_gain_56f164">Output Gain</string>
     <string name="d86_parallel_port_019607">Parallel Port</string>
     <string name="d86_plug_and_play_93ffca">Plug and Play</string>
     <string name="d86_ram_address_036c00">RAM Address</string>
@@ -150,6 +163,13 @@
     <string name="d86_regular_xt_58ce5d">Regular XT</string>
     <string name="d86_render_threads_87d848">Render threads</string>
     <string name="d86_rev_d_generic_6837ae">Rev. D (Generic)</string>
+    <string name="d86_reverb_052ba8">Reverb</string>
+    <string name="d86_reverb_damping_1f14e0">Reverb Damping</string>
+    <string name="d86_reverb_level_27aded">Reverb Level</string>
+    <string name="d86_reverb_output_gain_40f70e">Reverb Output Gain</string>
+    <string name="d86_reverb_room_size_be23cc">Reverb Room Size</string>
+    <string name="d86_reverb_width_e2431f">Reverb Width</string>
+    <string name="d86_reversed_stereo_ad6dfc">Reversed stereo</string>
     <string name="d86_revision_3beb9a">Revision</string>
     <string name="d86_rgb_type_de4a07">RGB type</string>
     <string name="d86_rows_52d0b3">Rows</string>
@@ -163,6 +183,7 @@
     <string name="d86_sid_model_272a97">SID Model</string>
     <string name="d86_sigmatel_stac9721t_stereo_550e42">SigmaTel STAC9721T (stereo)</string>
     <string name="d86_simple_doubling_717ccb">Simple doubling</string>
+    <string name="d86_sine_ca0c5d">Sine</string>
     <string name="d86_slot_1_56d27a">Slot 1</string>
     <string name="d86_slot_2_9f47b6">Slot 2</string>
     <string name="d86_slot_3_ce2450">Slot 3</string>
@@ -174,6 +195,7 @@
     <string name="d86_telnet_emulation_5743a4">Telnet emulation</string>
     <string name="d86_three_f3cd46">Three</string>
     <string name="d86_translate_26_17_05ab4b">Translate 26 -&gt; 17</string>
+    <string name="d86_triangle_73d3ae">Triangle</string>
     <string name="d86_true_color_014864">True color</string>
     <string name="d86_two_16e018">Two</string>
     <string name="d86_us_cp_437_7ff915">US (CP 437)</string>

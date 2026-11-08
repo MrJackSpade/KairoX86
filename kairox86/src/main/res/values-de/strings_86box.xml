@@ -43,6 +43,8 @@
     <string name="d86_4_bit_41a020">4 Bit</string>
     <!-- EN: 4 MB -->
     <string name="d86_4_mb_b6de6b">4 MB</string>
+    <!-- EN: 4th Order -->
+    <string name="d86_4th_order_bbe85c">4. Ordnung</string>
     <!-- EN: 512 KB -->
     <string name="d86_512_kb_406c35">512 KB</string>
     <!-- EN: 60 Hz (JMP2 = 2) -->
@@ -53,6 +55,8 @@
     <string name="d86_64_mb_a2319f">64 MB</string>
     <!-- EN: 6CH variant (6-channel) -->
     <string name="d86_6ch_variant_6_channel_6e13eb">6CH-Variante (6-Kanal)</string>
+    <!-- EN: 7th Order -->
+    <string name="d86_7th_order_ef6b62">7. Ordnung</string>
     <!-- EN: 80-conductor cable -->
     <string name="d86_80_conductor_cable_181d75">80-adriges Kabel</string>
     <!-- EN: 8-bit -->
@@ -99,6 +103,18 @@
     <string name="d86_buttons_503d46">Tasten</string>
     <!-- EN: Character set -->
     <string name="d86_character_set_ab0956">Zeichensatz</string>
+    <!-- EN: Chorus -->
+    <string name="d86_chorus_6973e1">Chor</string>
+    <!-- EN: Chorus Depth -->
+    <string name="d86_chorus_depth_f470b0">Chortiefe</string>
+    <!-- EN: Chorus Level -->
+    <string name="d86_chorus_level_5a2afe">Chorpegel</string>
+    <!-- EN: Chorus Speed -->
+    <string name="d86_chorus_speed_35f6f2">Chorgeschwindigkeit</string>
+    <!-- EN: Chorus Voices -->
+    <string name="d86_chorus_voices_853663">Chorstimmen</string>
+    <!-- EN: Chorus Waveform -->
+    <string name="d86_chorus_waveform_88cf25">Chor-Wellenform</string>
     <!-- EN: Codec -->
     <string name="d86_codec_a33676">Codec</string>
     <!-- EN: Color -->
@@ -155,6 +171,8 @@
     <string name="d86_dsp_version_95259a">DSP-Version</string>
     <!-- EN: Dynamic recompiler -->
     <string name="d86_dynamic_recompiler_6a0912">Dynamischer Recompiler</string>
+    <!-- EN: Dynamic Sample Loading -->
+    <string name="d86_dynamic_sample_loading_04ca20">Dynamisches Sample-Laden</string>
     <!-- EN: EISA slot -->
     <string name="d86_eisa_slot_088719">EISA-Steckplatz</string>
     <!-- EN: EMU8000 Address -->
@@ -225,6 +243,8 @@
     <string name="d86_ide_controller_ebb99e">IDE-Controller</string>
     <!-- EN: Initial RAM size -->
     <string name="d86_initial_ram_size_7018b9">Ursprüngliche RAM-Größe</string>
+    <!-- EN: Interpolation Method -->
+    <string name="d86_interpolation_method_e7ec55">Interpolationsmethode</string>
     <!-- EN: IRQ -->
     <string name="d86_irq_6dcf08">IRQ</string>
     <!-- EN: Korean (Kasan Hangulmadang-16 VGA) -->
@@ -235,6 +255,8 @@
     <string name="d86_korean_trigem_f18876">Koreanisch (TriGem)</string>
     <!-- EN: Line doubling type -->
     <string name="d86_line_doubling_type_0aaddf">Typ der Zeilenverdopplung</string>
+    <!-- EN: Linear -->
+    <string name="d86_linear_af502f">Lineare</string>
     <!-- EN: Linear framebuffer base -->
     <string name="d86_linear_framebuffer_base_e0be35">Lineare Framebuffer-Basis</string>
     <!-- EN: Linear interpolation -->
@@ -263,6 +285,8 @@
     <string name="d86_mpu_401_address_6545ce">MPU-401-Adresse</string>
     <!-- EN: New -->
     <string name="d86_new_6403f2">Neu</string>
+    <!-- EN: Nice ramp -->
+    <string name="d86_nice_ramp_6f2796">Schöne Rampe</string>
     <!-- EN: Non-timed (original) -->
     <string name="d86_non_timed_original_ce4a53">Nicht zeitgesteuert (Original)</string>
     <!-- EN: None -->
@@ -277,6 +301,8 @@
     <string name="d86_on_e0049a">Ein</string>
     <!-- EN: Other languages -->
     <string name="d86_other_languages_80d5c6">Andere Sprachen</string>
+    <!-- EN: Output Gain -->
+    <string name="d86_output_gain_56f164">Ausgangsverstärkung</string>
     <!-- EN: Parallel Port -->
     <string name="d86_parallel_port_019607">Parallelanschluss</string>
     <!-- EN: Plug and Play -->
@@ -299,6 +325,20 @@
     <string name="d86_render_threads_87d848">Render-Threads</string>
     <!-- EN: Rev. D (Generic) -->
     <string name="d86_rev_d_generic_6837ae">Rev. D (allgemein)</string>
+    <!-- EN: Reverb -->
+    <string name="d86_reverb_052ba8">Nachhall</string>
+    <!-- EN: Reverb Damping -->
+    <string name="d86_reverb_damping_1f14e0">Nachhalldämpfung</string>
+    <!-- EN: Reverb Level -->
+    <string name="d86_reverb_level_27aded">Nachhall-Pegel</string>
+    <!-- EN: Reverb Output Gain -->
+    <string name="d86_reverb_output_gain_40f70e">Nachhall-Ausgangsverstärkung</string>
+    <!-- EN: Reverb Room Size -->
+    <string name="d86_reverb_room_size_be23cc">Größe des Nachhallraums</string>
+    <!-- EN: Reverb Width -->
+    <string name="d86_reverb_width_e2431f">Nachhall-Breite</string>
+    <!-- EN: Reversed stereo -->
+    <string name="d86_reversed_stereo_ad6dfc">Umgekehrtes Stereo</string>
     <!-- EN: Revision -->
     <string name="d86_revision_3beb9a">Revision</string>
     <!-- EN: RGB type -->
@@ -325,6 +365,8 @@
     <string name="d86_sigmatel_stac9721t_stereo_550e42">SigmaTel STAC9721T (Stereo)</string>
     <!-- EN: Simple doubling -->
     <string name="d86_simple_doubling_717ccb">Einfache Verdoppelung</string>
+    <!-- EN: Sine -->
+    <string name="d86_sine_ca0c5d">Sinus</string>
     <!-- EN: Slot 1 -->
     <string name="d86_slot_1_56d27a">Steckplatz 1</string>
     <!-- EN: Slot 2 -->
@@ -347,6 +389,8 @@
     <string name="d86_three_f3cd46">Drei</string>
     <!-- EN: Translate 26 -> 17 -->
     <string name="d86_translate_26_17_05ab4b">Übersetzen 26 -&gt; 17</string>
+    <!-- EN: Triangle -->
+    <string name="d86_triangle_73d3ae">Dreieck</string>
     <!-- EN: True color -->
     <string name="d86_true_color_014864">True Color</string>
     <!-- EN: Two -->

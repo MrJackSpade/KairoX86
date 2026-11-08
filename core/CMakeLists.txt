@@ -3,7 +3,8 @@
 # KairoX86's frontend (core/kairo/frontend.c) in place of 86Box's own.
 #
 # The libraries 86Box links come from pinned snapshots: zlib, libpng and libchdr from the shared
-# frontend (shared/cmake/KairoLibraries.cmake, KairoChd.cmake), libsndfile and FreeType from
+# frontend (shared/cmake/KairoLibraries.cmake, KairoChd.cmake), its MIDI synths Munt and FluidSynth
+# from there too (KairoMidi.cmake, KairoX86#306), libsndfile and FreeType from
 # third_party/. 86Box finds them through the modules and package files in core/cmake/.
 cmake_minimum_required(VERSION 3.22)
 project(kairox86_core C CXX)
@@ -19,6 +20,7 @@ add_compile_options(-fsigned-char -O3)
 include("${KAIROX86_ROOT}/shared/cmake/KairoLibraries.cmake")
 include("${KAIROX86_ROOT}/shared/cmake/KairoChd.cmake")
 kairo_chd_library()
+include("${KAIROX86_ROOT}/shared/cmake/KairoMidi.cmake")
 
 # libsndfile, for CD audio tracks: WAV and AIFF, without its external codecs.
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
@@ -48,8 +50,9 @@ add_subdirectory("${KAIROX86_THIRD_PARTY}/freetype" freetype EXCLUDE_FROM_ALL)
 list(PREPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/cmake/modules")
 set(SndFile_DIR "${CMAKE_CURRENT_LIST_DIR}/cmake/packages" CACHE PATH "" FORCE)
 
-# 86Box: the library, KairoX86's frontend, the shared CHD reader, the ARM64 recompiler; none of
-# its own interfaces, host audio or MIDI libraries, or the automation socket.
+# 86Box: the library, KairoX86's frontend, the shared CHD reader, the ARM64 recompiler, the shared
+# MIDI synths (MT-32 and CM-32L through Munt, General MIDI through FluidSynth: KairoX86#306); none of
+# its own interfaces, host audio or MIDI ports, Sound Canvas emulation, or the automation socket.
 set(KAIRO_LIBRARY ON)
 set(KAIRO_LIBCHDR ON)
 # The frontend, and its view of the hardware 86Box offers for the machine settings (Kairo#143).
@@ -58,12 +61,12 @@ set(KAIRO_FRONTEND "${CMAKE_CURRENT_LIST_DIR}/kairo/frontend.c" "${CMAKE_CURRENT
     "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_voodoo.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_virge.c"
     "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_mach64.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_powervr.c"
     "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_seg.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_seg_run.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_mach64_2d.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_p9100.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_et4000w32.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_cl54xx.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_chips69000.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_tgui.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_xga.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_s3.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_ibm8514.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_mga.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_virge2d.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_banshee2d.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_wd90c3x.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_pgc.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_gxm.c"
-    "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_pages.c")
+    "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_pages.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/midi_port.c")
 set(QT OFF CACHE BOOL "" FORCE)
 set(OPENAL OFF CACHE BOOL "" FORCE)
 set(RTMIDI OFF CACHE BOOL "" FORCE)
-set(FLUIDSYNTH OFF CACHE BOOL "" FORCE)
-set(MUNT OFF CACHE BOOL "" FORCE)
+set(FLUIDSYNTH ON CACHE BOOL "" FORCE)
+set(MUNT ON CACHE BOOL "" FORCE)
 set(SOUNDCANVAS OFF CACHE BOOL "" FORCE)
 set(DISCORD OFF CACHE BOOL "" FORCE)
 set(AUTOMATION OFF CACHE BOOL "" FORCE)

@@ -56,6 +56,16 @@
     <string name="setting_processor">Processor</string>
     <string name="setting_video">Video card</string>
     <string name="setting_sound">Sound card</string>
+    <!-- What the machine's MIDI port plays its music through: none, an MT-32 synth, or FluidSynth (KairoX86#306). -->
+    <string name="setting_midi_out">MIDI out</string>
+    <!-- The MIDI out choice that sends the guest's MIDI to the MIDI port picked in Configurations (KairoX86#305). -->
+    <string name="setting_midi_port">MIDI port</string>
+    <!-- The sound bank FluidSynth plays General MIDI music with (KairoX86#306). -->
+    <string name="setting_sound_font">SoundFont</string>
+    <!-- The row under the SoundFont choices that imports a SoundFont file and picks it. -->
+    <string name="sound_font_import">Import a SoundFont…</string>
+    <string name="sound_font_too_large">A SoundFont is at most 2 GB; that file is larger</string>
+    <string name="sound_font_not_sf2">That file is not a SoundFont 2 (.sf2)</string>
     <string name="setting_network">Network card</string>
     <string name="setting_hdc">Hard disk controller</string>
     <string name="setting_scsi">SCSI controller</string>

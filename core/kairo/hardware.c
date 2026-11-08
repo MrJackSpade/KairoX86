@@ -28,6 +28,7 @@
 #include <86box/fdc_ext.h>
 #include <86box/mouse.h>
 #include <86box/gameport.h>
+#include <86box/midi.h>
 #include "cpu.h"
 
 #include "hardware.h"
@@ -129,6 +130,9 @@ static const struct kind kinds[] = {
     { "scsi",    scsi_card_get_internal_name,     scsi_card_getdevice,    scsi_card_available,    0,             1 },
     { "fdc",     fdc_card_get_internal_name,      fdc_card_getdevice,     fdc_card_available,     ONBOARD_ALWAYS, 0 },
     { "mouse",   mouse_internal_name,             mouse_device,           mouse_available,        MACHINE_MOUSE, 0 },
+    /* The MIDI out device the MPU-401 and the cards' MIDI ports play through (KairoX86#306): the synths, MT-32 and
+       CM-32L with the ROM set's firmware, and FluidSynth; midi_out_device_init adds it as instance 0. */
+    { "midi",    midi_out_device_get_internal_name, midi_out_device_getdevice, midi_out_device_available, 0,     0 },
 };
 
 /* Whether every file of a BIOS choice is in the ROM set, as machine_device_available counts them. */

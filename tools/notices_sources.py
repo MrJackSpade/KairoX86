@@ -21,6 +21,15 @@ KairoX86's source. Its license follows.'''
 FONT_TERMS = '''KairoX86's character ROM (the MDA and CGA fonts, firmware/video/mda/mda.rom, written by
 tools/make_font_rom.py) is made from the PC fonts in SeaBIOS's vgasrc/vgafonts.c, which say:'''
 
+MUNT_TERMS = '''Munt's libmt32emu emulates the Roland MT-32 and CM-32L for a game's MIDI music (KairoX86 builds it
+from shared/third_party/munt). It is distributed under the GNU Lesser General Public License,
+version 2.1 or (at your option) any later version, which follows.'''
+
+FLUIDSYNTH_TERMS = '''FluidSynth plays a game's General MIDI music from a SoundFont (KairoX86 builds it from
+shared/third_party/fluidsynth, with one change described in shared's docs/source-import.md). It is
+distributed under the GNU Lesser General Public License, version 2.1 or (at your option) any later
+version, which follows.'''
+
 # (title, source, [text]) in the order shown.
 SECTIONS = [
     ('86Box', 'https://86box.net/, third_party/86box',
@@ -49,4 +58,12 @@ SECTIONS = [
     ('zlib 1.3.2', 'https://zlib.net/, shared/third_party/zlib', [text('../shared/third_party/zlib/LICENSE')]),
     ('libpng 1.6.59', 'http://www.libpng.org/pub/png/libpng.html, shared/third_party/libpng',
      [text('../shared/third_party/libpng/LICENSE')]),
+    ('Munt libmt32emu 2.7.3 (LGPL-2.1-or-later)', 'https://github.com/munt/munt, shared/third_party/munt',
+     [MUNT_TERMS, text('../shared/third_party/munt/mt32emu/COPYING.LESSER.txt')]),
+    ('FluidSynth 2.5.2 (LGPL-2.1-or-later)', 'https://www.fluidsynth.org/, shared/third_party/fluidsynth',
+     [FLUIDSYNTH_TERMS, text('../shared/third_party/fluidsynth/LICENSE')]),
+    ('GCEM 1.18.0 (Apache-2.0)', 'https://github.com/kthohr/gcem, shared/third_party/gcem',
+     [text('../shared/third_party/gcem/NOTICE.txt'), text('../shared/third_party/gcem/LICENSE')]),
+    ('GeneralUser GS 2.0.3', 'https://www.schristiancollins.com, shared/third_party/generaluser-gs',
+     [text('../shared/third_party/generaluser-gs/LICENSE.txt')]),
 ]

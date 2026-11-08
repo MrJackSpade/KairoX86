@@ -79,6 +79,10 @@ typedef struct
 static const MIDI_OUT_DEVICE midi_out_devices[] = {
     // clang-format off
     { &device_none          },
+#ifdef USE_KAIRO_MIDI_PORT
+    /* KairoX86#305: the guest's MIDI, unchanged, to a MIDI port of the device (core/kairo/midi_port.c) */
+    { &kairo_midi_port_device },
+#endif /* USE_KAIRO_MIDI_PORT */
 #ifdef USE_FLUIDSYNTH
     { &fluidsynth_device    },
 #endif /* USE_FLUIDSYNTH */

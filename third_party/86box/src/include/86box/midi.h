@@ -127,6 +127,9 @@ extern const device_t cm32ln_device;
 #    ifdef USE_SOUNDCANVAS
 extern const device_t soundcanvas_device;
 #    endif /* USE_SOUNDCANVAS */
+#    ifdef USE_KAIRO_MIDI_PORT
+extern const device_t kairo_midi_port_device;
+#    endif /* USE_KAIRO_MIDI_PORT */
 #endif
 
 #endif /*EMU_SOUND_MIDI_H*/

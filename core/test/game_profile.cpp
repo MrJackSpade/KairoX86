@@ -21,6 +21,8 @@
 //   --shots <n>     write the picture every n measured frames as <work dir>/frame-<frame>.bmp
 //   --audio <file>  write the sound the first run makes, warmup included, as raw interleaved 16-bit
 //                   stereo at the rate the "audio " line gives, so a check can measure its level
+//   --midi <file>   write the MIDI the first run's guest sends its "MIDI port" device (KairoX86#305):
+//                   each whole message on a line, its bytes in hex, as the host's MIDI port gets them
 //   --hashes <file> write each frame's picture hash, sound hash and sound frames, warmup included,
 //                   and last the guest's state at the end (registers, tsc and all RAM)
 //   --seed <n>      the repeatable run's seed (default 1, so two runs repeat; 0 runs as the app does)
@@ -264,6 +266,7 @@ int main(int argc, char **argv) {
     uint32_t seed = 1;
     std::string hashes_path;
     std::string audio_path;
+    std::string midi_path;
     std::vector<MediaEvent> media;
     std::vector<std::array<long, 3>> places;
     std::string commands;
@@ -276,6 +279,7 @@ int main(int argc, char **argv) {
         else if (option == "--shots") shots = std::atol(value.c_str());
         else if (option == "--hashes") hashes_path = value;
         else if (option == "--audio") audio_path = value;
+        else if (option == "--midi") midi_path = value;
         else if (option == "--seed") seed = uint32_t(std::strtoul(value.c_str(), nullptr, 0));
         else if (option == "--runs") runs = std::atol(value.c_str());
         else if (option == "--until-halt") until_halt = value;
@@ -316,6 +320,15 @@ int main(int argc, char **argv) {
         config.rom_folder = argv[1];
         config.machine_folder = utf8(folder);
         config.seed = seed;
+        std::FILE *midi_out = nullptr;
+        if (!midi_path.empty() && run == 0) {
+            midi_out = std::fopen(midi_path.c_str(), "w");
+            if (!midi_out) return fail("cannot write " + midi_path);
+            config.midi = [midi_out](const uint8_t *message, size_t length) {
+                for (size_t i = 0; i < length; ++i) std::fprintf(midi_out, i ? " %02X" : "%02X", message[i]);
+                std::fputc('\n', midi_out);
+            };
+        }
         using Clock = std::chrono::steady_clock;
         const auto started = Clock::now();
         auto machine = kairox86::X86Machine::create(config, error);
@@ -451,6 +464,8 @@ int main(int argc, char **argv) {
         lines[size_t(run)].push_back(state);
         if (audio_out && std::fclose(audio_out) != 0) return fail("cannot write " + audio_path);
         machine->close();
+        // After the close, which sends what the MIDI port still held
+        if (midi_out && std::fclose(midi_out) != 0) return fail("cannot write " + midi_path);
     }
 
     if (!hashes_path.empty()) {

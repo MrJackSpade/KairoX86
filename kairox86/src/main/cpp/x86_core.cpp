@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "kairo/machine_core.h"
+#include "kairo/midi_out.h"
 #include "kairo/relative_warp.h"
 #include "x86_machine.h"
 #ifdef __ANDROID__
@@ -212,6 +213,8 @@ std::unique_ptr<kairo::MachineCore> kairo::create_core(const kairo::Launch &laun
     kairox86::Config config;
     config.machine_folder = launch.media[kMachineFolder];
     config.rom_folder = launch.firmware;
+    // The guest's MIDI on its "MIDI port" device, to the MIDI port the player picked (KairoX86#305)
+    config.midi = kairo::midi_out::send;
     auto machine = X86Machine::create(config, error);
     if (!machine) return nullptr;
     return std::make_unique<X86Core>(std::move(machine));

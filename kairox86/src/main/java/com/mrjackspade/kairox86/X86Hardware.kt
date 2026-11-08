@@ -32,9 +32,11 @@ object X86Hardware {
     const val FDC = "fdc"
     const val MOUSE = "mouse"
     const val JOYSTICK = "joystick"
+    /** The MIDI out device (KairoX86#306): the synths, MT-32 and CM-32L through Munt, General MIDI through FluidSynth. */
+    const val MIDI = "midi"
     /** The board itself, for [options]: its own options (KairoX86#208). */
     const val MACHINE = "machine"
-    private val KINDS = listOf(VIDEO, SOUND, NETWORK, HDC, SCSI, FDC, MOUSE, JOYSTICK)
+    private val KINDS = listOf(VIDEO, SOUND, NETWORK, HDC, SCSI, FDC, MOUSE, JOYSTICK, MIDI)
 
     /** The player's 86Box ROM set (MainActivity.firmwareFolder), set before the first query. */
     @Volatile lateinit var roms: File

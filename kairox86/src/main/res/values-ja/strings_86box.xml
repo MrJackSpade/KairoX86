@@ -43,6 +43,8 @@
     <string name="d86_4_bit_41a020">4 ビット</string>
     <!-- EN: 4 MB -->
     <string name="d86_4_mb_b6de6b">4 MB</string>
+    <!-- EN: 4th Order -->
+    <string name="d86_4th_order_bbe85c">4次</string>
     <!-- EN: 512 KB -->
     <string name="d86_512_kb_406c35">512 KB</string>
     <!-- EN: 60 Hz (JMP2 = 2) -->
@@ -53,6 +55,8 @@
     <string name="d86_64_mb_a2319f">64 MB</string>
     <!-- EN: 6CH variant (6-channel) -->
     <string name="d86_6ch_variant_6_channel_6e13eb">6CHバリアント（6チャンネル）</string>
+    <!-- EN: 7th Order -->
+    <string name="d86_7th_order_ef6b62">7次</string>
     <!-- EN: 80-conductor cable -->
     <string name="d86_80_conductor_cable_181d75">80 芯ケーブル</string>
     <!-- EN: 8-bit -->
@@ -99,6 +103,18 @@
     <string name="d86_buttons_503d46">ボタン</string>
     <!-- EN: Character set -->
     <string name="d86_character_set_ab0956">文字セット</string>
+    <!-- EN: Chorus -->
+    <string name="d86_chorus_6973e1">コーラス</string>
+    <!-- EN: Chorus Depth -->
+    <string name="d86_chorus_depth_f470b0">コーラスの深さ</string>
+    <!-- EN: Chorus Level -->
+    <string name="d86_chorus_level_5a2afe">コーラスレベル</string>
+    <!-- EN: Chorus Speed -->
+    <string name="d86_chorus_speed_35f6f2">コーラススピード</string>
+    <!-- EN: Chorus Voices -->
+    <string name="d86_chorus_voices_853663">コーラスの声</string>
+    <!-- EN: Chorus Waveform -->
+    <string name="d86_chorus_waveform_88cf25">コーラス波形</string>
     <!-- EN: Codec -->
     <string name="d86_codec_a33676">コーデック</string>
     <!-- EN: Color -->
@@ -155,6 +171,8 @@
     <string name="d86_dsp_version_95259a">DSP バージョン</string>
     <!-- EN: Dynamic recompiler -->
     <string name="d86_dynamic_recompiler_6a0912">動的再コンパイル</string>
+    <!-- EN: Dynamic Sample Loading -->
+    <string name="d86_dynamic_sample_loading_04ca20">サンプルの動的ロード</string>
     <!-- EN: EISA slot -->
     <string name="d86_eisa_slot_088719">EISA スロット</string>
     <!-- EN: EMU8000 Address -->
@@ -225,6 +243,8 @@
     <string name="d86_ide_controller_ebb99e">IDEコントローラ</string>
     <!-- EN: Initial RAM size -->
     <string name="d86_initial_ram_size_7018b9">初期RAMサイズ</string>
+    <!-- EN: Interpolation Method -->
+    <string name="d86_interpolation_method_e7ec55">補間法</string>
     <!-- EN: IRQ -->
     <string name="d86_irq_6dcf08">割り込み要求</string>
     <!-- EN: Korean (Kasan Hangulmadang-16 VGA) -->
@@ -235,6 +255,8 @@
     <string name="d86_korean_trigem_f18876">韓国語(TriGem)</string>
     <!-- EN: Line doubling type -->
     <string name="d86_line_doubling_type_0aaddf">ライン倍増タイプ</string>
+    <!-- EN: Linear -->
+    <string name="d86_linear_af502f">線形</string>
     <!-- EN: Linear framebuffer base -->
     <string name="d86_linear_framebuffer_base_e0be35">線形フレームバッファのベースアドレス</string>
     <!-- EN: Linear interpolation -->
@@ -263,6 +285,8 @@
     <string name="d86_mpu_401_address_6545ce">MPU-401 アドレス</string>
     <!-- EN: New -->
     <string name="d86_new_6403f2">新しい</string>
+    <!-- EN: Nice ramp -->
+    <string name="d86_nice_ramp_6f2796">ナイススロープ</string>
     <!-- EN: Non-timed (original) -->
     <string name="d86_non_timed_original_ce4a53">タイマーなし（オリジナル）</string>
     <!-- EN: None -->
@@ -277,6 +301,8 @@
     <string name="d86_on_e0049a">オン</string>
     <!-- EN: Other languages -->
     <string name="d86_other_languages_80d5c6">その他の言語</string>
+    <!-- EN: Output Gain -->
+    <string name="d86_output_gain_56f164">出力ゲイン</string>
     <!-- EN: Parallel Port -->
     <string name="d86_parallel_port_019607">パラレルポート</string>
     <!-- EN: Plug and Play -->
@@ -299,6 +325,20 @@
     <string name="d86_render_threads_87d848">レンダリングスレッド</string>
     <!-- EN: Rev. D (Generic) -->
     <string name="d86_rev_d_generic_6837ae">Rev. D(汎用)</string>
+    <!-- EN: Reverb -->
+    <string name="d86_reverb_052ba8">リバーブ</string>
+    <!-- EN: Reverb Damping -->
+    <string name="d86_reverb_damping_1f14e0">リバーブダンピング</string>
+    <!-- EN: Reverb Level -->
+    <string name="d86_reverb_level_27aded">リバーブレベル</string>
+    <!-- EN: Reverb Output Gain -->
+    <string name="d86_reverb_output_gain_40f70e">リバーブ出力のゲイン</string>
+    <!-- EN: Reverb Room Size -->
+    <string name="d86_reverb_room_size_be23cc">リバーブルームの大きさ</string>
+    <!-- EN: Reverb Width -->
+    <string name="d86_reverb_width_e2431f">リバーブ幅</string>
+    <!-- EN: Reversed stereo -->
+    <string name="d86_reversed_stereo_ad6dfc">逆ステレオ</string>
     <!-- EN: Revision -->
     <string name="d86_revision_3beb9a">改訂</string>
     <!-- EN: RGB type -->
@@ -325,6 +365,8 @@
     <string name="d86_sigmatel_stac9721t_stereo_550e42">シグマテル STAC9721T（ステレオ）</string>
     <!-- EN: Simple doubling -->
     <string name="d86_simple_doubling_717ccb">単純な倍加</string>
+    <!-- EN: Sine -->
+    <string name="d86_sine_ca0c5d">正弦</string>
     <!-- EN: Slot 1 -->
     <string name="d86_slot_1_56d27a">スロット 1</string>
     <!-- EN: Slot 2 -->
@@ -347,6 +389,8 @@
     <string name="d86_three_f3cd46">三つ</string>
     <!-- EN: Translate 26 -> 17 -->
     <string name="d86_translate_26_17_05ab4b">26→17を翻訳</string>
+    <!-- EN: Triangle -->
+    <string name="d86_triangle_73d3ae">三角</string>
     <!-- EN: True color -->
     <string name="d86_true_color_014864">真の色</string>
     <!-- EN: Two -->

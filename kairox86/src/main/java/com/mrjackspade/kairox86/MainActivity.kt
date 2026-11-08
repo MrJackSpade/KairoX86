@@ -1,6 +1,7 @@
 package com.mrjackspade.kairox86
 
 import com.mrjackspade.kairo.frontend.R as FrontendR
+import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.os.SystemClock
@@ -11,6 +12,7 @@ import com.mrjackspade.kairo.frontend.DiskArchive
 import com.mrjackspade.kairo.frontend.ControllerGuestSpec
 import com.mrjackspade.kairo.frontend.ExternalGameFile
 import com.mrjackspade.kairo.frontend.GameDisks
+import com.mrjackspade.kairo.frontend.ImportedFilePicker
 import com.mrjackspade.kairo.frontend.RowGroup
 import com.mrjackspade.kairo.frontend.GamePathMigration
 import com.mrjackspade.kairo.frontend.LayeredGameCatalog
@@ -168,9 +170,11 @@ class MainActivity : MachineActivity<X86Entry>() {
         return (listOf(Triple(X86Hardware.MACHINE, machine, name)) + chosenCards(entry).map { (kind, card) -> Triple(kind, card.id, card.name) })
             .mapNotNull { (kind, id, title) ->
                 val own = X86Hardware.options(kind, id)
-                own.options.takeIf { it.isNotEmpty() }?.let { options ->
-                    RowGroup(title.uppercase(), options.map { option -> machineChoiceRow(entry, X86Settings.cardOption(own.section, option), enabled) })
-                }
+                // FluidSynth's SoundFont, with the row that imports one, before its own options (KairoX86#306)
+                val soundFont = if (kind == X86Hardware.MIDI && id == FLUIDSYNTH_ID)
+                    listOf(machineChoiceRow(entry, X86Settings.soundFont(soundFontImport::actions).option, enabled)) else emptyList()
+                (soundFont + own.options.map { option -> machineChoiceRow(entry, X86Settings.cardOption(own.section, option), enabled) })
+                    .takeIf { it.isNotEmpty() }?.let { rows -> RowGroup(title.uppercase(), rows) }
             }
     }
 
@@ -389,9 +393,22 @@ class MainActivity : MachineActivity<X86Entry>() {
         for (file in FREE_FIRMWARE) ShippedAssets.install(this, "free-firmware/$file", File(firmwareFolder, file), progress)
     }
 
+    /** The guest's MIDI can go to a MIDI port of the device: the MIDI out device "MIDI port" (KairoX86#305). */
+    override val guestMidiOut = true
+
+    /** Imports a SoundFont into the player's (X86SoundFonts) and picks it for the game asking (KairoX86#306). */
+    private val soundFontImport by lazy {
+        ImportedFilePicker(this, X86SoundFonts.files, SOUND_FONT_IMPORT_REQUEST, "sound-font-import", getString(R.string.sound_font_import),
+            "SoundFont", ::toast)
+    }
+
+    override fun handleProductResult(requestCode: Int, resultCode: Int, data: Intent?): Boolean =
+        soundFontImport.handle(requestCode, resultCode, data) || super.handleProductResult(requestCode, resultCode, data)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         // The machine settings' hardware choices come from the player's ROM set (Kairo#143).
         X86Hardware.roms = firmwareFolder
+        X86SoundFonts.files = X86SoundFonts.library(this)
         super.onCreate(savedInstanceState)
     }
 
@@ -423,6 +440,12 @@ class MainActivity : MachineActivity<X86Entry>() {
 
         /** The free firmware's files, at their places in the ROM set (kairox86/build.gradle.kts). */
         val FREE_FIRMWARE = listOf("machines/glabios/GLABIOS_0.4.0_8P.ROM", "machines/glabios/GLABIOS_0.4.0_VP.ROM",
-            "video/mda/mda.rom")
+            "video/mda/mda.rom", X86SoundFonts.SHIPPED)
+
+        /** The picker of a SoundFont for a game's FluidSynth (soundFontImport). */
+        private const val SOUND_FONT_IMPORT_REQUEST = FIRST_PRODUCT_REQUEST
+
+        /** FluidSynth, as 86Box names the MIDI out device. */
+        private const val FLUIDSYNTH_ID = "fluidsynth"
     }
 }

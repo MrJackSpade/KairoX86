@@ -21,6 +21,8 @@ val stageFreeFirmware = tasks.register<Copy>("stageFreeFirmware") {
         into("free-firmware/machines/glabios")
     }
     from(rootProject.file("firmware/video/mda/mda.rom")) { into("free-firmware/video/mda") }
+    // FluidSynth's default SoundFont (KairoX86#306), the shared GeneralUser GS, where the core takes it
+    from(rootProject.file("shared/third_party/generaluser-gs/GeneralUser-GS.sf2")) { into("free-firmware/sound/kairo") }
     into(freeFirmwareAssets)
 }
 android.sourceSets.getByName("main").assets.srcDir(freeFirmwareAssets)

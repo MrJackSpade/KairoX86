@@ -111,6 +111,8 @@ object X86Settings {
     private fun cardLabel(card: X86Hardware.Card): UiText = when (card.id) {
         "none" -> UiText.res(FrontendR.string.kairo_none)
         "internal" -> UiText.res(R.string.setting_card_onboard)
+        // KairoX86#305: the guest's MIDI to the device's MIDI port the player picks (Configurations)
+        "kairo_midi_port" -> UiText.res(R.string.setting_midi_port)
         else -> UiText.fixed(card.name)
     }
 
@@ -122,6 +124,38 @@ object X86Settings {
     val fdc = card("fdc", R.string.setting_fdc, X86Hardware.FDC, "Storage controllers", "fdc", onboardFirst = true)
     val mouse = card("mouse", FrontendR.string.kairo_mouse, X86Hardware.MOUSE, "Input devices", "mouse_type", onboardFirst = false)
     val joystick = card("joystick", FrontendR.string.kairo_joystick, X86Hardware.JOYSTICK, "Input devices", "joystick_type", onboardFirst = false)
+    /** What the MPU-401 and the cards' MIDI ports play through (KairoX86#306): none, Munt's MT-32 and CM-32L, or FluidSynth. */
+    val midi = card("midi", R.string.setting_midi_out, X86Hardware.MIDI, "Sound", "midi_device", onboardFirst = false)
+
+    /** The section of 86box.cfg FluidSynth's options are kept in (its device's name). */
+    const val FLUIDSYNTH = "FluidSynth"
+
+    /**
+     * FluidSynth's SoundFont (KairoX86#306): the one the app ships (no sound_font: the core takes it
+     * from the ROM set), or one of the player's (X86SoundFonts), kept as its file's path, as 86Box
+     * reads it. A path that is none of these (a machine set up elsewhere) reads as its file's name.
+     */
+    fun soundFont(actions: (select: (String) -> Unit) -> List<com.mrjackspade.kairo.frontend.SettingsRow> = { emptyList() }) = Setting(
+        MachineOption(SOUND_FONT, UiText.res(R.string.setting_sound_font), {
+            listOf(ChoiceOption(X86SoundFonts.DEFAULT, UiText.fixed(SHIPPED_SOUND_FONT))) +
+                X86SoundFonts.files.items().map { ChoiceOption(it.id, UiText.fixed(it.label)) }
+        }, X86SoundFonts.DEFAULT, actions = actions, labelOf = { UiText.fixed(java.io.File(it).name) }),
+        read = { ini ->
+            ini[FLUIDSYNTH, "sound_font"]?.takeIf { it.isNotEmpty() }?.let { path ->
+                X86SoundFonts.files.items().firstOrNull { it.file.absolutePath == path }?.id ?: path
+            }
+        },
+        changes = { value ->
+            val path = value?.takeIf { it != X86SoundFonts.DEFAULT }?.let { id ->
+                (X86SoundFonts.files.file(id) ?: error("No SoundFont $id among the imported ones")).absolutePath
+            }
+            listOf(Change(FLUIDSYNTH, "sound_font", path))
+        })
+
+    private const val SOUND_FONT = "sound_font"
+    /** The SoundFont the app ships, by its own name. */
+    private const val SHIPPED_SOUND_FONT = "GeneralUser GS"
+    private val soundFontSetting = soundFont()
 
     /** The clock the guest reads: the host's local time (86Box's default), UTC, or its own from its CMOS. */
     val clock = single(MachineOption("clock", UiText.res(R.string.setting_clock), listOf(
@@ -147,7 +181,7 @@ object X86Settings {
 
     /** The card settings whose card has options of its own (KairoX86#201), with their kinds. */
     val cards = listOf(video to X86Hardware.VIDEO, sound to X86Hardware.SOUND, network to X86Hardware.NETWORK,
-        hdc to X86Hardware.HDC, scsi to X86Hardware.SCSI, fdc to X86Hardware.FDC, mouse to X86Hardware.MOUSE)
+        hdc to X86Hardware.HDC, scsi to X86Hardware.SCSI, fdc to X86Hardware.FDC, mouse to X86Hardware.MOUSE, midi to X86Hardware.MIDI)
 
     /** A card option's ID: "card:<key>:<section>" (a key has no colon; a section may have any). */
     private const val CARD_OPTION = "card:"
@@ -167,7 +201,7 @@ object X86Settings {
     private fun deviceText(english: String): UiText = X86DeviceStrings.resources[english]?.let { UiText.res(it) } ?: UiText.fixed(english)
 
     /** In the order they show; each after the ones it depends on. */
-    val all = listOf(machine, processor, memory, video, sound, network, hdc, scsi, fdc, mouse, joystick, clock, skipMemoryCheck,
+    val all = listOf(machine, processor, memory, video, sound, midi, network, hdc, scsi, fdc, mouse, joystick, clock, skipMemoryCheck,
         hardwareAcceleration)
 
     /** The setting [option] is. */
@@ -178,6 +212,8 @@ object X86Settings {
             val key = rest.substringBefore(':')
             return single(option, rest.substringAfter(':'), key)
         }
+        // The SoundFont: shown in FluidSynth's group with its import row (MainActivity), read and kept the same everywhere.
+        if (option.id == SOUND_FONT) return soundFontSetting
         return all.firstOrNull { it.option.id == option.id } ?: error("${option.id} is no KairoX86 machine setting")
     }
 

@@ -29,7 +29,6 @@
     <!-- EN: Could not delete %1$s -->
     <string name="machine_delete_failed">Tidak dapat menghapus %1$s</string>
     <!-- %1$s is the game's name in an eXoWin9x collection, %2$s the Windows image it is set up for there (KairoX86#219). -->
-    <!-- EN: %1$s is set up for %2$s, a Windows that KairoX86 can\'t run games on yet -->
     <!-- %1$s is the game's name in an eXoWin9x collection (KairoX86#219). -->
     <!-- EN: %1$s reads its CD from a folder, which KairoX86 can\'t put in a drive yet -->
     <string name="exo_folder_cd">%1$s reads its CD from a folder, which KairoX86 can\'t put in a drive yet</string>
@@ -82,6 +81,22 @@
     <string name="setting_video">Kartu video</string>
     <!-- EN: Sound card -->
     <string name="setting_sound">Kartu suara</string>
+    <!-- What the machine's MIDI port plays its music through: none, an MT-32 synth, or FluidSynth (KairoX86#306). -->
+    <!-- EN: MIDI out -->
+    <string name="setting_midi_out">Keluaran MIDI</string>
+    <!-- The MIDI out choice that sends the guest's MIDI to the MIDI port picked in Configurations (KairoX86#305). -->
+    <!-- EN: MIDI port -->
+    <string name="setting_midi_port">Port MIDI</string>
+    <!-- The sound bank FluidSynth plays General MIDI music with (KairoX86#306). -->
+    <!-- EN: SoundFont -->
+    <string name="setting_sound_font">SoundFont</string>
+    <!-- The row under the SoundFont choices that imports a SoundFont file and picks it. -->
+    <!-- EN: Import a SoundFont… -->
+    <string name="sound_font_import">Impor SoundFont…</string>
+    <!-- EN: A SoundFont is at most 2 GB; that file is larger -->
+    <string name="sound_font_too_large">SoundFont paling besar 2 GB; file itu lebih besar</string>
+    <!-- EN: That file is not a SoundFont 2 (.sf2) -->
+    <string name="sound_font_not_sf2">File itu bukan SoundFont 2 (.sf2)</string>
     <!-- EN: Network card -->
     <string name="setting_network">Kartu jaringan</string>
     <!-- EN: Hard disk controller -->
