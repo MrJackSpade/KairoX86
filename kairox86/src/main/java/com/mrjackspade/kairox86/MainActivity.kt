@@ -64,12 +64,18 @@ class MainActivity : MachineActivity<X86Entry>() {
     override val machineStore: GameMachineStore<X86Entry> get() = configStore
 
     private inner class ConfigStore : GameMachineStore<X86Entry> {
-        // Each machine's 86box.cfg as last read, until a setting is written or its machine ends.
-        private val configs = HashMap<String, IniText>()
+        /**
+         * Each machine's 86box.cfg as last read, until a setting is written or its machine ends. Each
+         * is read once, under its own lock (KairoX86#333): reading one from an SD card takes up to half
+         * a second, and a page needing its machine's must not wait behind the read-ahead's read of
+         * another's. A read that fails is not kept, so the next asks again.
+         */
+        private val configs = java.util.concurrent.ConcurrentHashMap<String, Lazy<IniText>>()
 
-        @Synchronized private fun config(entry: X86Entry) = configs.getOrPut(entry.id) { machines.config(entry, libraryTree()) }
+        private fun config(entry: X86Entry): IniText =
+            configs.computeIfAbsent(entry.id) { lazy { machines.config(entry, libraryTree()) } }.value
 
-        @Synchronized fun forget(entryId: String) {
+        fun forget(entryId: String) {
             configs.remove(entryId)
         }
 
@@ -86,14 +92,15 @@ class MainActivity : MachineActivity<X86Entry>() {
         }
 
         // The eXoWin9x games whose machine folder is known to be made
-        private val made = HashSet<String>()
+        private val made: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 
         /**
          * An eXoWin9x game's settings exist once its machine folder is made (KairoX86#219), which can
-         * mean unpacking its Windows image (#224): until then it has none (KairoX86#227).
+         * mean unpacking its Windows image (#224): until then it has none (KairoX86#227). Asked
+         * without a lock: two asking at once both look, and both find the same.
          */
-        @Synchronized override fun ready(entry: X86Entry): Boolean {
-            if (!entry.exo || entry.id in configs || entry.id in made) return true
+        override fun ready(entry: X86Entry): Boolean {
+            if (!entry.exo || configs[entry.id]?.isInitialized() == true || entry.id in made) return true
             return machines.exoMade(entry, libraryTree()).also { if (it) made += entry.id }
         }
 
