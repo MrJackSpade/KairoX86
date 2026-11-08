@@ -139,7 +139,8 @@ object X86Settings {
         MachineOption(SOUND_FONT, UiText.res(R.string.setting_sound_font), {
             listOf(ChoiceOption(X86SoundFonts.DEFAULT, UiText.fixed(SHIPPED_SOUND_FONT))) +
                 X86SoundFonts.files.items().map { ChoiceOption(it.id, UiText.fixed(it.label)) }
-        }, X86SoundFonts.DEFAULT, actions = actions, labelOf = { UiText.fixed(java.io.File(it).name) }),
+        }, X86SoundFonts.DEFAULT, actions = actions,
+            labelOf = { UiText.fixed(if (it == X86SoundFonts.DEFAULT) SHIPPED_SOUND_FONT else java.io.File(it).name) }),
         read = { ini ->
             ini[FLUIDSYNTH, "sound_font"]?.takeIf { it.isNotEmpty() }?.let { path ->
                 X86SoundFonts.files.items().firstOrNull { it.file.absolutePath == path }?.id ?: path
