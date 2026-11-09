@@ -8,6 +8,24 @@ The record below began in the Kairo9X proof of concept, whose speed fixes are th
 
 Status: `open` · `fixed` · `rejected` (not exact, or no gain) · `measured` · `noted`
 
+## Host: the RG DS (KairoX86#345, 2026-11-09)
+
+- **SoC and cores:** Rockchip RK3568, four Cortex-A55 r2p0 (MIDR implementer 0x41, part 0xd05, variant 2, revision 0),
+  in-order and dual-issue; 4 KB pages; 3 GB RAM. The kernel (6.1.141) exposes no cache sysfs and **has no huge pages**:
+  no `transparent_hugepage`, no hugetlbfs (#373), so `MADV_HUGEPAGE` does nothing.
+- **Memory latency** (a pointer chase over random 64-byte lines, pinned to one core): ≤32 KB 1.1-1.3 ns (L1D);
+  64-256 KB 14-18 ns; 512 KB 49.5 ns; ≥1 MB 147-207 ns (DRAM). The step at 64 KB is also where the 16-entry L1 dTLB's
+  reach ends (64 KB); the A55's 1,024-entry L2 TLB (TRM) reaches 4 MB, and the L1 instruction micro-TLB 60 KB.
+  Instruction cache 32 KB, 4-way, 64-byte lines (the A55 TRM; set aliasing at a 1 KB stride costs 3.3-3.5%, #366).
+- **Copy bandwidth:** `memcpy` of 64 MB 2.60 GB/s (5.2 GB/s of read + write traffic), one core.
+- **Clock:** the `performance` governor holds 1.99 GHz; through this round's runs (minutes of headless load) the clock
+  never moved and the SoC went 37 → 51 °C against trip points of 75, 85 and 115 °C. The GPU (800 MHz), video decoder
+  and display controller devfreqs are fixed at their maximum. (A ten-minute in-app run was not taken.)
+- **PMU:** `simpleperf` counts `instructions`, `raw-cpu-cycles`, `raw-l1i-cache-refill`, `raw-l1i-tlb-refill`,
+  `raw-itlb-walk`, `raw-l1d-cache-refill`, `raw-l1d-tlb-refill`, `raw-dtlb-walk`, `raw-l2d-cache-refill`,
+  `raw-br-pred`, `raw-br-mis-pred`, `raw-stall-frontend` and `raw-stall-backend`, five or six at once, per thread
+  (`-t`). There is no ETM, SPE or branch-record event (so no BOLT profile, #377).
+
 ## Measuring a change: the A/B protocol (KairoX86#349)
 
 `tools/ab.ps1 -Device <serial> -A <build> -B <build> -Machine <names> -Rounds n` runs two prebuilt cores (Build-Core
