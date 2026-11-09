@@ -13,15 +13,19 @@ import java.io.OutputStream
  * have the name asked for, since a provider renames one that is taken ("Game (1)").
  */
 class X86Documents(private val context: Context) {
-    data class Child(val id: String, val name: String, val folder: Boolean)
+    /** A document in a folder: [size] in bytes (-1 for a folder, or where the provider does not say). */
+    data class Child(val id: String, val name: String, val folder: Boolean, val size: Long = -1)
 
     fun children(tree: Uri, parent: String): List<Child> {
         val query = DocumentsContract.buildChildDocumentsUriUsingTree(tree, parent)
         return checkNotNull(context.contentResolver.query(query,
-            arrayOf(Document.COLUMN_DOCUMENT_ID, Document.COLUMN_DISPLAY_NAME, Document.COLUMN_MIME_TYPE), null, null, null)) {
+            arrayOf(Document.COLUMN_DOCUMENT_ID, Document.COLUMN_DISPLAY_NAME, Document.COLUMN_MIME_TYPE, Document.COLUMN_SIZE), null, null, null)) {
             context.getString(R.string.machine_list_failed)
         }.use { cursor ->
-            buildList { while (cursor.moveToNext()) add(Child(cursor.getString(0), cursor.getString(1), cursor.getString(2) == Document.MIME_TYPE_DIR)) }
+            buildList {
+                while (cursor.moveToNext()) add(Child(cursor.getString(0), cursor.getString(1), cursor.getString(2) == Document.MIME_TYPE_DIR,
+                    if (cursor.isNull(3)) -1 else cursor.getLong(3)))
+            }
         }
     }
 

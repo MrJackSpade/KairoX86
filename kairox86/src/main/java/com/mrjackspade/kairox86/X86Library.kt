@@ -56,10 +56,17 @@ data class X86Entry(
      * An eXoWin9x game (KairoX86#219, [ExoWin9x]): [uri] is its ZIP's document, and [path] the
      * machine folder KairoX86 makes for it in the collection, where its machine runs from.
      */
-    val exo: Boolean = false
+    val exo: Boolean = false,
+    /** The disk image's own size: its member's in an archive, -1 where a record before version 6 did not keep it. */
+    val imageSize: Long = size
 ) : LibraryItem {
     /** The disk image's own file name, by which a drive takes it: its member's in an archive. */
     val diskName: String get() = zipEntry ?: path
+    /**
+     * The drive kinds this disk image can go in, by its name (KairoX86#340): a raw image (.img, .ima)
+     * both a floppy drive and the hard disk, its size shown beside it for the player to tell; none for a machine.
+     */
+    val kinds: Set<X86Library.DiskKind> get() = if (disk) X86Library.diskKinds(diskName) else emptySet()
     override val displayName: String get() = (zipEntry ?: path).substringAfterLast('/').ifEmpty { "86Box" }
     override val playable: Boolean get() = contentId != null && error == null
     /** A machine is its folder, whose name is all title ("Dr. Sulfur's Night Lab (1996)"); a disk is a file. */
@@ -80,17 +87,17 @@ class X86Library(private val context: Context) {
     private val exoBuilder = X86Exo(context, docs)
     // Version 2 keeps the games folder's disk images beside the machines (KairoX86#209); version 3
     // each machine's first catalog ID (KairoX86#213); version 4 the disk images inside archives (KairoX86#217);
-    // version 5 eXoWin9x games (KairoX86#219).
-    private val cache = VersionedLibraryCache(File(context.filesDir, "library-v1.bin"), 5, 8 * 1024 * 1024, 100_000,
-        ::writeEntry, ::readEntry, earlierRecords = mapOf(3 to ::readEntryV3, 4 to ::readEntryV4))
+    // version 5 eXoWin9x games (KairoX86#219); version 6 a disk image's own size, inside an archive too (KairoX86#340).
+    private val cache = VersionedLibraryCache(File(context.filesDir, "library-v1.bin"), 6, 8 * 1024 * 1024, 100_000,
+        ::writeEntry, ::readEntry, earlierRecords = mapOf(3 to ::readEntryV3, 4 to ::readEntryV4, 5 to ::readEntryV5))
     private val pipeline = LibraryScanPipeline<DocumentTreeWalker.FileEntry, X86Entry>(context, cache,
         entryId = { it.id },
         enumerate = { tree, depth, cancelled, progress ->
             // The walk finds the disk images too, unread: a drive's Other choice (KairoX86#209). An
             // archive is read for the images in it (KairoX86#217).
-            val files = walker.scan(tree, cancelled, { isConfig(it) || diskKind(it) != null || DiskArchive.isArchive(it) },
+            val files = walker.scan(tree, cancelled, { isConfig(it) || isImage(it) || DiskArchive.isArchive(it) },
                 progress, depth = depth).files
-            val (images, work) = files.partition { diskKind(it.path) != null }
+            val (images, work) = files.partition { isImage(it.path) }
             LibraryScanPipeline.Plan(work, finalEntries = images.map { file ->
                 X86Entry(file.path, file.uri.toString(), file.path, file.size, file.modified, DISK, disk = true)
             })
@@ -140,8 +147,8 @@ class X86Library(private val context: Context) {
 
     private fun machinesOf(tree: Uri, entries: List<X86Entry>): List<X86Entry> {
         val (images, machines) = entries.partition { it.disk }
-        // By path, an archive's images by theirs in it.
-        folderDisks = FolderDisks(tree.toString(), images.sortedBy { it.id.lowercase() })
+        // By path, an archive's images by theirs in it; a CD's track is its CD's, not a disk of its own.
+        folderDisks = FolderDisks(tree.toString(), withoutTracks(images).sortedBy { it.id.lowercase() })
         return machines
     }
 
@@ -204,8 +211,9 @@ class X86Library(private val context: Context) {
     /** The disk images a drive takes in the archive [name] at [uri], each keyed by [key] of its path in it. */
     private fun archiveDisks(uri: Uri, name: String, size: Long, modified: Long, key: (String) -> String): List<X86Entry> =
         DiskArchive.open(context, uri, name, size).use { archive ->
-            archive.members.filter { diskKind(DiskArchive.safeName(it.name)) != null }.map { member ->
-                X86Entry(key(member.name), uri.toString(), name, size, modified, DISK, disk = true, zipEntry = member.name)
+            archive.members.filter { isImage(DiskArchive.safeName(it.name)) }.map { member ->
+                X86Entry(key(member.name), uri.toString(), name, size, modified, DISK, disk = true, zipEntry = member.name,
+                    imageSize = member.size)
             }
         }
 
@@ -274,7 +282,7 @@ class X86Library(private val context: Context) {
             check(!done.folder) { context.getString(R.string.machine_create_failed, relative) }
             return DocumentsContract.buildDocumentUriUsingTree(tree, done.id)
         }
-        return writeInto(tree, parent, name, entry, cancelled, progress) { output ->
+        return writeInto(tree, parent, name, entry.displayName, R.string.machine_disk_unpacking, entry.imageSize, cancelled, progress) { output ->
             DiskArchive.open(context, Uri.parse(entry.uri), entry.path, entry.size).use { archive ->
                 val member = archive.members.firstOrNull { it.name == entry.zipEntry }
                     ?: error(context.getString(FrontendR.string.kairo_disk_member_missing, entry.zipEntry))
@@ -287,36 +295,87 @@ class X86Library(private val context: Context) {
 
     /**
      * Copies the loose disk image [entry], elsewhere in the games folder, into the machine folder
-     * [folder] of [tree] at its own name (KairoX86#334), so its 86box.cfg can name it as the
-     * machine's own: a session reaches only its machine's folder. A different file of that name
-     * already there is not replaced: the copy fails.
+     * [folder] of [tree] at its own name (KairoX86#334), with every file it is made of ([imageFiles]:
+     * a cue sheet's tracks), so its 86box.cfg can name it as the machine's own: a session reaches only
+     * its machine's folder. A different file of one of those names already there is not replaced: the
+     * copy fails. Returns the image's own name and document.
      */
     fun copyInto(tree: Uri, folder: String, entry: X86Entry, cancelled: AtomicBoolean, progress: (String) -> Unit): Pair<String, Uri> {
         check(entry.zipEntry == null) { "${entry.path} is inside an archive" }
-        val name = entry.path.substringAfterLast('/')
-        check(children(tree, folder).none { it.name.equals(name, ignoreCase = true) }) { context.getString(R.string.machine_disk_name_taken, name) }
-        return name to writeInto(tree, folder, name, entry, cancelled, progress) { output ->
-            checkNotNull(context.contentResolver.openInputStream(Uri.parse(entry.uri))) { context.getString(R.string.machine_open_failed, entry.path) }
-                .use { input ->
-                    val buffer = ByteArray(1 shl 20)
-                    while (true) {
-                        if (cancelled.get()) throw java.util.concurrent.CancellationException("Cancelled")
-                        val read = input.read(buffer)
-                        if (read < 0) break
-                        output.write(buffer, 0, read)
-                    }
-                }
+        val files = imageFiles(tree, entry)
+        val there = children(tree, folder)
+        for (file in files) check(there.none { it.name.equals(file.name, ignoreCase = true) }) { context.getString(R.string.machine_disk_name_taken, file.name) }
+        val written = files.map { file ->
+            writeInto(tree, folder, file.name, file.name, R.string.machine_disk_copying, file.size, cancelled, progress) { output -> file.write(output) }
         }
+        return files.first().name to written.first()
+    }
+
+    /** A file a disk image is made of (KairoX86#334): the image itself, or a file its CD index needs; [write] copies it. */
+    class ImageFile(val name: String, val size: Long, val write: (java.io.OutputStream) -> Unit)
+
+    /**
+     * The files the disk image [entry] is made of, each by its name beside it: the image itself first,
+     * then, for a CD's index, the files it needs (the tracks a cue sheet names; a CloneCD image's .img and
+     * .sub; an .mds's .mdf). One it needs that is not beside it fails, naming it.
+     */
+    fun imageFiles(tree: Uri, entry: X86Entry): List<ImageFile> {
+        val name = entry.diskName.substringAfterLast('/')
+        val member = entry.zipEntry
+        if (member == null) {
+            val siblings = children(tree, findFolder(tree, folderOf(entry.path))).filter { !it.folder }
+            fun file(wanted: String): ImageFile {
+                val child = siblings.firstOrNull { it.name.equals(wanted, ignoreCase = true) }
+                    ?: error(context.getString(R.string.machine_disk_track_missing, wanted, name))
+                val uri = DocumentsContract.buildDocumentUriUsingTree(tree, child.id)
+                return ImageFile(child.name, child.size) { output ->
+                    checkNotNull(context.contentResolver.openInputStream(uri)) { context.getString(R.string.machine_open_failed, child.name) }
+                        .use { it.copyTo(output, 1 shl 20) }
+                }
+            }
+            val image = file(name)
+            return listOf(image) + companions(name, siblings.map { it.name }) {
+                java.io.ByteArrayOutputStream().also(image.write).toString(Charsets.ISO_8859_1.name())
+            }.map(::file)
+        }
+        val folder = member.substringBeforeLast('/', "")
+        val members = DiskArchive.open(context, Uri.parse(entry.uri), entry.path, entry.size).use { it.members }
+        fun inFolder(wanted: String) = if (folder.isEmpty()) wanted else "$folder/$wanted"
+        fun file(wanted: String): ImageFile {
+            val found = members.firstOrNull { it.name.equals(inFolder(wanted), ignoreCase = true) }
+                ?: error(context.getString(R.string.machine_disk_track_missing, wanted, name))
+            return ImageFile(found.name.substringAfterLast('/'), found.size) { output ->
+                DiskArchive.open(context, Uri.parse(entry.uri), entry.path, entry.size).use { archive ->
+                    archive.copy(archive.members.first { it.name == found.name }, output) {}
+                }
+            }
+        }
+        val image = file(name)
+        val beside = members.filter { it.name.substringBeforeLast('/', "") == folder }.map { it.name.substringAfterLast('/') }
+        return listOf(image) + companions(name, beside) {
+            java.io.ByteArrayOutputStream().also(image.write).toString(Charsets.ISO_8859_1.name())
+        }.map(::file)
     }
 
     /**
      * Writes [name] into the folder [parent] of [tree] with [write], through a partial file renamed
-     * when it is whole; a partial file a crash left goes first. Returns the file's document.
+     * when it is whole; a partial file a crash left goes first. Returns the file's document. [progress]
+     * hears what is done, [verb] ("42% copied: %1$s"), with how much of [total] bytes is written
+     * (KairoX86#339), each whole percent once.
      */
-    private fun writeInto(tree: Uri, parent: String, name: String, entry: X86Entry, cancelled: AtomicBoolean,
+    private fun writeInto(tree: Uri, parent: String, name: String, shown: String, verb: Int, total: Long, cancelled: AtomicBoolean,
                           progress: (String) -> Unit, write: (java.io.OutputStream) -> Unit): Uri {
         if (cancelled.get()) throw java.util.concurrent.CancellationException("Cancelled")
-        progress(context.getString(FrontendR.string.kairo_disk_preparing, entry.displayName))
+        var reported = -1
+        fun report(written: Long) {
+            if (cancelled.get()) throw java.util.concurrent.CancellationException("Cancelled")
+            val percent = if (total > 0) (written * 100 / total).toInt().coerceIn(0, 100) else 0
+            if (percent != reported) {
+                reported = percent
+                progress(context.getString(verb, shown, percent))
+            }
+        }
+        report(0)
         // A partial file a crash left goes first: the new one would get another name.
         children(tree, parent).filter { it.name == "$name.part" && !it.folder }.forEach { stale ->
             check(DocumentsContract.deleteDocument(context.contentResolver, DocumentsContract.buildDocumentUriUsingTree(tree, stale.id))) {
@@ -327,7 +386,7 @@ class X86Library(private val context: Context) {
             "application/octet-stream", "$name.part"), "$name.part")
         return try {
             checkNotNull(context.contentResolver.openOutputStream(partial, "wt")) { context.getString(R.string.machine_write_failed, name) }
-                .use(write)
+                .use { output -> write(CountingOutput(output, ::report)) }
             created(DocumentsContract.renameDocument(context.contentResolver, partial, name), name)
         } catch (failure: Exception) {
             // The partial file goes; the failure that stopped the unpacking is the one reported.
@@ -365,12 +424,12 @@ class X86Library(private val context: Context) {
          * The disk images of the machine's folder (the Disks page's own disks), each by its file in
          * this session folder, which is the folder's own file opened in place.
          */
-        fun disks(): List<X86Entry> = dir.walkTopDown().filter { it.isFile && diskKind(it.name) != null }
+        fun disks(): List<X86Entry> = withoutTracks(dir.walkTopDown().filter { it.isFile && isImage(it.name) }
             .map { file ->
                 val path = file.relativeTo(dir).invariantSeparatorsPath
                 // Keyed by its path in the games folder, as the scan keys the same image (otherDisks).
-                X86Entry(if (entryId.isEmpty()) path else "$entryId/$path", file.absolutePath, path, 0, 0, DISK, disk = true)
-            }.sortedBy { it.path.lowercase() }.toList()
+                X86Entry(if (entryId.isEmpty()) path else "$entryId/$path", file.absolutePath, path, file.length(), 0, DISK, disk = true)
+            }.sortedBy { it.path.lowercase() }.toList())
 
         /** The machine's disk the session folder's [path] is, as a drive reports it; null for any other. */
         fun diskAt(path: String): X86Entry? = disks().firstOrNull { File(it.uri).absolutePath == File(path).absolutePath }
@@ -381,12 +440,13 @@ class X86Library(private val context: Context) {
          * configuration (KairoX86#48).
          */
         fun link(entry: X86Entry): File {
-            val kind = checkNotNull(diskKind(entry.path)) { "${entry.path} is no disk image" }
+            val kinds = entry.kinds
+            check(kinds.isNotEmpty()) { "${entry.path} is no disk image" }
             check(media.isDirectory || media.mkdirs()) { context.getString(R.string.machine_session_failed) }
             val file = File(media, "${open.size}-${entry.path.substringAfterLast('/')}")
             // A floppy may be written, as on the PC; a CD only read.
             val descriptor = checkNotNull(context.contentResolver.openFileDescriptor(Uri.parse(entry.uri),
-                if (kind == DiskKind.FLOPPY) "rw" else "r")) { context.getString(R.string.machine_open_failed, entry.path) }
+                if (kinds == setOf(DiskKind.CD)) "r" else "rw")) { context.getString(R.string.machine_open_failed, entry.path) }
             open += descriptor
             Os.symlink("/proc/self/fd/${descriptor.fd}", file.path)
             return file
@@ -404,6 +464,8 @@ class X86Library(private val context: Context) {
         fun unpack(entry: X86Entry, cancelled: AtomicBoolean, progress: (String) -> Unit): File {
             val target = unpacked(entry)
             if (target.exists()) return target
+            // Its tracks (a cue sheet's) beside it first, so 86Box finds them when it opens the image
+            for (track in imageFiles(tree, entry).drop(1)) unpack(companionOf(entry, track.name), cancelled, progress)
             val relative = unpackedPath(entry)
             check(target.parentFile!!.isDirectory || target.parentFile!!.mkdirs()) { context.getString(R.string.machine_create_failed, relative) }
             val document = unpackInto(tree, folder, entry, cancelled, progress)
@@ -554,6 +616,8 @@ class X86Library(private val context: Context) {
             when {
                 disk.zipEntry != null -> {
                     val folder = findFolder(tree, machine.path)
+                    // Its tracks first (a cue sheet's), beside it in the unpacked folder, then the image
+                    for (track in imageFiles(tree, disk).drop(1)) unpackInto(tree, folder, companionOf(disk, track.name), cancelled, progress)
                     unpackedPath(disk).also { unpacked -> remember(tree, machine, unpacked, unpackInto(tree, folder, disk, cancelled, progress)) }
                 }
                 disk.path.startsWith(prefix) -> disk.path.removePrefix(prefix)
@@ -564,6 +628,13 @@ class X86Library(private val context: Context) {
         val changes = listOf(X86Settings.Change(DRIVES, key, relative))
         change(machine, tree, changes)
         return changes
+    }
+
+    /** The file [name] beside the image [disk] in its archive, as an entry to unpack. */
+    private fun companionOf(disk: X86Entry, name: String): X86Entry {
+        val folder = checkNotNull(disk.zipEntry).substringBeforeLast('/', "")
+        val member = if (folder.isEmpty()) name else "$folder/$name"
+        return disk.copy(id = disk.id.substringBeforeLast('/') + "/" + member, zipEntry = member, imageSize = -1)
     }
 
     /**
@@ -606,7 +677,7 @@ class X86Library(private val context: Context) {
 
     /** A disk image picked on the device (MachineLibrary.inspectExternal), for a drive. */
     fun pickedDisk(uri: Uri, name: String, size: Long, modified: Long): X86Entry {
-        checkNotNull(diskKind(name)) { context.getString(R.string.machine_not_disk, name) }
+        check(isImage(name)) { context.getString(R.string.machine_not_disk, name) }
         return X86Entry("disk-picked:$uri", uri.toString(), name, size, modified, DISK, disk = true)
     }
 
@@ -631,9 +702,14 @@ class X86Library(private val context: Context) {
         output.writeUTF(entry.catalogId ?: "")
         output.writeUTF(entry.zipEntry ?: "")
         output.writeBoolean(entry.exo)
+        output.writeLong(entry.imageSize)
     }
 
-    private fun readEntry(input: DataInputStream): X86Entry = readEntryV4(input).copy(exo = input.readBoolean())
+    private fun readEntry(input: DataInputStream): X86Entry = readEntryV5(input).copy(imageSize = input.readLong())
+
+    /** A record of version 5, before a disk image's own size: unknown (-1) for one in an archive, its file's otherwise. */
+    private fun readEntryV5(input: DataInputStream): X86Entry =
+        readEntryV4(input).copy(exo = input.readBoolean()).let { it.copy(imageSize = if (it.zipEntry != null) -1 else it.size) }
 
     /** A record of version 4, before eXoWin9x games. */
     private fun readEntryV4(input: DataInputStream): X86Entry =
@@ -651,6 +727,22 @@ class X86Library(private val context: Context) {
         val disk = input.readBoolean()
         val catalogId = input.readUTF().ifEmpty { null }
         return X86Entry(id, uri, path, size, modified, contentId, error, catalogId, disk = disk)
+    }
+
+    /** [output], telling [written] how many bytes have gone through it after each write. */
+    private class CountingOutput(private val output: java.io.OutputStream, private val written: (Long) -> Unit) : java.io.OutputStream() {
+        private var count = 0L
+        override fun write(b: Int) {
+            output.write(b)
+            written(++count)
+        }
+        override fun write(b: ByteArray, off: Int, len: Int) {
+            output.write(b, off, len)
+            count += len
+            written(count)
+        }
+        override fun flush() = output.flush()
+        override fun close() = output.close()
     }
 
     /** A drive's kind of disk image; a hard disk goes in when the machine starts (KairoX86#217). */
@@ -683,13 +775,59 @@ class X86Library(private val context: Context) {
         private val FLOPPY_IMAGES = setOf("img", "ima", "dsk", "flp", "vfd", "xdf", "86f", "td0", "imd", "mfm", "fdi", "fdf")
         private val CD_IMAGES = setOf("iso", "cue", "chd", "mds", "ccd")
 
-        /** What a drive takes a file named [name] as, or null for no disk image. */
-        fun diskKind(name: String): DiskKind? = when (name.substringAfterLast('.', "").lowercase()) {
-            in FLOPPY_IMAGES -> DiskKind.FLOPPY
-            in CD_IMAGES -> DiskKind.CD
-            in X86HardDisk.IMAGES -> DiskKind.HARD_DISK
-            else -> null
+        /**
+         * The drive kinds the image [name] can go in, by its extension (KairoX86#340): a raw image (.img,
+         * .ima) says nothing of what it is, so it can go in a floppy drive or be the hard disk (its geometry
+         * then its partition table's, X86HardDisk); the player tells them apart by the size shown beside it.
+         */
+        fun diskKinds(name: String): Set<DiskKind> = when (name.substringAfterLast('.', "").lowercase()) {
+            in X86HardDisk.RAW_IMAGES -> setOf(DiskKind.FLOPPY, DiskKind.HARD_DISK)
+            in FLOPPY_IMAGES -> setOf(DiskKind.FLOPPY)
+            in CD_IMAGES -> setOf(DiskKind.CD)
+            in X86HardDisk.IMAGES -> setOf(DiskKind.HARD_DISK)
+            else -> emptySet()
         }
+
+        /** A cue sheet's FILE lines' file names, quoted or not. */
+        private val CUE_FILE = Regex("""^\s*FILE\s+(?:"([^"]+)"|(\S+))""", setOf(RegexOption.MULTILINE, RegexOption.IGNORE_CASE))
+
+        /**
+         * The files the CD index [name] needs beside it, of the files [beside] it, its text from [text]:
+         * a cue sheet's FILE tracks; a CloneCD image's .img (and .sub, where there is one); an .mds's .mdf.
+         * None for any other image. A track named in another folder is refused: it would not be beside it.
+         */
+        fun companions(name: String, beside: List<String>, text: () -> String): List<String> {
+            val stem = name.substringBeforeLast('.')
+            return when (name.substringAfterLast('.', "").lowercase()) {
+                "cue" -> CUE_FILE.findAll(text()).map { it.groupValues[1].ifEmpty { it.groupValues[2] } }.distinct().toList().onEach { track ->
+                    require('/' !in track && '\\' !in track) { "$name names $track, in another folder" }
+                }.filterNot { it.equals(name, ignoreCase = true) }
+                "ccd" -> listOf("$stem.img") + listOfNotNull("$stem.sub".takeIf { sub -> beside.any { it.equals(sub, ignoreCase = true) } })
+                "mds" -> listOf("$stem.mdf")
+                else -> emptyList()
+            }
+        }
+
+        /** A CD image's index, beside the tracks it is made of. */
+        private val CD_INDEXES = setOf("ccd", "cue", "mds")
+
+        /**
+         * [images] without the raw images (.img, .ima) that are a CD's track (KairoX86#340): a CD index of
+         * the same name beside one (a CloneCD .ccd with its .img, a cue sheet named after its track) makes
+         * it that CD's, which the index stands for; listed on its own, a large one would read as a hard disk.
+         */
+        fun withoutTracks(images: List<X86Entry>): List<X86Entry> {
+            fun place(image: X86Entry): String {
+                val member = image.zipEntry
+                val stem = image.diskName.substringBeforeLast('.').lowercase()
+                return if (member == null) stem else "${image.path}!$stem"
+            }
+            val indexes = images.filter { it.diskName.substringAfterLast('.', "").lowercase() in CD_INDEXES }.map(::place).toSet()
+            return images.filterNot { it.diskName.substringAfterLast('.', "").lowercase() in X86HardDisk.RAW_IMAGES && place(it) in indexes }
+        }
+
+        /** Whether [name] is a disk image of some kind. */
+        fun isImage(name: String): Boolean = diskKinds(name).isNotEmpty()
 
         /** A medium 86box.cfg names: the keys that name it in its section, and what the player calls it. */
         private class Medium(val section: String, val key: Regex, val label: UiText)

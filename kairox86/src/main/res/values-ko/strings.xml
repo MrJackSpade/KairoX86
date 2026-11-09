@@ -48,6 +48,9 @@
     <!-- EN: %1$s could not be created -->
     <string name="machine_create_failed">%1$s을(를) 만들지 못했습니다</string>
     <string name="machine_disk_name_taken">%1$s 이름의 파일이 이미 머신 폴더에 있습니다</string>
+    <string name="machine_disk_track_missing">%2$s에 필요한 %1$s 파일이 같은 위치에 없습니다</string>
+    <string name="machine_disk_copying">%2$d%% 복사됨: %1$s</string>
+    <string name="machine_disk_unpacking">%2$d%% 압축 해제됨: %1$s</string>
     <!-- %1$s is the name of a file in the machine's folder. -->
     <!-- EN: %1$s is not a name a machine\'s file can have -->
     <string name="machine_unsafe_name">%1$s은(는) 머신 파일에 쓸 수 없는 이름입니다</string>
@@ -130,6 +133,9 @@
     <string name="new_game_processor_memory">프로세서와 메모리</string>
     <!-- EN: Cards -->
     <string name="new_game_cards">카드</string>
+    <string name="new_game_presets">프리셋</string>
+    <string name="new_game_custom">사용자 지정</string>
+    <string name="new_game_blank_floppies">빈 플로피</string>
     <!-- A machine setting (86box.cfg time_sync): the clock the guest reads. -->
     <!-- EN: Clock -->
     <string name="setting_clock">시계</string>

@@ -3,6 +3,7 @@ package com.mrjackspade.kairox86
 import com.mrjackspade.kairo.frontend.R as FrontendR
 import com.mrjackspade.kairo.frontend.ChoiceOption
 import com.mrjackspade.kairo.frontend.MachineOption
+import com.mrjackspade.kairo.frontend.CustomValue
 import com.mrjackspade.kairo.frontend.UiText
 
 /**
@@ -91,7 +92,15 @@ object X86Settings {
         },
         // No mem_size in 86box.cfg: KairoX86's default for the machine (core/kairo/hardware.c, KairoX86#62).
         defaultWith = { values -> takes(values).ramDefault.toString() },
-        labelOf = { memoryLabel(it.toInt()) }), MACHINE, "mem_size")
+        labelOf = { memoryLabel(it.toInt()) },
+        // Any amount the machine takes (KairoX86#337): typed in MB where its sizes are whole MB, else in KB.
+        customWith = { values ->
+            val takes = takes(values)
+            val step = if (takes.ramStep > 0) takes.ramStep else maxOf(takes.ramMax - takes.ramMin, 1)
+            if (takes.ramMin % 1024 == 0 && takes.ramMax % 1024 == 0 && step % 1024 == 0)
+                CustomValue.range(takes.ramMin / 1024, takes.ramMax / 1024, step / 1024, scale = 1024, labelOf = ::memoryLabel)
+            else CustomValue.range(takes.ramMin, takes.ramMax, step, labelOf = ::memoryLabel)
+        }), MACHINE, "mem_size")
 
     /** A card of [kind] the machine takes: 86Box's default without the key is its onboard one, else none. */
     private fun card(id: String, label: Int, kind: String, section: String, key: String, onboardFirst: Boolean) =

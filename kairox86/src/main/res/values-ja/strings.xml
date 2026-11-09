@@ -48,6 +48,9 @@
     <!-- EN: %1$s could not be created -->
     <string name="machine_create_failed">%1$s を作成できませんでした</string>
     <string name="machine_disk_name_taken">%1$s という名前のファイルがすでにマシンのフォルダーにあります</string>
+    <string name="machine_disk_track_missing">%2$s に必要な %1$s が同じ場所にありません</string>
+    <string name="machine_disk_copying">%2$d%% コピー済み: %1$s</string>
+    <string name="machine_disk_unpacking">%2$d%% 展開済み: %1$s</string>
     <!-- %1$s is the name of a file in the machine's folder. -->
     <!-- EN: %1$s is not a name a machine\'s file can have -->
     <string name="machine_unsafe_name">%1$s はマシンのファイルに使えない名前です</string>
@@ -130,6 +133,9 @@
     <string name="new_game_processor_memory">プロセッサとメモリ</string>
     <!-- EN: Cards -->
     <string name="new_game_cards">カード</string>
+    <string name="new_game_presets">プリセット</string>
+    <string name="new_game_custom">カスタム</string>
+    <string name="new_game_blank_floppies">空のフロッピー</string>
     <!-- A machine setting (86box.cfg time_sync): the clock the guest reads. -->
     <!-- EN: Clock -->
     <string name="setting_clock">時計</string>

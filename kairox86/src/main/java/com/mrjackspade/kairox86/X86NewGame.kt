@@ -3,6 +3,8 @@ package com.mrjackspade.kairox86
 import android.content.Context
 import com.mrjackspade.kairo.frontend.BlankDisk
 import com.mrjackspade.kairo.frontend.ChoiceOption
+import com.mrjackspade.kairo.frontend.CustomValue
+import com.mrjackspade.kairo.frontend.GameDisks
 import com.mrjackspade.kairo.frontend.NewGameWorkflow
 import com.mrjackspade.kairo.frontend.UiText
 import com.mrjackspade.kairo.frontend.WorkflowField
@@ -16,13 +18,14 @@ import com.mrjackspade.kairo.frontend.R as FrontendR
  * 2. **Machine**, 3. **Processor and memory**, 4. **Cards:** 86Box's choices as the machine settings
  *    list them (X86Settings, so each narrows by the machine and the choices before it), for a PC.
  *    A preset's own `86box.cfg` gives the defaults; a Custom PC takes 86Box's.
- * 5. **Hard disk:** none or a blank disk's size, for a PC with a hard disk controller. The sizes are
- *    the controller's kind: IDE disks to 8 GB, the XT and AT controllers' small MFM disks.
+ * 5. **Disks** (KairoX86#338): the hard disk, none or a blank disk's size (the controller's kind's
+ *    sizes, or one typed, KairoX86#337), for a PC with a hard disk controller; and an image from the
+ *    games folder, or none, for each floppy and CD-ROM drive the machine being made has.
  * 6. The name (the shared engine's page).
  *
  * Create writes the machine folder: its `86box.cfg` (the preset's, or a new one, with every choice
  * made), the preset's CMOS while its machine and disk are the preset's own (the CMOS holds the
- * disk's geometry), and the blank disk.
+ * disk's geometry), the blank disk, and the drives' images, copied in (unpacked from an archive).
  */
 object X86NewGame {
     private const val CUSTOM = "custom"
@@ -48,7 +51,14 @@ object X86NewGame {
     // ESDI: 36 sectors a track
     private val ESDI_DISKS = listOf(Geometry(1024, 9, 36), Geometry(1224, 15, 36))
 
-    fun workflow(context: Context): NewGameWorkflow {
+    /** The drive fields' IDs, by media slot (X86Library.DRIVE_KEYS): Floppy A, Floppy B, the CD-ROM. */
+    private val DRIVE_FIELDS = listOf("drive-a", "drive-b", "drive-cd")
+
+    /**
+     * New game's workflow; [images] gives the games folder's disk images, for the Disks page's drives,
+     * and [filesOf] the files each is made of (X86Library.imageFiles: a cue sheet's tracks too).
+     */
+    fun workflow(context: Context, images: () -> List<X86Entry>, filesOf: (X86Entry) -> List<X86Library.ImageFile>): NewGameWorkflow {
         val presets = X86Presets.all.associateBy { PRESET + it.id }
         // A preset's 86box.cfg, read once, for its defaults and its folder
         val configs = HashMap<String, IniText>()
@@ -63,53 +73,128 @@ object X86NewGame {
         /** A machine setting as a field: its choices as the machine settings narrow them, its default the preset's. */
         fun field(setting: X86Settings.Setting) = WorkflowField.Select(setting.option.id, setting.option.label,
             { values -> setting.option.choices(values) },
-            { values -> configOf(values.getValue(NewGameWorkflow.KIND))?.let(setting.read) ?: newDefault(setting, values) })
+            { values -> configOf(values.getValue(NewGameWorkflow.KIND))?.let(setting.read) ?: newDefault(setting, values) },
+            custom = { values -> setting.option.custom(values) })
 
+        // A preset's hardware, or the player's own (Custom PC), apart from the blank floppies (KairoX86#335)
+        val presetSection = UiText.res(R.string.new_game_presets)
+        val customSection = UiText.res(R.string.new_game_custom)
+        val floppySection = UiText.res(R.string.new_game_blank_floppies)
         val kinds = WorkflowField.Select(NewGameWorkflow.KIND, UiText.res(FrontendR.string.kairo_new_game_kind), {
-            presets.map { (id, preset) -> ChoiceOption(id, UiText.res(preset.label), null, X86Presets.unavailable(preset)) } +
-                ChoiceOption(CUSTOM, UiText.res(R.string.preset_custom)) +
-                floppies.map { ChoiceOption(it.id, it.label) }
+            presets.map { (id, preset) -> ChoiceOption(id, UiText.res(preset.label), null, X86Presets.unavailable(preset), section = presetSection) } +
+                ChoiceOption(CUSTOM, UiText.res(R.string.preset_custom), section = customSection) +
+                floppies.map { ChoiceOption(it.id, it.label, section = floppySection) }
         }, { PRESET + X86Presets.DOS_486.id })
         val hardware = listOf(X86Settings.machine, X86Settings.processor, X86Settings.memory)
         val cards = listOf(X86Settings.video, X86Settings.sound, X86Settings.midi, X86Settings.network, X86Settings.hdc,
             X86Settings.scsi, X86Settings.fdc, X86Settings.mouse, X86Settings.joystick)
+        // A machine without a hard disk controller takes none
+        fun takesDisk(values: Map<String, String>) = values[X86Settings.hdc.option.id] != "none"
         val disk = WorkflowField.Select(DISK, UiText.res(FrontendR.string.kairo_hard_disk), { values ->
             listOf(ChoiceOption(NO_DISK, UiText.res(FrontendR.string.kairo_none))) +
-                disksFor(values).map { ChoiceOption(it.id, UiText.res(FrontendR.string.kairo_memory_mb, it.megabytes.toInt())) }
+                (if (takesDisk(values)) disksFor(values).map { ChoiceOption(it.id, sizeLabel(it)) } else emptyList())
         }, { values ->
             val preset = presets[values[NewGameWorkflow.KIND]]
             preset?.hardDisk?.let { Geometry(it.cylinders, it.heads, it.sectors).id } ?: if (preset != null) NO_DISK else disksFor(values).firstOrNull()?.id ?: NO_DISK
-        })
+        }, custom = { values -> typedDisk(values).takeIf { takesDisk(values) } })
+        /** The drives the machine being made has: its preset's 86box.cfg's (or 86Box's defaults, for a Custom PC). */
+        fun drives(values: Map<String, String>) = X86Library.drives(configOf(values.getValue(NewGameWorkflow.KIND)) ?: IniText(""))
+        val driveFields = DRIVE_FIELDS.mapIndexed { slot, id ->
+            val kind = if (slot < 2) X86Library.DiskKind.FLOPPY else X86Library.DiskKind.CD
+            // A drive the machine does not have offers nothing, so the page leaves it out
+            WorkflowField.Select(id, UiText.res(DRIVE_LABELS[slot]), { values ->
+                if (slot !in drives(values)) emptyList()
+                else listOf(ChoiceOption(NO_DISK, UiText.res(FrontendR.string.kairo_empty))) +
+                    GameDisks.options(images().filter { it.playable && kind in it.kinds }) { it.imageSize.takeIf { size -> size >= 0 } }
+            }, { NO_DISK })
+        }
         val pages = listOf(
             WorkflowPage(NewGameWorkflow.KIND, UiText.res(FrontendR.string.kairo_library_new_game), listOf(kinds)),
             WorkflowPage("machine", UiText.res(FrontendR.string.kairo_option_machine), listOf(field(X86Settings.machine)), ::pc),
             WorkflowPage("processor", UiText.res(R.string.new_game_processor_memory), listOf(field(X86Settings.processor), field(X86Settings.memory)), ::pc),
             WorkflowPage("cards", UiText.res(R.string.new_game_cards), cards.map(::field), ::pc),
-            WorkflowPage("disk", UiText.res(FrontendR.string.kairo_hard_disk), listOf(disk)) { values -> pc(values) && values[X86Settings.hdc.option.id] != "none" })
+            WorkflowPage("disks", UiText.res(FrontendR.string.kairo_media_disks), listOf(disk) + driveFields, ::pc))
 
         return NewGameWorkflow(pages) { values ->
             val kind = values.getValue(NewGameWorkflow.KIND)
-            floppies.firstOrNull { it.id == kind } ?: machineFolder(context, kind, presets[kind], configOf(kind), hardware + cards, values)
+            floppies.firstOrNull { it.id == kind } ?: machineFolder(context, kind, presets[kind], configOf(kind), hardware + cards, values,
+                drives(values).associateWith { slot -> values[DRIVE_FIELDS[slot]]?.takeIf { it != NO_DISK }?.let { id -> filesOf(images().first { it.id == id }) } })
         }
     }
 
+    private val DRIVE_LABELS = listOf(R.string.media_floppy_a, R.string.media_floppy_b, FrontendR.string.kairo_cd_rom)
+
+    /** A blank disk's size, as the player reads it. */
+    private fun sizeLabel(geometry: Geometry) = UiText.res(FrontendR.string.kairo_memory_mb, geometry.megabytes.toInt())
+
     /**
-     * A new machine's default for [setting] where its preset says nothing: 86Box's, except a video card,
-     * which 86Box leaves out on a board without one onboard: a new PC gets the first card the board takes.
+     * A disk size the player types (KairoX86#337), in MB, from 1 MB to the most the controller's bus
+     * takes (its heads and sectors a track, and its cylinders: 16383 for IDE, 1024 for the others); kept
+     * as the geometry the disk is written with: the whole cylinders that hold at least the size typed, a
+     * cylinder being under 1 MB, so the size shown is the size typed.
+     */
+    private fun typedDisk(values: Map<String, String>): CustomValue {
+        val (heads, sectors, cylinders) = busGeometry(values)
+        val cylinderBytes = heads.toLong() * sectors * 512
+        val most = (cylinders * cylinderBytes / (1024 * 1024)).toInt()
+        val sizes = CustomValue.range(1, most, 1) { UiText.res(FrontendR.string.kairo_memory_mb, it) }
+        fun geometryOf(megabytes: Int) = Geometry(
+            ((megabytes.toLong() * 1024 * 1024 + cylinderBytes - 1) / cylinderBytes).toInt().coerceIn(1, cylinders), heads, sectors)
+        return CustomValue(sizes.hint, { id -> if (id == NO_DISK) UiText.res(FrontendR.string.kairo_none) else sizeLabel(Geometry.of(id)) },
+            sizes.problem, { typed -> geometryOf(typed.toInt()).id },
+            { id -> id.takeIf { it != NO_DISK && it.contains(',') }?.let { Geometry.of(it) }
+                ?.takeIf { it.heads == heads && it.sectors == sectors }?.megabytes?.toString() ?: "" })
+    }
+
+    /** The heads, sectors a track and most cylinders of a disk on the chosen controller's bus. */
+    private fun busGeometry(values: Map<String, String>): Triple<Int, Int, Int> = when (bus(values)) {
+        "ide" -> Triple(16, 63, 16383)
+        "esdi" -> Triple(16, 36, 1024)
+        "mfm" -> if (rll(values)) Triple(16, 26, 1024) else Triple(16, 17, 1024)
+        else -> Triple(16, 17, 1024)
+    }
+
+    /**
+     * A new machine's default for [setting] where its preset says nothing: 86Box's (the board's own
+     * card where it has one), except where that is none: a video card, the first the board takes; a
+     * network card, one the machine's system drives (KairoX86#336).
      */
     private fun newDefault(setting: X86Settings.Setting, values: Map<String, String>): String {
         val default = setting.option.default(values)
-        if (setting !== X86Settings.video || default != "none") return default
-        return setting.option.choices(values).first { it.id != "none" && it.disabledReason == null }.id
+        if (default != "none") return default
+        val taken = setting.option.choices(values).filter { it.id != "none" && it.disabledReason == null }.map { it.id }
+        return when {
+            setting === X86Settings.video -> taken.first()
+            setting === X86Settings.network -> NETWORK_CARDS.getValue(networkSystem(values)).firstOrNull { it in taken } ?: default
+            else -> default
+        }
     }
+
+    /** What a new machine's network card is for: DOS's packet drivers, or Windows 9x's own drivers. */
+    private fun networkSystem(values: Map<String, String>) =
+        if (values[NewGameWorkflow.KIND] in setOf(PRESET + X86Presets.XT.id, PRESET + X86Presets.DOS_486.id)) "dos" else "windows"
+
+    /**
+     * A new machine's network card (KairoX86#336), the first the board takes: one the machine's
+     * system drives with no extra drivers. DOS: an NE2000-compatible card, which DOS packet drivers
+     * support most widely (16-bit, else the 8-bit NE2000 or NE1000 an XT takes). Windows 9x: the AMD
+     * PCnet-PCI II on a PCI board (Windows 95 OSR2 and 98's own "AMD PCNET Family" driver), else an
+     * NE2000-compatible card (Windows' own NE2000 driver). A board with no slot for any keeps none.
+     */
+    private val NETWORK_CARDS = mapOf(
+        "dos" to listOf("ne2k", "ne2k8", "ne1k"),
+        "windows" to listOf("pcnetpci", "ne2k", "ne2k8", "ne1k"))
 
     /** The disks the chosen controller takes, by its bus, and on an MFM card by whether it records RLL. */
     private fun disksFor(values: Map<String, String>): List<Geometry> = when (bus(values)) {
         "ide" -> IDE_DISKS
         "esdi" -> ESDI_DISKS
-        "mfm" -> if (values.getValue(X86Settings.hdc.option.id).let { it == "st506_xt_st11_r" || it.endsWith("27x") }) RLL_DISKS else MFM_DISKS
+        "mfm" -> if (rll(values)) RLL_DISKS else MFM_DISKS
         else -> MFM_DISKS
     }
+
+    /** Whether the chosen MFM controller records RLL (the ST-11R, the WD 27X cards): 26 sectors a track. */
+    private fun rll(values: Map<String, String>) = values.getValue(X86Settings.hdc.option.id).let { it == "st506_xt_st11_r" || it.endsWith("27x") }
 
     /**
      * 86Box's bus of a hard disk on the chosen controller, by its card's internal name (86Box's disk/hdc_*.c):
@@ -126,13 +211,14 @@ object X86NewGame {
     }
 
     private fun machineFolder(context: Context, kind: String, preset: X86Presets.Preset?, presetConfig: IniText?,
-                              settings: List<X86Settings.Setting>, values: Map<String, String>): BlankDisk {
+                              settings: List<X86Settings.Setting>, values: Map<String, String>, media: Map<Int, List<X86Library.ImageFile>?>): BlankDisk {
         val config = IniText(presetConfig?.toString() ?: "")
         // Each choice that differs from what the configuration already says (its key, or 86Box's default without one)
         for (setting in settings) values[setting.option.id]?.let { value ->
             if (value != (setting.read(config) ?: setting.option.default(values))) setting.changes(value).forEach { config[it.section, it.key] = it.value }
         }
-        val geometry = values[DISK]?.takeIf { it != NO_DISK }?.let(Geometry::of)
+        // The hard disk only on a controller that takes one (the Disks page offers it there)
+        val geometry = values[DISK]?.takeIf { it != NO_DISK && values[X86Settings.hdc.option.id] != "none" }?.let(Geometry::of)
         val bus = bus(values)
         config[X86Library.HARD_DISKS, "hdd_01_fn"] = geometry?.let { X86Presets.HARD_DISK }
         config[X86Library.HARD_DISKS, "hdd_01_parameters"] = geometry?.let { "${it.sectors}, ${it.heads}, ${it.cylinders}, 0, $bus" }
@@ -146,6 +232,22 @@ object X86NewGame {
             }
         }
         geometry?.let { files += X86Presets.HARD_DISK to { output -> X86BlankDisk(it.cylinders, it.heads, it.sectors).write(output) } }
+        // Each drive's image, with the files it is made of, copied in by their own names (one image in two
+        // drives, once), and named in 86box.cfg; two different files of one name cannot both be there.
+        val named = HashMap<String, List<X86Library.ImageFile>>()
+        for ((slot, image) in media) {
+            val name = image?.first()?.name
+            if (image != null && name != null && name !in named) {
+                for (file in image) check(files.none { it.first.equals(file.name, ignoreCase = true) }) {
+                    context.getString(R.string.machine_disk_name_taken, file.name)
+                }
+                named[name] = image
+                image.forEach { file -> files += file.name to file.write }
+            }
+            config[X86Library.DRIVES, X86Library.DRIVE_KEYS[slot]] = name
+        }
+        files[0] = "86box.cfg" to { output -> output.write(config.toString().toByteArray()) }
         return BlankDisk.Folder(kind, UiText.res(if (preset != null) preset.label else R.string.preset_custom), files)
     }
+
 }

@@ -48,6 +48,9 @@
     <!-- EN: %1$s could not be created -->
     <string name="machine_create_failed">No se pudo crear %1$s</string>
     <string name="machine_disk_name_taken">Ya hay un archivo llamado %1$s en la carpeta de la máquina</string>
+    <string name="machine_disk_track_missing">%1$s, que necesita %2$s, no está junto a él</string>
+    <string name="machine_disk_copying">%2$d %% copiado: %1$s</string>
+    <string name="machine_disk_unpacking">%2$d %% descomprimido: %1$s</string>
     <!-- %1$s is the name of a file in the machine's folder. -->
     <!-- EN: %1$s is not a name a machine\'s file can have -->
     <string name="machine_unsafe_name">%1$s no es un nombre que pueda tener un archivo de una máquina</string>
@@ -130,6 +133,9 @@
     <string name="new_game_processor_memory">Procesador y memoria</string>
     <!-- EN: Cards -->
     <string name="new_game_cards">Tarjetas</string>
+    <string name="new_game_presets">PREAJUSTES</string>
+    <string name="new_game_custom">PERSONALIZADO</string>
+    <string name="new_game_blank_floppies">DISQUETES VACÍOS</string>
     <!-- A machine setting (86box.cfg time_sync): the clock the guest reads. -->
     <!-- EN: Clock -->
     <string name="setting_clock">Reloj</string>
