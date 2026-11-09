@@ -309,7 +309,7 @@ class MainActivity : MachineActivity<X86Entry>() {
 
     override val blankDisks: List<BlankDisk> by lazy {
         X86Presets.blankDisks(this) + X86BlankFloppy.all.map { floppy ->
-            BlankDisk.Image(floppy.id, UiText.res(FrontendR.string.kairo_blank_floppy, floppy.label), "img", floppy::write)
+            BlankDisk.Image(floppy.id, UiText.res(FrontendR.string.kairo_blank_floppy, floppy.label), "img", write = floppy::write)
         }
     }
 

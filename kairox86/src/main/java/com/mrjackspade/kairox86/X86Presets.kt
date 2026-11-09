@@ -67,12 +67,9 @@ object X86Presets {
     /** The presets as new entries the create flow writes, each from its assets. */
     fun blankDisks(context: Context): List<BlankDisk> = all.map { preset ->
         val assets = preset.files.map { path ->
-            path to { output: java.io.OutputStream ->
-                context.assets.open("presets/${preset.id}/$path").use { it.copyTo(output) }
-                Unit
-            }
+            BlankDisk.File(path) { output -> context.assets.open("presets/${preset.id}/$path").use { it.copyTo(output) } }
         }
-        val disk = preset.hardDisk?.let { blank -> listOf(HARD_DISK to { output: java.io.OutputStream -> blank.write(output) }) }.orEmpty()
+        val disk = preset.hardDisk?.let { blank -> listOf(BlankDisk.File(HARD_DISK) { output -> blank.write(output) }) }.orEmpty()
         BlankDisk.Folder("preset-${preset.id}", UiText.res(preset.label), assets + disk) { unavailable(preset) }
     }
 }
