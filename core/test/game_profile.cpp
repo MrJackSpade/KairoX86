@@ -58,6 +58,9 @@
 #include <vector>
 
 #include "kairo/startup_typer.h"
+#ifndef _WIN32
+#include <dlfcn.h>
+#endif
 #include "x86_machine.h"
 
 #ifdef _WIN32
@@ -216,6 +219,9 @@ void write_bmp(const std::string &path, const uint8_t *bgra, uint32_t width, uin
 // translated code's block exits went (KairoX86#214). Read from the machine's copy of the library.
 struct Diag {
     std::vector<uint64_t> values;
+    // The timer callbacks run (86Box's timer.c counts each callback function's runs: KairoX86#402)
+    std::vector<uint64_t> timer_runs;
+    std::vector<const void *> timer_callbacks;
 
     static const uint64_t *counters(const kairox86::X86Machine &machine, const char *name) {
         const auto *found = static_cast<const uint64_t *>(machine.symbol(name));
@@ -236,6 +242,14 @@ struct Diag {
         d.values.insert(d.values.end(), miss, miss + 8);
         const uint64_t *miss2 = counters(machine, "k9x_miss2");
         d.values.insert(d.values.end(), miss2, miss2 + 11);
+        const uint64_t *runs = counters(machine, "k9x_timer_n");
+        d.timer_runs.assign(runs, runs + 32);
+        const auto *callbacks = static_cast<const void *const *>(machine.symbol("k9x_timer_cb"));
+        if (!callbacks) {
+            std::fprintf(stderr, "FAIL: the core has no k9x_timer_cb: not a K9X_DIAG core\n");
+            std::exit(1);
+        }
+        d.timer_callbacks.assign(callbacks, callbacks + 32);
         return d;
     }
 
@@ -247,6 +261,17 @@ struct Diag {
                                             "other-hash", "other-dirty", "other-top", "other-two-page", "other-none"};
         for (size_t i = 0; i < values.size(); ++i)
             std::printf("diag %s %llu\n", names[i], (unsigned long long) (values[i] - start.values[i]));
+        // Each timer callback's runs over the measured frames, by its address in the core's library (as an offset
+        // from the library's start where the platform says it, for llvm-addr2line on the build's library)
+        for (size_t i = 0; i < timer_runs.size() && timer_callbacks[i]; ++i) {
+            uintptr_t at = reinterpret_cast<uintptr_t>(timer_callbacks[i]);
+#ifndef _WIN32
+            Dl_info info{};
+            if (dladdr(timer_callbacks[i], &info) && info.dli_fbase) at -= reinterpret_cast<uintptr_t>(info.dli_fbase);
+#endif
+            std::printf("diag timer 0x%llx %llu\n", (unsigned long long) at,
+                        (unsigned long long) (timer_runs[i] - (i < start.timer_runs.size() ? start.timer_runs[i] : 0)));
+        }
     }
 };
 #endif
