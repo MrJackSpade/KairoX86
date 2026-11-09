@@ -27,6 +27,46 @@ The noise floor on the RG DS (2026-11-09; one core against itself, five interlea
 A single pair of runs spreads about ±0.6% (±1% on the short DOS 486 machine); five-round medians agree within 0.3% on
 the long runs. A difference below ~1% of five-round medians, or below ~1.5% on the DOS 486, is noise.
 
+## Baseline on today's core (KairoX86#348, RG DS, 2026-11-09)
+
+The release core with its profile at c49da61 (hidden extern declarations, #376) unless noted; the diagnostic counters
+from a K9X_DIAG core without the profile. Per guest second unless noted.
+
+**Speed** (game_profile, frames a second against the guest's): win98-486 4286-frame boot 49.0 of 58.82; win98-pentium
+52.6 of 71.43; win98-voodoo3 31.6 of 76.92; DOOM's demo 70.2 of 71.43; the standard's DOS machines xt 103.4, v20 72.8,
+at 93.0, 386sx 81.7, 486 73.9, pentium 33.5 (the latter a BIOS prompt with the cache off, #350).
+
+**Where the emulation thread's time goes** (simpleperf attached at the win98-486 idle desktop, 20 s):
+
+| Region | Share |
+|---|---|
+| Translated code | 55% |
+| — of it: the link routine and exits / the memory stubs / block code | 39.7% / 19.6% / 41.8% |
+| The core library (C) | 30%: `readmemll` 10.0%, `writememll` 6.9%, `jit_flags_rebuild` 3.4%, `mmutranslatereal` 3.4%, `timer_enable` 3.1%, `loadseg` 3.0%, `addreadlookup` 3.0%, `exec386_dynarec` 2.7%, `flushmmucache_nopc` 2.5%, `pmodeint` 2.3%, `svga_poll` 2.1%, `pmodeiret` 1.8% |
+| game_profile's per-frame hash (harness only) | 14% |
+
+In DOOM's demo the VRAM write chain (`writemembl` → `s3_write` → `svga_write_linear`, with the word forms) is ~25% of
+all samples across threads (#369).
+
+**The PMU** (the emulation thread, 10 s): desktop IPC 0.49, front-end stalls 30% of cycles, back-end 37%, 9.6 M branch
+mispredictions a second, 17.8 L1I refills per 1k instructions (58% of translated code's on the stubs and the link
+routine), 5.8 M L1 iTLB refills, 19.5 M L1 dTLB refills, 1.24 M dTLB walks; DOOM IPC 0.73, 3.8 L1I refills per 1k (#346).
+
+**The diagnostic counters** at the desktop (frames 5000-6500, 24 guest seconds): 88 M guest instructions a second,
+16.0 M block exits (one per 5.5 guest instructions), 139 K entries from the C loop, `interp` 0, 66 M stub memory accesses,
+link misses 11.6 K (target 5.8 K, slice 2.5 K, tsc 2.3 K, irq 0.6 K, status 0.2 K), `patch-retarget` 3.9 K (#359).
+
+**Timer callbacks** (per guest millisecond, desktop / DOOM): the fast PIT's refresh counter 67.9 / 66.9, `svga_poll`
+64.6 / 63.3, `music_poll` 50.8 / 50.0, `sound_poll` 49.0 / 48.3, the KBC polls 20.4 / 20.2, `pollsb` - / 11.1: ~260 a ms
+(#370).
+
+**Compiles** (a counting core): the win98-486 boot's first 20 s 21.7 K compiles (6.0% of the wall time), the next 74 s
+56.0 K (4.6%) with 72 K evictions once the 32 K block slots fill; at the desktop 82 compiles in 27 s; DOOM's demo 793
+in 37 s (#372). SMC cooldowns: 344 in the whole boot.
+
+**Interrupts and segment loads** at the desktop: V86 → ring 0 interrupts and the IRETs back 14.5 K each, far RET
+14.6 K, V86-mode segment loads 190 K, protected-mode 103 K (#371).
+
 ## 486DX2-66 target (ASUS PVI-486AP4, 32MB, S3 Trio64V2, SB16) — RG DS
 The standard's `win98-486` machine (its reference disk was then in that harness's own folder). 100% real time = wall ≤ emulated.
 
