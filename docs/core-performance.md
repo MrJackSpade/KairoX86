@@ -8,6 +8,25 @@ The record below began in the Kairo9X proof of concept, whose speed fixes are th
 
 Status: `open` · `fixed` · `rejected` (not exact, or no gain) · `measured` · `noted`
 
+## Measuring a change: the A/B protocol (KairoX86#349)
+
+`tools/ab.ps1 -Device <serial> -A <build> -B <build> -Machine <names> -Rounds n` runs two prebuilt cores (Build-Core
+output folders) interleaved on the device, A B A B, each run through core/test/exact/run.sh, and prints every run, each
+core's median and spread, and the difference of the medians; it fails if any round's hashes differ. Exactness is
+tools/exact.ps1's job; this is the speed comparison after it.
+
+The noise floor on the RG DS (2026-11-09; one core against itself, five interleaved rounds; the governor at
+`performance`, the clock at 1.99 GHz throughout, 37 → 51 °C, no throttling):
+
+| Workload | A median (range) | A′ median (range) | A′ − A |
+|---|---|---|---|
+| win98-486, 4286 frames | 49.05 (48.68–49.28) | 48.97 (48.87–49.25) | −0.2% |
+| DOOM's demo (doom486, 2500 frames after 3500) | 70.16 (69.83–70.36) | 69.97 (69.62–70.09) | −0.3% |
+| 486 (DOS), 1500 frames, two rounds | 73.14 (72.71–73.58) | 72.39 (71.35–73.44) | −1.0% |
+
+A single pair of runs spreads about ±0.6% (±1% on the short DOS 486 machine); five-round medians agree within 0.3% on
+the long runs. A difference below ~1% of five-round medians, or below ~1.5% on the DOS 486, is noise.
+
 ## 486DX2-66 target (ASUS PVI-486AP4, 32MB, S3 Trio64V2, SB16) — RG DS
 The standard's `win98-486` machine (its reference disk was then in that harness's own folder). 100% real time = wall ≤ emulated.
 
