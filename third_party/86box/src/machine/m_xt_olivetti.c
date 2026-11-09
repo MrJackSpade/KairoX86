@@ -148,6 +148,15 @@ static uint8_t key_queue[16];
 static int     key_queue_start = 0;
 static int     key_queue_end   = 0;
 
+/* KairoX86#404: how many more bytes this keyboard's 16-byte queue holds, so the host sends a key only
+   when all of its bytes fit (keyboard_room): a key added to a full queue overwrote bytes the guest had
+   not read, and a lost E0 made Left into keypad 4. */
+static int
+kairo_key_room(void)
+{
+    return 15 - ((key_queue_end - key_queue_start) & 0x0f);
+}
+
 video_timings_t timing_m19_vid = { VIDEO_ISA, 8, 16, 32, 8, 16, 32 };
 
 const device_t m19_vid_device;
@@ -713,6 +722,7 @@ m24_kbd_close(void *priv)
     keyboard_scan = 0;
 
     keyboard_send = NULL;
+    keyboard_room = NULL;
 
     io_removehandler(0x0060, 2,
                      m24_kbd_read, NULL, NULL, m24_kbd_write, NULL, NULL, kbd);
@@ -1906,6 +1916,7 @@ m24_kbd_init(m24_kbd_t *kbd)
     io_sethandler(0x0064, 1,
                   m24_kbd_read, NULL, NULL, m24_kbd_write, NULL, NULL, kbd);
     keyboard_send = m24_kbd_adddata_ex;
+    keyboard_room = kairo_key_room;
     m24_kbd_reset(kbd);
     timer_add(&kbd->send_delay_timer, m24_kbd_poll, kbd, 1);
 

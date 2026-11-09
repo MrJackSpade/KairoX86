@@ -6076,6 +6076,60 @@ KAIROX86_MIDI_PORT = [
      '#    endif /* USE_SOUNDCANVAS */\n#    ifdef USE_KAIRO_MIDI_PORT\nextern const device_t kairo_midi_port_device;\n#    endif /* USE_KAIRO_MIDI_PORT */\n#endif\n'),
 ]
 
+KEYBOARD_ROOM_QUEUE = 'static int     key_queue_start = 0;\nstatic int     key_queue_end   = 0;\n'
+KEYBOARD_ROOM_QUEUE_AFTER = "static int     key_queue_start = 0;\nstatic int     key_queue_end   = 0;\n\n/* KairoX86#404: how many more bytes this keyboard's 16-byte queue holds, so the host sends a key only\n   when all of its bytes fit (keyboard_room): a key added to a full queue overwrote bytes the guest had\n   not read, and a lost E0 made Left into keypad 4. */\nstatic int\nkairo_key_room(void)\n{\n    return 15 - ((key_queue_end - key_queue_start) & 0x0f);\n}\n"
+
+# KairoX86#404: each keyboard says how many more bytes its queue holds (keyboard_room), so the frontend
+# (core/kairo/frontend.c) sends a key event only when all of its bytes fit. The keyboards' 16-byte queues
+# overwrite unread bytes when full: several key events in one frame (a burst of Left taps, 8 bytes each
+# with Num Lock's fake Shift) lost an E0, and Left reached the guest as keypad 4.
+KAIROX86_KEYBOARD_ROOM = [
+    ('86box/src/include/86box/keyboard.h',
+     'extern void (*keyboard_send)(uint16_t val);\n',
+     'extern void (*keyboard_send)(uint16_t val);\n/* KairoX86#404: how many more bytes the keyboard\'s queue holds; NULL for a keyboard that does not say. */\nextern int (*keyboard_room)(void);\n'),
+    ('86box/src/device/keyboard.c',
+     'void (*keyboard_send)(uint16_t val);\n',
+     'void (*keyboard_send)(uint16_t val);\nint (*keyboard_room)(void);\n'),
+    ('86box/src/device/keyboard_at.c',
+     'static void\nadd_data_kbd(uint16_t val)\n{\n',
+     '/* KairoX86#404: how many more bytes the keyboard\'s queue holds (keyboard_room). */\nstatic int\nkairo_key_room(void)\n{\n    const atkbc_dev_t *dev = SavedKbd;\n\n    return dev->fifo_mask - ((dev->queue_end - dev->queue_start) & dev->fifo_mask);\n}\n\nstatic void\nadd_data_kbd(uint16_t val)\n{\n'),
+    ('86box/src/device/keyboard_at.c',
+     '        keyboard_send = add_data_kbd_84;\n    SavedKbd = dev;\n',
+     '        keyboard_send = add_data_kbd_84;\n    SavedKbd = dev;\n    keyboard_room = kairo_key_room;\n'),
+    ('86box/src/device/keyboard_at.c',
+     '    keyboard_scan = 0;\n    keyboard_send = NULL;\n\n    /* Disable the scancode maps. */\n',
+     '    keyboard_scan = 0;\n    keyboard_send = NULL;\n    keyboard_room = NULL;\n\n    /* Disable the scancode maps. */\n'),
+    ('86box/src/device/kbc_xt.c', KEYBOARD_ROOM_QUEUE, KEYBOARD_ROOM_QUEUE_AFTER),
+    ('86box/src/device/kbc_xt.c',
+     '    keyboard_send = kbd_adddata_ex;\n    kbd->type = info->local;\n',
+     '    keyboard_send = kbd_adddata_ex;\n    keyboard_room = kairo_key_room;\n    kbd->type = info->local;\n'),
+    ('86box/src/device/kbc_xt.c',
+     '    keyboard_scan = 0;\n\n    keyboard_send = NULL;\n',
+     '    keyboard_scan = 0;\n\n    keyboard_send = NULL;\n    keyboard_room = NULL;\n'),
+    ('86box/src/machine/m_amstrad.c', KEYBOARD_ROOM_QUEUE, KEYBOARD_ROOM_QUEUE_AFTER),
+    ('86box/src/machine/m_amstrad.c',
+     '    keyboard_send = kbd_adddata_ex;\n',
+     '    keyboard_send = kbd_adddata_ex;\n    keyboard_room = kairo_key_room;\n'),
+    ('86box/src/machine/m_pcjr.c', KEYBOARD_ROOM_QUEUE, KEYBOARD_ROOM_QUEUE_AFTER),
+    ('86box/src/machine/m_pcjr.c',
+     '    keyboard_send = kbd_adddata_ex;\n',
+     '    keyboard_send = kbd_adddata_ex;\n    keyboard_room = kairo_key_room;\n'),
+    ('86box/src/machine/m_xt_ibm5550.c', KEYBOARD_ROOM_QUEUE, KEYBOARD_ROOM_QUEUE_AFTER),
+    ('86box/src/machine/m_xt_ibm5550.c',
+     '    keyboard_send = kbd_adddata_ex;\n',
+     '    keyboard_send = kbd_adddata_ex;\n    keyboard_room = kairo_key_room;\n'),
+    ('86box/src/machine/m_xt_ibm5550.c',
+     '    keyboard_scan = 0;\n    keyboard_send = NULL;\n',
+     '    keyboard_scan = 0;\n    keyboard_send = NULL;\n    keyboard_room = NULL;\n'),
+    ('86box/src/machine/m_xt_olivetti.c', KEYBOARD_ROOM_QUEUE, KEYBOARD_ROOM_QUEUE_AFTER),
+    ('86box/src/machine/m_xt_olivetti.c',
+     '    keyboard_send = m24_kbd_adddata_ex;\n',
+     '    keyboard_send = m24_kbd_adddata_ex;\n    keyboard_room = kairo_key_room;\n'),
+    ('86box/src/machine/m_xt_olivetti.c',
+     '    keyboard_scan = 0;\n\n    keyboard_send = NULL;\n',
+     '    keyboard_scan = 0;\n\n    keyboard_send = NULL;\n    keyboard_room = NULL;\n'),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -6212,6 +6266,7 @@ PATCHES = {
     'kairox86-pgc-tjust': KAIROX86_PGC_TJUST,
     'kairox86-shared-midi': KAIROX86_SHARED_MIDI,
     'kairox86-midi-port': KAIROX86_MIDI_PORT,
+    'kairox86-keyboard-room': KAIROX86_KEYBOARD_ROOM,
 }
 
 ADDED = [

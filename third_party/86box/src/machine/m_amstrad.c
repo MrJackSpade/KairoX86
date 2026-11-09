@@ -171,6 +171,15 @@ uint32_t amstrad_latch;
 static uint8_t key_queue[16];
 static int     key_queue_start = 0;
 static int     key_queue_end   = 0;
+
+/* KairoX86#404: how many more bytes this keyboard's 16-byte queue holds, so the host sends a key only
+   when all of its bytes fit (keyboard_room): a key added to a full queue overwrote bytes the guest had
+   not read, and a lost E0 made Left into keypad 4. */
+static int
+kairo_key_room(void)
+{
+    return 15 - ((key_queue_end - key_queue_start) & 0x0f);
+}
 static uint8_t crtc_mask[32]   = {
     0xff, 0xff, 0xff, 0xff, 0x7f, 0x1f, 0x7f, 0x7f,
     0xf3, 0x1f, 0x7f, 0x1f, 0x3f, 0xff, 0x3f, 0xff,
@@ -3326,6 +3335,7 @@ machine_amstrad_init(const machine_t *model, int type)
     else
         keyboard_set_table(scancode_pc200);
     keyboard_send = kbd_adddata_ex;
+    keyboard_room = kairo_key_room;
     keyboard_scan = 1;
     keyboard_set_is_amstrad(((type == AMS_PC1512) || (type == AMS_PC1640)) ? 0 : 1);
 

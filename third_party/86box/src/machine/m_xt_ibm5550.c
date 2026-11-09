@@ -2305,6 +2305,15 @@ static uint8_t key_queue[16]; /* buffer in the keyboard */
 static int     key_queue_start = 0;
 static int     key_queue_end   = 0;
 
+/* KairoX86#404: how many more bytes this keyboard's 16-byte queue holds, so the host sends a key only
+   when all of its bytes fit (keyboard_room): a key added to a full queue overwrote bytes the guest had
+   not read, and a lost E0 made Left into keypad 4. */
+static int
+kairo_key_room(void)
+{
+    return 15 - ((key_queue_end - key_queue_start) & 0x0f);
+}
+
 static void
 kbd_epoch_poll(void *priv)
 {
@@ -2580,6 +2589,7 @@ kbd_init(const device_t *info)
     io_sethandler(0x0060, 4,
                   kbd_read, NULL, NULL, kbd_write, NULL, NULL, kbd);
     keyboard_send = kbd_adddata_ex;
+    keyboard_room = kairo_key_room;
     kbd_reset(kbd);
 
     timer_add(&kbd->send_delay_timer, kbd_epoch_poll, kbd, 1);
@@ -2602,6 +2612,7 @@ kbd_close(void *priv)
     /* Disable scanning. */
     keyboard_scan = 0;
     keyboard_send = NULL;
+    keyboard_room = NULL;
 
     io_removehandler(0x0060, 2,
                      kbd_read, NULL, NULL, kbd_write, NULL, NULL, kbd);

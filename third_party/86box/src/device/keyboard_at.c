@@ -5384,6 +5384,15 @@ add_data_kbd_84(uint16_t val)
     }
 }
 
+/* KairoX86#404: how many more bytes the keyboard's queue holds (keyboard_room). */
+static int
+kairo_key_room(void)
+{
+    const atkbc_dev_t *dev = SavedKbd;
+
+    return dev->fifo_mask - ((dev->queue_end - dev->queue_start) & dev->fifo_mask);
+}
+
 static void
 add_data_kbd(uint16_t val)
 {
@@ -6060,6 +6069,7 @@ keyboard_at_init(const device_t *info)
     else
         keyboard_send = add_data_kbd_84;
     SavedKbd = dev;
+    keyboard_room = kairo_key_room;
     keyboard_update_states(0, 0, 0, 0);
 
     inv_cmd_response = (dev->type & FLAG_PS2_KBD) ? 0xfe : 0xfa;
@@ -6209,6 +6219,7 @@ keyboard_at_close(void *priv)
 
     keyboard_scan = 0;
     keyboard_send = NULL;
+    keyboard_room = NULL;
 
     /* Disable the scancode maps. */
     keyboard_set_table(NULL);

@@ -91,6 +91,7 @@ kbc_at_log(const char* fmt, ...)
 #endif
 
 void (*keyboard_send)(uint16_t val);
+int (*keyboard_room)(void);
 static void (*keyboard_input_handler)(uint16_t scan, int down, void *priv);
 static void *keyboard_input_priv;
 /* Host keys arrive on the GUI thread, while a hard reset on the emulation

@@ -1186,10 +1186,45 @@ joystick_process(uint8_t gp)
                 joystick_state[gp][i / buttons].button[i % buttons] = input_buttons[i];
 }
 
+/*
+ * KairoX86#404: the host's key events wait here until the guest's keyboard has room for all of an
+ * event's bytes. A keyboard's queue holds 16 bytes and 86Box's overwrote unread ones when it was
+ * full: several key events in one frame (a burst of Left taps, 8 bytes each with Num Lock's fake
+ * Shift) lost an E0, and Left reached the guest as keypad 4. Waiting keys go in as the guest reads,
+ * at each millisecond of the frame, whole and in order; with room, at once, as before. A keyboard that
+ * does not say how much room it has (keyboard_room NULL) takes every event at once, as before.
+ */
+#define KEY_EVENTS 64
+/* The most bytes one key event sends: Pause's make code (E1 1D 45 E1 9D C5), a gray key with Num
+   Lock's fake Shift (E0 2A E0 4B). */
+#define KEY_EVENT_BYTES 8
+static struct {
+    uint16_t scancode;
+    bool     down;
+} key_events[KEY_EVENTS];
+static unsigned key_event_first, key_event_count;
+
+/* Sends the waiting key events the keyboard has room for, oldest first. */
+static void
+feed_keys(void)
+{
+    while ((key_event_count > 0) && (!keyboard_room || (keyboard_room() >= KEY_EVENT_BYTES))) {
+        keyboard_input(key_events[key_event_first].down, key_events[key_event_first].scancode);
+        key_event_first = (key_event_first + 1) % KEY_EVENTS;
+        key_event_count--;
+    }
+}
+
 static void
 api_key(int scancode, bool down)
 {
-    keyboard_input(down, (uint16_t) scancode);
+    /* As a keyboard's own buffer overruns: a key event with no room at all is lost whole, never in part. */
+    if (key_event_count == KEY_EVENTS)
+        return;
+    key_events[(key_event_first + key_event_count) % KEY_EVENTS].scancode = (uint16_t) scancode;
+    key_events[(key_event_first + key_event_count) % KEY_EVENTS].down     = down;
+    key_event_count++;
+    feed_keys();
 }
 
 static void
@@ -1504,6 +1539,7 @@ api_run_frame(void)
     const unsigned changes = floppy_changes;
     frame_ms               = 0;
     while ((monitors[0].mon_renderedframes == frames) && (frame_ms < KAIRO_X86_MAX_FRAME_MS)) {
+        feed_keys();
         pc_run();
         frame_ms++;
         /* The guest turned the PC off (ACPI, APM or a soft power switch: plat_power_off, which
@@ -1556,6 +1592,8 @@ api_reset(void)
     running = true;
     pc_reset_hard();
     halted_ms = 0;
+    /* Keys pressed before the reset are not the new start's */
+    key_event_count = 0;
     running   = false;
 }
 
