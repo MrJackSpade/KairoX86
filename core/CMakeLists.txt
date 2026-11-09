@@ -112,6 +112,10 @@ if(KAIROX86_PGO_GENERATE)
     add_compile_options(-fprofile-generate)
     add_link_options(-fprofile-generate)
 endif()
+# The library's C declares its externs hidden (KairoX86#376): a global defined in the library is read
+# with one PC-relative load instead of through the GOT.
+include("${KAIROX86_ROOT}/shared/cmake/KairoHiddenExterns.cmake")
+kairo_hide_c_externs()
 # The core's diagnostic counters (K9X_DIAG in 86Box's sources), reported by game_profile over its
 # measured frames (KairoX86#214). Never in a build that ships; needs -DKAIRO_PGO=OFF, as the
 # counters change the profiled code.
