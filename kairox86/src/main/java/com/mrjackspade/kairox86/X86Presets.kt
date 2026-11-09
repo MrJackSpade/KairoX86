@@ -30,11 +30,19 @@ import com.mrjackspade.kairo.frontend.UiText
 object X86Presets {
     /**
      * A preset: its folder in assets/presets, its row's name, the hardware whose firmware it needs,
-     * and the blank hard disk its 86box.cfg names (KairoX86#162), written into the new folder as
-     * [HARD_DISK].
+     * the blank hard disk its 86box.cfg names (KairoX86#162), written into the new folder as
+     * [HARD_DISK], and how its stored CMOS ([cmosFile], among [files]) holds that disk ([cmos]), so New
+     * game keeps it for any disk (KairoX86#341).
      */
     class Preset(val id: String, val label: Int, val files: List<String>, val machine: String, val cards: Map<String, String>,
-                 val hardDisk: X86BlankDisk? = null)
+                 val hardDisk: X86BlankDisk? = null, val cmos: X86Cmos? = null) {
+        /** The stored CMOS among [files], with [cmos]; none for a preset without one. */
+        val cmosFile: String? = files.singleOrNull { it.startsWith("nvr/") }
+
+        init {
+            require((cmos == null) == (cmosFile == null)) { "Preset $id: a stored CMOS needs its kind (X86Cmos), and only one does" }
+        }
+    }
 
     /** A new machine's blank hard disk, as its 86box.cfg names it (hdd_01_fn). */
     const val HARD_DISK = "disk.vhd"
@@ -44,9 +52,9 @@ object X86Presets {
     // The 486's disk is the 504 MB a DOS-era BIOS addresses by CHS (1024 cylinders, 16 heads, 63
     // sectors); the Pentium's is 2 GB, past it by LBA, room for Windows 98 and its games.
     val DOS_486 = Preset("486", R.string.preset_486, listOf("86box.cfg", "nvr/486ap4.nvr"), "486ap4",
-        mapOf(X86Hardware.VIDEO to "s3_trio64v2dx_pci", X86Hardware.SOUND to "sb16"), X86BlankDisk(1024, 16, 63))
+        mapOf(X86Hardware.VIDEO to "s3_trio64v2dx_pci", X86Hardware.SOUND to "sb16"), X86BlankDisk(1024, 16, 63), X86Cmos.Award450)
     val WIN9X = Preset("pentium", R.string.preset_win9x, listOf("86box.cfg", "nvr/tx97.nvr"), "tx97",
-        mapOf(X86Hardware.VIDEO to "s3_trio64v2dx_pci", X86Hardware.SOUND to "sb16"), X86BlankDisk(4096, 16, 63))
+        mapOf(X86Hardware.VIDEO to "s3_trio64v2dx_pci", X86Hardware.SOUND to "sb16"), X86BlankDisk(4096, 16, 63), X86Cmos.Detected)
 
     val all = listOf(XT, DOS_486, WIN9X)
 
