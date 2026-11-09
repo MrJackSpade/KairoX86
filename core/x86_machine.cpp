@@ -70,6 +70,8 @@ bool X86Machine::gpu_frames() { return impl_->api->gpu_frames(); }
 
 void X86Machine::gpu_frame_slot(int slot) { impl_->api->gpu_frame_slot(slot); }
 
+void X86Machine::picture_target(void *pixels, size_t bytes) { impl_->api->picture_target(pixels, bytes); }
+
 X86Machine::GpuFrame X86Machine::gpu_frame() const {
     GpuFrame frame;
     int width = 0, height = 0, across = 1, down = 1;

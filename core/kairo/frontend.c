@@ -97,10 +97,14 @@ static int                 configured_time_sync; /* the machine's own time_sync,
 static pthread_mutex_t blit_lock = PTHREAD_MUTEX_INITIALIZER;
 static char            title[512] = EMU_NAME;
 
-/* The last picture, copied from the video card's bitmap on 86Box's blit thread. */
+/* The last picture, copied from the video card's bitmap on 86Box's blit thread: into the host's buffer when it named one
+   large enough (KairoX86#406: picture_target), else into the machine's own. */
 static pthread_mutex_t picture_lock = PTHREAD_MUTEX_INITIALIZER;
 static uint32_t       *picture;
-static int             picture_alloc;
+static uint32_t       *own_picture;
+static int             own_alloc;
+static uint32_t       *picture_next;      /* the host's buffer for the next picture, or NULL */
+static size_t          picture_next_words;
 static int             picture_width;
 static int             picture_height;
 
@@ -497,17 +501,25 @@ static void
 picture_copy(const bitmap_t *target, int x, int y, int w, int h, int across, int down)
 {
     pthread_mutex_lock(&picture_lock);
-    if ((w * h) > picture_alloc) {
-        uint32_t *grown = realloc(picture, (size_t) w * (size_t) h * sizeof(uint32_t));
-        if (grown == NULL) {
-            /* The last picture stays as it was; the machine ends with why. */
-            pthread_mutex_unlock(&picture_lock);
-            machine_over("The PC stopped: no memory for its picture");
-            return;
+    uint32_t *into;
+    if ((picture_next != NULL) && ((size_t) w * (size_t) h <= picture_next_words)) {
+        into         = picture_next;
+        picture_next = NULL;
+    } else {
+        if ((w * h) > own_alloc) {
+            uint32_t *grown = realloc(own_picture, (size_t) w * (size_t) h * sizeof(uint32_t));
+            if (grown == NULL) {
+                /* The last picture stays as it was; the machine ends with why. */
+                pthread_mutex_unlock(&picture_lock);
+                machine_over("The PC stopped: no memory for its picture");
+                return;
+            }
+            own_picture = grown;
+            own_alloc   = w * h;
         }
-        picture       = grown;
-        picture_alloc = w * h;
+        into = own_picture;
     }
+    picture = into;
 #ifdef KAIROX86_CHECK_NATIVE_SIZE
     /* A test build (KairoX86#37): every line's pixels come in runs of [across] alike, whatever the
        runs' phase, so keeping one of each loses nothing; a frame where they do not is reported. */
@@ -611,6 +623,16 @@ api_gpu_frames(void)
     frames_on = true;
     fprintf(stderr, "kairo-gpu: frames handed over on the GPU (hardware buffers)\n");
     return true;
+}
+
+/* KairoX86#406: the host's buffer for the next picture (kairo_x86.h picture_target) */
+static void
+api_picture_target(void *pixels, size_t bytes)
+{
+    pthread_mutex_lock(&picture_lock);
+    picture_next       = pixels;
+    picture_next_words = bytes / sizeof(uint32_t);
+    pthread_mutex_unlock(&picture_lock);
 }
 
 static void
@@ -1464,6 +1486,13 @@ api_start(const char *vm_folder, const char *rom_folder, const struct KairoX86Ho
 
     host        = *given;
     host_thread = pthread_self();
+    /* No picture yet, and no buffer of an earlier session's host to draw in (KairoX86#406) */
+    pthread_mutex_lock(&picture_lock);
+    picture        = NULL;
+    picture_next   = NULL;
+    picture_width  = 0;
+    picture_height = 0;
+    pthread_mutex_unlock(&picture_lock);
     if (setjmp(stopped)) {
         running = false;
         return false;
@@ -1679,6 +1708,7 @@ static const struct KairoX86Api api = {
     .gpu_frames      = api_gpu_frames,
     .gpu_frame_slot  = api_gpu_frame_slot,
     .gpu_frame       = api_gpu_frame,
+    .picture_target  = api_picture_target,
 };
 
 KAIRO_X86_EXPORT const struct KairoX86Api *
