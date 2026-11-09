@@ -20,8 +20,12 @@ import com.mrjackspade.kairo.frontend.UiText
  *   no-retry flag that makes it send READ MULTIPLE as C0h. FreeDOS's FDISK asks for all eight
  *   drives, and the drive rejects the C0h, so block mode breaks FreeDOS 1.3's installer.
  * - [WIN9X]: a Pentium MMX 233 on the ASUS TX97, 64 MB, S3 Trio64V2/DX, Sound Blaster 16, IDE with
- *   a blank 2 GB hard disk, which its BIOS detects at each start (LBA), and an ATAPI CD-ROM, its
- *   BIOS booting the CD first (Windows 98 SE Setup, started from a DOS floppy with the CD's driver).
+ *   a blank 2 GB hard disk, which its BIOS detects at each start (LBA), and an ATAPI CD-ROM. Its
+ *   BIOS boots A, then the CD, then C (Boot Sequence A,CDROM,C: CMOS byte 3Ch, outside the
+ *   checksummed 10h-2Dh): a boot floppy or bootable CD always starts, the installed disk when neither
+ *   is in (KairoX86#342). It booted the CD first before, so once FDISK had written a partition
+ *   table, Windows 98 Setup's boot floppy never started again: the empty partition's MBR stopped at
+ *   "PRESS A KEY TO REBOOT".
  */
 object X86Presets {
     /**
