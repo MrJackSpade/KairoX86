@@ -77,6 +77,87 @@ pitf_sync_tsc(void)
 #endif
 }
 
+/* KairoX86#410: the refresh counter, lazily. A rate generator whose output drives pit_refresh_timer_at (counter 1 on an
+   AT, a count of about 18: ~67,000 expiries a guest second) does the same on every expiry: the count goes up by l and
+   the output pulses, its rising edge flipping ppi.pb's refresh bit. Its timer skips PITF_LAZY_SPAN - 1 of them, and
+   they are applied, exactly as the timer would have run them, wherever anything can see them: port 61h (the bit,
+   pit_refresh_sync) and every access to the PIT (pitf_unlazy, which also puts the timer back on its next expiry). No
+   timer callback reads them. Outside timer_process every timer whose whole part is at or before tsc has run (the
+   dynarec and the interpreter run them as tsc moves), so the skipped expiries run by now are those, and their order
+   against other timers on the same tick does not matter to anything that reads them. */
+#define PITF_LAZY_SPAN 4096
+static ctrf_t     *pitf_lazy;        /* the counter whose timer skips ahead, or NULL */
+static __uint128_t pitf_lazy_base;   /* the time (32.32) of the expiry the skip began after */
+static uint64_t    pitf_lazy_period; /* l * pit_const (32.32) */
+static uint32_t    pitf_lazy_done;   /* the skipped expiries applied so far, of PITF_LAZY_SPAN - 1 */
+static __uint128_t pitf_lazy_next;   /* the time of the next one: pitf_lazy_base + (pitf_lazy_done + 1) * period */
+
+/* The skipped expiries the timers would have run by now: those whose whole part is at or before tsc. Stepped from the
+   last count, as port 61h is read far more often than the counter expires (no division on the read) */
+static uint32_t
+pitf_lazy_due(void)
+{
+    const __uint128_t due  = ((__uint128_t) ((uint64_t) tsc + 1)) << 32;
+    uint32_t          k    = pitf_lazy_done;
+    __uint128_t       next = pitf_lazy_next;
+
+    while ((k < (PITF_LAZY_SPAN - 1)) && (next < due)) {
+        k++;
+        next += pitf_lazy_period;
+    }
+    return k;
+}
+
+/* Up to [upto] of them, as pitf_over runs each: the count, and the refresh bit flipped on each pulse's rising edge */
+static void
+pitf_lazy_apply(uint32_t upto)
+{
+    ctrf_t        *ctr = pitf_lazy;
+    const uint32_t n   = upto - pitf_lazy_done;
+
+    if (n == 0)
+        return;
+    const uint32_t l = ctr->l ? ctr->l : 0x10000;
+    ctr->count       = (int32_t) ((uint32_t) ctr->count + (l * n));
+    if (refresh_at_enable && (n & 1))
+        ppi.pb ^= 0x10;
+    pitf_lazy_done = upto;
+    pitf_lazy_next = pitf_lazy_base + ((__uint128_t) (upto + 1) * pitf_lazy_period);
+}
+
+/* Before anything reads or changes the PIT: the skipped expiries up to now, and the timer back on the next one */
+static void
+pitf_unlazy(void)
+{
+    if (pitf_lazy == NULL)
+        return;
+    ctrf_t        *ctr  = pitf_lazy;
+    const uint32_t done = pitf_lazy_due();
+
+    pitf_lazy_apply(done);
+    pitf_lazy = NULL;
+    const __uint128_t next = pitf_lazy_base + ((__uint128_t) (done + 1) * pitf_lazy_period);
+    timer_disable(&ctr->timer);
+    ctr->timer.ts_integer = (uint64_t) (next >> 32);
+    ctr->timer.ts_frac    = (uint32_t) next;
+    timer_enable(&ctr->timer);
+}
+
+/* Port 61h (port_6x.c), the refresh enable's writers and timer_set_new_tsc: the refresh bit as it would be by now */
+void
+pit_refresh_sync(void)
+{
+    if (pitf_lazy != NULL)
+        pitf_lazy_apply(pitf_lazy_due());
+}
+
+/* timer_set_new_tsc moves every timer: the skip is ended first, so the timer it moves is the real next expiry */
+static void
+pitf_lazy_before_tsc_set(void)
+{
+    pitf_unlazy();
+}
+
 static void
 pitf_ctr_set_out(ctrf_t *ctr, int out, void *priv)
 {
@@ -93,6 +174,7 @@ pitf_ctr_set_out(ctrf_t *ctr, int out, void *priv)
 static void
 pitf_ctr_set_load_func(void *data, int counter_id, void (*func)(uint8_t new_m, int new_count))
 {
+    pitf_unlazy(); /* KairoX86#410 */
     if (data == NULL)
         return;
 
@@ -105,6 +187,7 @@ pitf_ctr_set_load_func(void *data, int counter_id, void (*func)(uint8_t new_m, i
 static uint16_t
 pitf_ctr_get_count(void *data, int counter_id)
 {
+    pitf_unlazy(); /* KairoX86#410 */
     const pitf_t *pit = (pitf_t *) data;
     const ctrf_t *ctr = &pit->counters[counter_id];
 
@@ -114,6 +197,7 @@ pitf_ctr_get_count(void *data, int counter_id)
 void
 pitf_ctr_set_out_func(void *data, int counter_id, void (*func)(int new_out, int old_out, void *priv))
 {
+    pitf_unlazy(); /* KairoX86#410 */
     if (data == NULL)
         return;
 
@@ -126,6 +210,7 @@ pitf_ctr_set_out_func(void *data, int counter_id, void (*func)(int new_out, int 
 void
 pitf_ctr_set_using_timer(void *data, int counter_id, int using_timer)
 {
+    pitf_unlazy(); /* KairoX86#410 */
     if (tsc > 0)
         timer_process();
 
@@ -305,6 +390,7 @@ pitf_set_gate_no_timer(ctrf_t *ctr, int gate, void *priv)
 void
 pitf_ctr_set_gate(void *data, int counter_id, int gate)
 {
+    pitf_unlazy(); /* KairoX86#410 */
     pitf_t *pit = (pitf_t *) data;
     ctrf_t *ctr = &pit->counters[counter_id];
 
@@ -321,6 +407,10 @@ pitf_over(ctrf_t *ctr, void *priv)
 {
     pitf_t *pit = (pitf_t *)priv;
     int l = ctr->l ? ctr->l : 0x10000;
+    if (ctr == pitf_lazy) { /* KairoX86#410: the skipped expiries, then this one as it was */
+        pitf_lazy_apply(PITF_LAZY_SPAN - 1);
+        pitf_lazy = NULL;
+    }
     if (ctr->disabled) {
         ctr->count += 0xffff;
         if (ctr->using_timer)
@@ -344,6 +434,21 @@ pitf_over(ctrf_t *ctr, void *priv)
                 timer_advance_u64(&ctr->timer, (uint64_t) (l * ctr->pit_const));
             pitf_ctr_set_out(ctr, 0, pit);
             pitf_ctr_set_out(ctr, 1, pit);
+            /* KairoX86#410: a refresh counter running freely skips its next PITF_LAZY_SPAN - 1 expiries */
+            if ((pitf_lazy == NULL) && ctr->using_timer && ctr->enabled && !ctr->disabled && ctr->gate &&
+                (ctr->out_func == pit_refresh_timer_at) && ctr->out) {
+                pitf_lazy_period = (uint64_t) l * ctr->pit_const;
+                /* The timer was just put one period past this expiry */
+                pitf_lazy_base = ((((__uint128_t) ctr->timer.ts_integer) << 32) | ctr->timer.ts_frac) - pitf_lazy_period;
+                pitf_lazy_done = 0;
+                pitf_lazy_next = pitf_lazy_base + pitf_lazy_period;
+                pitf_lazy      = ctr;
+                const __uint128_t next = pitf_lazy_base + ((__uint128_t) PITF_LAZY_SPAN * pitf_lazy_period);
+                timer_disable(&ctr->timer);
+                ctr->timer.ts_integer = (uint64_t) (next >> 32);
+                ctr->timer.ts_frac    = (uint32_t) next;
+                timer_enable(&ctr->timer);
+            }
             break;
         case 3: /*Square wave mode*/
             if (ctr->out) {
@@ -430,6 +535,7 @@ pitf_ctr_latch_status(ctrf_t *ctr)
 static void
 pitf_write(uint16_t addr, uint8_t val, void *priv)
 {
+    pitf_unlazy(); /* KairoX86#410 */
     pitf_t *dev = (pitf_t *) priv;
     int     t   = (addr & 3);
     ctrf_t *ctr;
@@ -536,6 +642,7 @@ pitf_write(uint16_t addr, uint8_t val, void *priv)
 uint8_t
 pitf_read_reg(void *priv, uint8_t reg)
 {
+    pitf_unlazy(); /* KairoX86#410 */
     pitf_t *dev = (pitf_t *) priv;
     uint8_t ret = 0xff;
 
@@ -572,6 +679,7 @@ pitf_read_reg(void *priv, uint8_t reg)
 static uint8_t
 pitf_read(uint16_t addr, void *priv)
 {
+    pitf_unlazy(); /* KairoX86#410 */
     pitf_t *dev = (pitf_t *) priv;
     uint8_t ret = 0xff;
     int     t   = (addr & 3);
@@ -651,6 +759,7 @@ pitf_timer_over(void *priv)
 void
 pitf_ctr_clock(void *data, int counter_id)
 {
+    pitf_unlazy(); /* KairoX86#410 */
     pitf_t *pit = (pitf_t *) data;
     ctrf_t *ctr = &pit->counters[counter_id];
 
@@ -684,6 +793,7 @@ ctr_reset(ctrf_t *ctr)
 static void
 pitf_reset(pitf_t *dev)
 {
+    pitf_unlazy(); /* KairoX86#410 */
     memset(dev, 0, sizeof(pitf_t));
 
     for (uint8_t i = 0; i < NUM_COUNTERS; i++)
@@ -696,6 +806,7 @@ pitf_reset(pitf_t *dev)
 void
 pitf_set_pit_const(void *data, uint64_t pit_const)
 {
+    pitf_unlazy(); /* KairoX86#410 */
     pitf_t *pit = (pitf_t *) data;
     ctrf_t *ctr;
 
@@ -711,6 +822,7 @@ pitf_set_pit_const(void *data, uint64_t pit_const)
 static void
 pitf_ctr_set_clock_div(void *data, int counter_id, int div)
 {
+    pitf_unlazy(); /* KairoX86#410 */
     pitf_t *pit = (pitf_t *) data;
     ctrf_t *ctr = &pit->counters[counter_id];
     int     old = (ctr->clock_div > 1) ? ctr->clock_div : 1;
@@ -728,6 +840,7 @@ pitf_speed_changed(void *priv)
 static void
 pitf_close(void *priv)
 {
+    pitf_unlazy(); /* KairoX86#410 */
     pitf_t *dev = (pitf_t *) priv;
 
     if (dev == pit_devs[0].data)
@@ -751,6 +864,7 @@ pitf_handler(int set, uint16_t base, int size, void *priv)
 static void *
 pitf_init(const device_t *info)
 {
+    timer_before_tsc_set = pitf_lazy_before_tsc_set; /* KairoX86#410 */
     pitf_t *dev = (pitf_t *) calloc(1, sizeof(pitf_t));
 
     pitf_reset(dev);

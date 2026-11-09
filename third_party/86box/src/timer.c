@@ -10,6 +10,7 @@
 
 uint64_t TIMER_USEC;
 K9X_HOT uint64_t timer_target;
+void (*timer_before_tsc_set)(void); /* KairoX86#410 */
 
 /*Enabled timers are stored in a linked list, with the first timer to expire at
   the head.*/
@@ -317,6 +318,8 @@ timer_set_new_tsc(uint64_t new_tsc)
     if (cpu_use_dynarec)
         update_tsc();
 #endif
+    if (timer_before_tsc_set != NULL) /* KairoX86#410 */
+        timer_before_tsc_set();
 
     if (!timer_head) {
         tsc = new_tsc;
