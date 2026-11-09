@@ -6130,6 +6130,14 @@ KAIROX86_KEYBOARD_ROOM = [
      '    keyboard_scan = 0;\n\n    keyboard_send = NULL;\n    keyboard_room = NULL;\n'),
 ]
 
+
+# KairoX86#405: the MediaGX's display reads a line that lies in one span of its graphics memory straight from that
+# span, not through gxm_gmem for every pixel: the same pixels; its line rendering was 16% of a FreeDOS boot's samples.
+KAIROX86_GXM_LINE_RUNS = [
+    ('86box/src/video/vid_cyrix_gxm.c', '        for (x = 0; x < dev->hdisp; x++)\n            line[x] = 0x00000000;\n        return;\n    }\n\n    while (x < dev->hdisp) {\n',
+     "        for (x = 0; x < dev->hdisp; x++)\n            line[x] = 0x00000000;\n        return;\n    }\n\n    /* KairoX86#405: a line whose pixels all come from one span of the graphics memory, with no wrap past its 4 MB\n       and every access inside it (gxm_gmem's test), is read straight from that span: the same pixels as the loop\n       below, without gxm_gmem and the mode's choice for every pixel. Chain 4's 8 bpp steps through the memory in\n       dwords, so it keeps the loop. */\n    if (planar || bpp16 || !ch4s) {\n        const int      nsrc  = pxdb ? ((dev->hdisp + 1) / 2) : dev->hdisp; /* the pixels read from memory */\n        const uint32_t start = addr & 0x003fffff;\n        if (nsrc > 0) {\n            const uint32_t last = start + (planar ? (uint32_t) (((nsrc + 7) / 8) - 1) * 4\n                                                  : (uint32_t) (nsrc - 1) * (bpp16 ? 2 : 1));\n            if ((last <= 0x003fffff) && ((last + 4) <= dev->gmem_size)) {\n                const uint8_t *p = &ram[dev->gmem_base + start];\n\n                if (planar) {\n                    for (int d = 0; x < dev->hdisp; d++) {\n                        const uint32_t dw = *(const uint32_t *) (p + (d * 4));\n\n                        for (int i = 0; (i < 8) && (x < dev->hdisp); i++) {\n                            const int      sh = 7 - i;\n                            const uint32_t c  = dev->pal_rgb[pblink | ((dw >> sh) & 1) | (((dw >> (8 + sh)) & 1) << 1) |\n                                                             (((dw >> (16 + sh)) & 1) << 2) | (((dw >> (24 + sh)) & 1) << 3)];\n\n                            line[x++] = c;\n                            if (pxdb && (x < dev->hdisp))\n                                line[x++] = c;\n                        }\n                    }\n                } else if (bpp16) {\n                    for (int i = 0; x < dev->hdisp; i++) {\n                        const uint32_t c = gxm_rgb16(dev, *(const uint16_t *) (p + (i * 2)));\n\n                        line[x++] = c;\n                        if (pxdb && (x < dev->hdisp))\n                            line[x++] = c;\n                    }\n                } else {\n                    for (int i = 0; x < dev->hdisp; i++) {\n                        const uint32_t c = dev->pal_rgb[p[i] & pmask];\n\n                        line[x++] = c;\n                        if (pxdb && (x < dev->hdisp))\n                            line[x++] = c;\n                    }\n                }\n                gxm_render_cursor(dev, line, y);\n                gxm_output_line(dev, line, y);\n                return;\n            }\n        }\n    }\n\n    while (x < dev->hdisp) {\n"),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -6267,6 +6275,7 @@ PATCHES = {
     'kairox86-shared-midi': KAIROX86_SHARED_MIDI,
     'kairox86-midi-port': KAIROX86_MIDI_PORT,
     'kairox86-keyboard-room': KAIROX86_KEYBOARD_ROOM,
+    'kairox86-gxm-line-runs': KAIROX86_GXM_LINE_RUNS,
 }
 
 ADDED = [

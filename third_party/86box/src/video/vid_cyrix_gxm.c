@@ -1656,6 +1656,57 @@ gxm_render_line(gxm_video_t *dev, int y)
         return;
     }
 
+    /* KairoX86#405: a line whose pixels all come from one span of the graphics memory, with no wrap past its 4 MB
+       and every access inside it (gxm_gmem's test), is read straight from that span: the same pixels as the loop
+       below, without gxm_gmem and the mode's choice for every pixel. Chain 4's 8 bpp steps through the memory in
+       dwords, so it keeps the loop. */
+    if (planar || bpp16 || !ch4s) {
+        const int      nsrc  = pxdb ? ((dev->hdisp + 1) / 2) : dev->hdisp; /* the pixels read from memory */
+        const uint32_t start = addr & 0x003fffff;
+        if (nsrc > 0) {
+            const uint32_t last = start + (planar ? (uint32_t) (((nsrc + 7) / 8) - 1) * 4
+                                                  : (uint32_t) (nsrc - 1) * (bpp16 ? 2 : 1));
+            if ((last <= 0x003fffff) && ((last + 4) <= dev->gmem_size)) {
+                const uint8_t *p = &ram[dev->gmem_base + start];
+
+                if (planar) {
+                    for (int d = 0; x < dev->hdisp; d++) {
+                        const uint32_t dw = *(const uint32_t *) (p + (d * 4));
+
+                        for (int i = 0; (i < 8) && (x < dev->hdisp); i++) {
+                            const int      sh = 7 - i;
+                            const uint32_t c  = dev->pal_rgb[pblink | ((dw >> sh) & 1) | (((dw >> (8 + sh)) & 1) << 1) |
+                                                             (((dw >> (16 + sh)) & 1) << 2) | (((dw >> (24 + sh)) & 1) << 3)];
+
+                            line[x++] = c;
+                            if (pxdb && (x < dev->hdisp))
+                                line[x++] = c;
+                        }
+                    }
+                } else if (bpp16) {
+                    for (int i = 0; x < dev->hdisp; i++) {
+                        const uint32_t c = gxm_rgb16(dev, *(const uint16_t *) (p + (i * 2)));
+
+                        line[x++] = c;
+                        if (pxdb && (x < dev->hdisp))
+                            line[x++] = c;
+                    }
+                } else {
+                    for (int i = 0; x < dev->hdisp; i++) {
+                        const uint32_t c = dev->pal_rgb[p[i] & pmask];
+
+                        line[x++] = c;
+                        if (pxdb && (x < dev->hdisp))
+                            line[x++] = c;
+                    }
+                }
+                gxm_render_cursor(dev, line, y);
+                gxm_output_line(dev, line, y);
+                return;
+            }
+        }
+    }
+
     while (x < dev->hdisp) {
         uint32_t px[8];
         int      n;
