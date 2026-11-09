@@ -1035,6 +1035,7 @@ codegen_block_init(uint32_t phys_addr)
     codeblock_t *block;
     page_t      *page = &pages[phys_addr >> 12];
 
+    mem_pages_fill_range(phys_addr >> 12, (phys_addr >> 12) + 1); /* KairoX86#408 */
     if (!page->block)
         mem_flush_write_page(phys_addr, cs + cpu_state.pc);
     block = block_free_list_get();
@@ -1215,6 +1216,7 @@ codegen_block_generate_end_mask_recompile(void)
 
         block->phys_2 = get_phys_noabrt(pc_2);
         if (block->phys_2 != -1) {
+            mem_pages_fill_range(block->phys_2 >> 12, (block->phys_2 >> 12) + 1); /* KairoX86#408 */
             page_t *page_2 = &pages[block->phys_2 >> 12];
 
             if (block->flags & CODEBLOCK_BYTE_MASK) {
@@ -1290,6 +1292,7 @@ codegen_block_generate_end_mask_mark(void)
     if ((block->pc ^ codegen_endpc) & ~0xfff) {
         block->phys_2 = get_phys_noabrt(codegen_endpc);
         if (block->phys_2 != -1) {
+            mem_pages_fill_range(block->phys_2 >> 12, (block->phys_2 >> 12) + 1); /* KairoX86#408 */
             page_t *page_2 = &pages[block->phys_2 >> 12];
 
             start_pc = 0;
