@@ -187,6 +187,11 @@ add_dependencies(kairox86_core 86Box)
 if(ANDROID)
     target_link_libraries(kairox86_core PUBLIC dl log)
 endif()
+# Its objects record a profile in a KAIROX86_PGO_GENERATE build: whatever links it (the app's library, defined
+# outside this folder's link options) links the profile runtime too.
+if(KAIROX86_PGO_GENERATE)
+    target_link_options(kairox86_core INTERFACE -fprofile-generate)
+endif()
 
 # The boot test (shared/tools/test-core.ps1 on the host; built for the device too, to run over adb).
 # The app's build names its own targets, so it never builds this one.
