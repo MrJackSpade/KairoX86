@@ -33,6 +33,9 @@
 #define HAVE_STDARG_H
 #include <86box/86box.h>
 #include <86box/kairo_gpu.h> /* KairoX86#232 */
+#if defined(__aarch64__) || defined(_M_ARM64)
+#    include <arm_neon.h> /* KairoX86#424 */
+#endif
 #include "cpu.h"
 #include <86box/device.h>
 #include <86box/io.h>
@@ -988,6 +991,37 @@ video_init(void)
 
     memset(monitors, 0, sizeof(monitors));
     video_monitor_init(0);
+}
+
+/* KairoX86#424, #425: [n] (a multiple of 8) 16-bit pixels at [src] to 32 bits at [dst], each channel from its own
+   bits through [channels] (video_16to32_channels' layout, or a card's of the same layout), with alpha ff: eight a
+   step with NEON on arm64 */
+void
+video_16to32_run(uint32_t *dst, const uint16_t *src, int n, const uint8_t *channels)
+{
+#if defined(__aarch64__) || defined(_M_ARM64)
+    const uint8x16x2_t blue  = { { vld1q_u8(&channels[0]), vld1q_u8(&channels[16]) } };
+    const uint8x16x4_t green = { { vld1q_u8(&channels[32]), vld1q_u8(&channels[48]),
+                                   vld1q_u8(&channels[64]), vld1q_u8(&channels[80]) } };
+    const uint8x16x2_t red   = { { vld1q_u8(&channels[96]), vld1q_u8(&channels[112]) } };
+    const uint8x8_t    alpha = vdup_n_u8(0xff);
+    for (int i = 0; i < n; i += 8) {
+        const uint16x8_t px = vld1q_u16(&src[i]);
+        uint8x8x4_t      out;
+        out.val[0] = vqtbl2_u8(blue, vmovn_u16(vandq_u16(px, vdupq_n_u16(31))));
+        out.val[1] = vqtbl4_u8(green, vmovn_u16(vandq_u16(vshrq_n_u16(px, 5), vdupq_n_u16(63))));
+        out.val[2] = vqtbl2_u8(red, vmovn_u16(vshrq_n_u16(px, 11)));
+        out.val[3] = alpha;
+        vst4_u8((uint8_t *) &dst[i], out);
+    }
+#else
+    for (int i = 0; i < n; i++) {
+        uint16_t c;
+        memcpy(&c, &src[i], 2);
+        dst[i] = 0xff000000 | ((uint32_t) channels[96 + (c >> 11)] << 16) |
+                 ((uint32_t) channels[32 + ((c >> 5) & 63)] << 8) | channels[c & 31];
+    }
+#endif
 }
 
 void

@@ -2305,9 +2305,6 @@ svga_render_16bpp_lowres(svga_t *svga)
     }
 }
 
-#if defined(__aarch64__) || defined(_M_ARM64)
-#    include <arm_neon.h>
-#endif
 /* KairoX86#425: the line's pixels from x on, as svga_render_16bpp_highres's loop draws them (eight a step while x is
    at most hdisp + scrollcache), with 86Box's default colours (svga_conv_16to32: video_16to32, whose channels
    video_16to32_channels holds), or a card's own that are channel by channel too (conv_16to32_channels) and VRAM read straight, when the line does not wrap the display mask. Returns where the
@@ -2328,30 +2325,7 @@ render_16bpp_default(svga_t *svga, uint32_t *p, int x)
     const uint32_t from = (svga->memaddr + ((uint32_t) x << 1)) & mask;
     if ((from + (uint32_t) n * 2) > (mask + 1))
         return x;
-    const uint16_t *src = (const uint16_t *) &svga->vram[from];
-#if defined(__aarch64__) || defined(_M_ARM64)
-    const uint8x16x2_t blue  = { { vld1q_u8(&channels[0]), vld1q_u8(&channels[16]) } };
-    const uint8x16x4_t green = { { vld1q_u8(&channels[32]), vld1q_u8(&channels[48]),
-                                   vld1q_u8(&channels[64]), vld1q_u8(&channels[80]) } };
-    const uint8x16x2_t red   = { { vld1q_u8(&channels[96]), vld1q_u8(&channels[112]) } };
-    const uint8x8_t    alpha = vdup_n_u8(0xff);
-    for (int i = 0; i < n; i += 8) {
-        const uint16x8_t px  = vld1q_u16(&src[i]);
-        uint8x8x4_t      out;
-        out.val[0] = vqtbl2_u8(blue, vmovn_u16(vandq_u16(px, vdupq_n_u16(31))));
-        out.val[1] = vqtbl4_u8(green, vmovn_u16(vandq_u16(vshrq_n_u16(px, 5), vdupq_n_u16(63))));
-        out.val[2] = vqtbl2_u8(red, vmovn_u16(vshrq_n_u16(px, 11)));
-        out.val[3] = alpha;
-        vst4_u8((uint8_t *) &p[i], out);
-    }
-#else
-    for (int i = 0; i < n; i++) {
-        uint16_t c;
-        memcpy(&c, &src[i], 2);
-        p[i] = 0xff000000 | ((uint32_t) channels[96 + (c >> 11)] << 16) |
-               ((uint32_t) channels[32 + ((c >> 5) & 63)] << 8) | channels[c & 31];
-    }
-#endif
+    video_16to32_run(p, (const uint16_t *) &svga->vram[from], n, channels); /* KairoX86#424 */
     return x + n;
 }
 

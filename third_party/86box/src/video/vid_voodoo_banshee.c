@@ -595,20 +595,17 @@ banshee_render_16bpp_tiled(svga_t *svga)
         return;
     }
 
+    /* KairoX86#424: banshee_conv_16to32's channels for the line (#425's), each tile's 64 pixels converted with them */
+    uint8_t        scratch[128];
+    const uint8_t *channels = banshee_16to32_channels(svga, scratch);
     for (int x = 0; x < svga->hdisp; x += 64) {
         if (svga->hwcursor_on || svga->overlay_on)
             svga->changedvram[addr >> 12] = 2;
         if (svga->changedvram[addr >> 12] || svga->fullchange) {
             const uint16_t *vram_p = (uint16_t *) &svga->vram[addr & svga->vram_display_mask];
 
-            /* KairoX86#214: with no LUT mapping, the conversion is the table */
-            if (!svga->lut_map) {
-                for (uint8_t xx = 0; xx < 64; xx++)
-                    *p++ = video_16to32[*vram_p++];
-            } else {
-                for (uint8_t xx = 0; xx < 64; xx++)
-                    *p++ = banshee_conv_16to32(svga, *vram_p++, 16);
-            }
+            video_16to32_run(p, vram_p, 64, channels);
+            p += 64;
 
             drawn = 1;
         } else

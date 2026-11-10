@@ -6348,6 +6348,25 @@ KAIROX86_16BPP_LINES = [
      '                x = render_gpu_direct(svga, p, 16, (svga->render == svga_render_16bpp_highres) && (svga->conv_16to32 == svga_conv_16to32));\n                if (x == 0) /* KairoX86#425 */\n                    x = render_16bpp_default(svga, p, 0);\n                p += x;\n                for (; x <= (svga->hdisp + svga->scrollcache); x += 8) {'),
 ]
 
+
+# KairoX86#424: #425's channel-table conversion is video.c's video_16to32_run, and the Voodoo Banshee/3's tiled 16 bpp
+# desktop (banshee_render_16bpp_tiled) converts each tile's 64 pixels with it through banshee_conv_16to32's channels
+# (#425's banshee_16to32_channels) instead of a table read or a call a pixel; the same colours.
+KAIROX86_16BPP_TILES = [
+    ('86box/src/video/video.c', '#include <86box/kairo_gpu.h> /* KairoX86#232 */\n',
+     '#include <86box/kairo_gpu.h> /* KairoX86#232 */\n#if defined(__aarch64__) || defined(_M_ARM64)\n#    include <arm_neon.h> /* KairoX86#424 */\n#endif\n'),
+    ('86box/src/video/video.c', '\nvoid\nvideo_close(void)\n{',
+     "\n/* KairoX86#424, #425: [n] (a multiple of 8) 16-bit pixels at [src] to 32 bits at [dst], each channel from its own\n   bits through [channels] (video_16to32_channels' layout, or a card's of the same layout), with alpha ff: eight a\n   step with NEON on arm64 */\nvoid\nvideo_16to32_run(uint32_t *dst, const uint16_t *src, int n, const uint8_t *channels)\n{\n#if defined(__aarch64__) || defined(_M_ARM64)\n    const uint8x16x2_t blue  = { { vld1q_u8(&channels[0]), vld1q_u8(&channels[16]) } };\n    const uint8x16x4_t green = { { vld1q_u8(&channels[32]), vld1q_u8(&channels[48]),\n                                   vld1q_u8(&channels[64]), vld1q_u8(&channels[80]) } };\n    const uint8x16x2_t red   = { { vld1q_u8(&channels[96]), vld1q_u8(&channels[112]) } };\n    const uint8x8_t    alpha = vdup_n_u8(0xff);\n    for (int i = 0; i < n; i += 8) {\n        const uint16x8_t px = vld1q_u16(&src[i]);\n        uint8x8x4_t      out;\n        out.val[0] = vqtbl2_u8(blue, vmovn_u16(vandq_u16(px, vdupq_n_u16(31))));\n        out.val[1] = vqtbl4_u8(green, vmovn_u16(vandq_u16(vshrq_n_u16(px, 5), vdupq_n_u16(63))));\n        out.val[2] = vqtbl2_u8(red, vmovn_u16(vshrq_n_u16(px, 11)));\n        out.val[3] = alpha;\n        vst4_u8((uint8_t *) &dst[i], out);\n    }\n#else\n    for (int i = 0; i < n; i++) {\n        uint16_t c;\n        memcpy(&c, &src[i], 2);\n        dst[i] = 0xff000000 | ((uint32_t) channels[96 + (c >> 11)] << 16) |\n                 ((uint32_t) channels[32 + ((c >> 5) & 63)] << 8) | channels[c & 31];\n    }\n#endif\n}\n\nvoid\nvideo_close(void)\n{"),
+    ('86box/src/include/86box/video.h', 'extern uint8_t      video_16to32_channels[128];\n',
+     'extern uint8_t      video_16to32_channels[128];\n/* KairoX86#424: [n] (a multiple of 8) 16-bit pixels at [src] to [dst] through [channels] (video.c) */\nextern void         video_16to32_run(uint32_t *dst, const uint16_t *src, int n, const uint8_t *channels);\n'),
+    ('86box/src/video/vid_svga_render.c', "#if defined(__aarch64__) || defined(_M_ARM64)\n#    include <arm_neon.h>\n#endif\n/* KairoX86#425: the line's pixels",
+     "/* KairoX86#425: the line's pixels"),
+    ('86box/src/video/vid_svga_render.c', '    const uint16_t *src = (const uint16_t *) &svga->vram[from];\n#if defined(__aarch64__) || defined(_M_ARM64)\n    const uint8x16x2_t blue  = { { vld1q_u8(&channels[0]), vld1q_u8(&channels[16]) } };\n    const uint8x16x4_t green = { { vld1q_u8(&channels[32]), vld1q_u8(&channels[48]),\n                                   vld1q_u8(&channels[64]), vld1q_u8(&channels[80]) } };\n    const uint8x16x2_t red   = { { vld1q_u8(&channels[96]), vld1q_u8(&channels[112]) } };\n    const uint8x8_t    alpha = vdup_n_u8(0xff);\n    for (int i = 0; i < n; i += 8) {\n        const uint16x8_t px  = vld1q_u16(&src[i]);\n        uint8x8x4_t      out;\n        out.val[0] = vqtbl2_u8(blue, vmovn_u16(vandq_u16(px, vdupq_n_u16(31))));\n        out.val[1] = vqtbl4_u8(green, vmovn_u16(vandq_u16(vshrq_n_u16(px, 5), vdupq_n_u16(63))));\n        out.val[2] = vqtbl2_u8(red, vmovn_u16(vshrq_n_u16(px, 11)));\n        out.val[3] = alpha;\n        vst4_u8((uint8_t *) &p[i], out);\n    }\n#else\n    for (int i = 0; i < n; i++) {\n        uint16_t c;\n        memcpy(&c, &src[i], 2);\n        p[i] = 0xff000000 | ((uint32_t) channels[96 + (c >> 11)] << 16) |\n               ((uint32_t) channels[32 + ((c >> 5) & 63)] << 8) | channels[c & 31];\n    }\n#endif\n    return x + n;\n}\n',
+     '    video_16to32_run(p, (const uint16_t *) &svga->vram[from], n, channels); /* KairoX86#424 */\n    return x + n;\n}\n'),
+    ('86box/src/video/vid_voodoo_banshee.c', '    for (int x = 0; x < svga->hdisp; x += 64) {\n        if (svga->hwcursor_on || svga->overlay_on)\n            svga->changedvram[addr >> 12] = 2;\n        if (svga->changedvram[addr >> 12] || svga->fullchange) {\n            const uint16_t *vram_p = (uint16_t *) &svga->vram[addr & svga->vram_display_mask];\n\n            /* KairoX86#214: with no LUT mapping, the conversion is the table */\n            if (!svga->lut_map) {\n                for (uint8_t xx = 0; xx < 64; xx++)\n                    *p++ = video_16to32[*vram_p++];\n            } else {\n                for (uint8_t xx = 0; xx < 64; xx++)\n                    *p++ = banshee_conv_16to32(svga, *vram_p++, 16);\n            }\n',
+     "    /* KairoX86#424: banshee_conv_16to32's channels for the line (#425's), each tile's 64 pixels converted with them */\n    uint8_t        scratch[128];\n    const uint8_t *channels = banshee_16to32_channels(svga, scratch);\n    for (int x = 0; x < svga->hdisp; x += 64) {\n        if (svga->hwcursor_on || svga->overlay_on)\n            svga->changedvram[addr >> 12] = 2;\n        if (svga->changedvram[addr >> 12] || svga->fullchange) {\n            const uint16_t *vram_p = (uint16_t *) &svga->vram[addr & svga->vram_display_mask];\n\n            video_16to32_run(p, vram_p, 64, channels);\n            p += 64;\n"),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -6493,6 +6512,7 @@ PATCHES = {
     'kairox86-diag-instructions': KAIROX86_DIAG_INSTRUCTIONS,
     'kairox86-diag-exit-census': KAIROX86_DIAG_EXIT_CENSUS,
     'kairox86-16bpp-lines': KAIROX86_16BPP_LINES,
+    'kairox86-16bpp-tiles': KAIROX86_16BPP_TILES,
 }
 
 ADDED = [
