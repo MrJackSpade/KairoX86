@@ -229,9 +229,12 @@ flush_read_lookup(void)
     }
 }
 
+static void write_walks_flush(void); /* KairoX86#423 */
+
 static void
 flush_write_lookup(void)
 {
+    write_walks_flush(); /* KairoX86#423: the kept page walks go with the write lookups */
     for (int c = 0; c < writel_used; c++) {
         if (writelookup[c] != (int) 0xffffffff) {
             page_lookup[writelookup[c]]  = NULL;
@@ -851,6 +854,46 @@ write_mem_w(uint32_t addr, uint16_t val)
     }
 }
 
+/* KairoX86#423: the write path's page walks kept, per virtual page and CPL 3 or not, until the write lookups are
+   flushed (flush_write_lookup: a CR3 load, INVLPG, a CR0 or CR4 change), as writelookup2 keeps RAM's: a write to a
+   page the lookups do not map (device memory, a card's linear framebuffer) walked the page tables every time. A
+   walk only sets the accessed and dirty bits already set by the walk kept, and one that faults is not kept;
+   cpl_override's walks are not kept or used. */
+#define WRITE_WALKS 1024
+static struct {
+    uint32_t vpage; /* the virtual page, bit 31 set for CPL 3 */
+    uint32_t ppage;
+    uint32_t gen;
+} write_walks[WRITE_WALKS];
+static uint32_t write_walks_gen = 1;
+
+static __inline uint64_t
+mmutranslate_write_kept(uint32_t addr)
+{
+    if (cpl_override)
+        return mmutranslate_write(addr);
+    const uint32_t vpage = (addr >> 12) | ((CPL == 3) ? 0x80000000u : 0);
+    __typeof__(&write_walks[0]) kept = &write_walks[(addr >> 12) & (WRITE_WALKS - 1)];
+    if ((kept->gen == write_walks_gen) && (kept->vpage == vpage))
+        return ((uint64_t) kept->ppage << 12) | (addr & 0xfff);
+    const uint64_t a = mmutranslate_write(addr);
+    if (a <= 0xffffffffULL) {
+        kept->vpage = vpage;
+        kept->ppage = (uint32_t) (a >> 12);
+        kept->gen   = write_walks_gen;
+    }
+    return a;
+}
+
+static void
+write_walks_flush(void)
+{
+    if (++write_walks_gen == 0) { /* 2^32 flushes later, the old entries' generation comes round */
+        memset(write_walks, 0, sizeof(write_walks));
+        write_walks_gen = 1;
+    }
+}
+
 uint8_t
 readmembl(uint32_t addr)
 {
@@ -916,7 +959,7 @@ writemembl(uint32_t addr, uint8_t val)
     }
 
     if (cr0 >> 31) {
-        a      = mmutranslate_write(addr);
+        a      = mmutranslate_write_kept(addr); /* KairoX86#423 */
         addr64 = (uint32_t) a;
 
         if (a > 0xffffffffULL)
@@ -1126,7 +1169,7 @@ writememwl(uint32_t addr, uint16_t val)
     }
 
     if (cr0 >> 31) {
-        a          = mmutranslate_write(addr);
+        a          = mmutranslate_write_kept(addr); /* KairoX86#423 */
         addr64a[0] = (uint32_t) a;
 
         if (a > 0xffffffffULL)
@@ -1422,7 +1465,7 @@ writememll(uint32_t addr, uint32_t val)
     }
 
     if (cr0 >> 31) {
-        a          = mmutranslate_write(addr);
+        a          = mmutranslate_write_kept(addr); /* KairoX86#423 */
         addr64a[0] = (uint32_t) a;
 
         if (a > 0xffffffffULL)

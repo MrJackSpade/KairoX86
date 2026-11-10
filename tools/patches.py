@@ -6367,6 +6367,23 @@ KAIROX86_16BPP_TILES = [
      "    /* KairoX86#424: banshee_conv_16to32's channels for the line (#425's), each tile's 64 pixels converted with them */\n    uint8_t        scratch[128];\n    const uint8_t *channels = banshee_16to32_channels(svga, scratch);\n    for (int x = 0; x < svga->hdisp; x += 64) {\n        if (svga->hwcursor_on || svga->overlay_on)\n            svga->changedvram[addr >> 12] = 2;\n        if (svga->changedvram[addr >> 12] || svga->fullchange) {\n            const uint16_t *vram_p = (uint16_t *) &svga->vram[addr & svga->vram_display_mask];\n\n            video_16to32_run(p, vram_p, 64, channels);\n            p += 64;\n"),
 ]
 
+
+# KairoX86#423: writemembl, writememwl and writememll keep a page walk's result (per virtual page and CPL 3) until the
+# write lookups are flushed, as writelookup2 keeps RAM's, so writes to device memory (a card's linear framebuffer) no
+# longer walk the page tables every time.
+KAIROX86_MMIO_WRITE_TLB = [
+    ('86box/src/mem/mem.c', '\nstatic void\nflush_write_lookup(void)\n{\n',
+     '\nstatic void write_walks_flush(void); /* KairoX86#423 */\n\nstatic void\nflush_write_lookup(void)\n{\n    write_walks_flush(); /* KairoX86#423: the kept page walks go with the write lookups */\n'),
+    ('86box/src/mem/mem.c', '\nuint8_t\nreadmembl(uint32_t addr)\n{',
+     "\n/* KairoX86#423: the write path's page walks kept, per virtual page and CPL 3 or not, until the write lookups are\n   flushed (flush_write_lookup: a CR3 load, INVLPG, a CR0 or CR4 change), as writelookup2 keeps RAM's: a write to a\n   page the lookups do not map (device memory, a card's linear framebuffer) walked the page tables every time. A\n   walk only sets the accessed and dirty bits already set by the walk kept, and one that faults is not kept;\n   cpl_override's walks are not kept or used. */\n#define WRITE_WALKS 1024\nstatic struct {\n    uint32_t vpage; /* the virtual page, bit 31 set for CPL 3 */\n    uint32_t ppage;\n    uint32_t gen;\n} write_walks[WRITE_WALKS];\nstatic uint32_t write_walks_gen = 1;\n\nstatic __inline uint64_t\nmmutranslate_write_kept(uint32_t addr)\n{\n    if (cpl_override)\n        return mmutranslate_write(addr);\n    const uint32_t vpage = (addr >> 12) | ((CPL == 3) ? 0x80000000u : 0);\n    __typeof__(&write_walks[0]) kept = &write_walks[(addr >> 12) & (WRITE_WALKS - 1)];\n    if ((kept->gen == write_walks_gen) && (kept->vpage == vpage))\n        return ((uint64_t) kept->ppage << 12) | (addr & 0xfff);\n    const uint64_t a = mmutranslate_write(addr);\n    if (a <= 0xffffffffULL) {\n        kept->vpage = vpage;\n        kept->ppage = (uint32_t) (a >> 12);\n        kept->gen   = write_walks_gen;\n    }\n    return a;\n}\n\nstatic void\nwrite_walks_flush(void)\n{\n    if (++write_walks_gen == 0) { /* 2^32 flushes later, the old entries' generation comes round */\n        memset(write_walks, 0, sizeof(write_walks));\n        write_walks_gen = 1;\n    }\n}\n\nuint8_t\nreadmembl(uint32_t addr)\n{"),
+    ('86box/src/mem/mem.c', '        page_lookup[addr >> 12]->write_b(addr, val, page_lookup[addr >> 12]);\n        return;\n    }\n\n    if (cr0 >> 31) {\n        a      = mmutranslate_write(addr);\n        addr64 = (uint32_t) a;',
+     '        page_lookup[addr >> 12]->write_b(addr, val, page_lookup[addr >> 12]);\n        return;\n    }\n\n    if (cr0 >> 31) {\n        a      = mmutranslate_write_kept(addr); /* KairoX86#423 */\n        addr64 = (uint32_t) a;'),
+    ('86box/src/mem/mem.c', '        page_lookup[addr >> 12]->write_w(addr, val, page_lookup[addr >> 12]);\n        return;\n    }\n\n    if (cr0 >> 31) {\n        a          = mmutranslate_write(addr);\n        addr64a[0] = (uint32_t) a;',
+     '        page_lookup[addr >> 12]->write_w(addr, val, page_lookup[addr >> 12]);\n        return;\n    }\n\n    if (cr0 >> 31) {\n        a          = mmutranslate_write_kept(addr); /* KairoX86#423 */\n        addr64a[0] = (uint32_t) a;'),
+    ('86box/src/mem/mem.c', '        page_lookup[addr >> 12]->write_l(addr, val, page_lookup[addr >> 12]);\n        return;\n    }\n\n    if (cr0 >> 31) {\n        a          = mmutranslate_write(addr);\n        addr64a[0] = (uint32_t) a;',
+     '        page_lookup[addr >> 12]->write_l(addr, val, page_lookup[addr >> 12]);\n        return;\n    }\n\n    if (cr0 >> 31) {\n        a          = mmutranslate_write_kept(addr); /* KairoX86#423 */\n        addr64a[0] = (uint32_t) a;'),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -6513,6 +6530,7 @@ PATCHES = {
     'kairox86-diag-exit-census': KAIROX86_DIAG_EXIT_CENSUS,
     'kairox86-16bpp-lines': KAIROX86_16BPP_LINES,
     'kairox86-16bpp-tiles': KAIROX86_16BPP_TILES,
+    'kairox86-mmio-write-tlb': KAIROX86_MMIO_WRITE_TLB,
 }
 
 ADDED = [
