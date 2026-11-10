@@ -42,6 +42,10 @@ typedef struct codegen_link_slot_t {
     uint8_t      top_mask;    /*7 if the block has a static TOP, otherwise 0*/
     uint8_t      top;         /*block->TOP if top_mask is 7, otherwise 0*/
     uint8_t      two_page;    /*1 if block->page_mask2 is set*/
+    /*KairoX86#414: the exit's block cannot change cpu_cur_status (set when it is compiled), and this way's target
+      accepts every status that block accepts (set when the way is filled): the routine skips its status compare*/
+    uint8_t      src_status_kept;
+    uint8_t      status_known;
     uint64_t     page_mask;   /*block->page_mask*/
     uint64_t    *dirty_mask;  /*block->dirty_mask*/
     /*Off the hit path*/

@@ -1234,6 +1234,7 @@ build_link_routine(codeblock_t *block)
     uint32_t *miss[LINK_MAX_MISS];
     int       nr_miss = 0;
     uint32_t *nmi_set;
+    uint32_t *status_known; /* KairoX86#414 */
     uint32_t *nmi_ok;
     uint32_t *irq_ok;
     uint32_t *irq_ok_2;
@@ -1359,6 +1360,9 @@ build_link_routine(codeblock_t *block)
     miss[nr_miss++] = host_arm64_TBNZ_SHORT_(block, REG_W5, 0);
     host_arm64_short_branch_set_offset(irq_ok, &block_write_data[block_pos]);
     host_arm64_short_branch_set_offset(irq_ok_2, &block_write_data[block_pos]);
+    /*KairoX86#414: the target accepts the status the exit's block left with (slot status_known): no compare*/
+    host_arm64_LDRB_IMM_W(block, REG_W4, REG_X1, LINK_SLOT(status_known));
+    status_known = host_arm64_CBNZ_SHORT_(block, REG_W4);
 
     /*Status and FPU rounding as when the slot was filled, compared as one
       word against W6. Only the C loop refreshes the PC24 and RC_NZ status
@@ -1388,6 +1392,7 @@ build_link_routine(codeblock_t *block)
     host_arm64_EOR_REG(block, REG_W4, REG_W4, REG_W6, 0);
     host_arm64_TST_IMM(block, REG_W4, ~(uint32_t) (CPU_STATUS_FPU_PC24 | CPU_STATUS_FPU_RC_NZ));
     miss[nr_miss++] = host_arm64_BNE_SHORT_(block);
+    host_arm64_short_branch_set_offset(status_known, &block_write_data[block_pos]); /* KairoX86#414 */
 
     /*The TSC. If it moved, update_tsc() ran inside the block and the C loop
       does the rest of that arithmetic. X11 = new tsc*/
@@ -1869,6 +1874,11 @@ codegen_link_exit(codeblock_t *block)
     k9x_diag_count(block, &k9x_cnt_exits, 1); /* KairoX86#419: instructions are counted as they start (codegen_ir.c) */
     k9x_exit_record(block, slot);              /* KairoX86#418 */
 #    endif
+    /* KairoX86#414: the slots now belong to this block: its classification, and no way known until refilled */
+    for (int w = 0; w < CODEGEN_LINK_WAYS; w++) {
+        slot[w].src_status_kept = (uint8_t) codegen_block_status_kept;
+        slot[w].status_known    = 0;
+    }
     codegen_alloc(block, 20);
     host_arm64_MOVX_IMM(block, REG_X0, (uint64_t) (uintptr_t) slot);
     host_arm64_B(block, codegen_link_rout);

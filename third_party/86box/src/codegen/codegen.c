@@ -123,6 +123,37 @@ codegen_set_loop_start(ir_data_t *ir, int first_instruction)
     uop_MOV_IMM(ir, IREG_ssegs, codegen_instructions[first_instruction].op_ssegs);
 }
 
+/* KairoX86#414: whether an instruction can change cpu_cur_status or the FPU control word's PC/RC bits (a segment
+   load, a mode change, CR0, a far transfer, an interrupt, RSM, LOADALL, the FPU's control word loads and resets), or
+   IF/TF and the descriptor tables (kept out, as #418's census does) */
+static int
+codegen_changes_status(uint16_t op, uint8_t modrm)
+{
+    const int reg = (modrm >> 3) & 7;
+
+    if (op & 0x100) {
+        switch (op & 0xff) {
+            case 0x00: case 0x01: case 0x05: case 0x06: case 0x07: case 0x22: case 0x34: case 0x35:
+            case 0xa1: case 0xa9: case 0xaa: case 0xae: case 0xb2: case 0xb4: case 0xb5:
+                return 1;
+        }
+        return 0;
+    }
+    switch (op & 0xff) {
+        case 0x07: case 0x17: case 0x1f: case 0x8e: case 0x9a: case 0x9d: case 0xc4: case 0xc5: case 0xca: case 0xcb:
+        case 0xcc: case 0xcd: case 0xce: case 0xcf: case 0xea: case 0xf4: case 0xfa: case 0xfb:
+            return 1;
+        case 0xd9: return (modrm < 0xc0) && ((reg == 4) || (reg == 5));              /* FLDENV, FLDCW */
+        case 0xdb: return modrm == 0xe3;                                             /* FNINIT */
+        case 0xdd: return (modrm < 0xc0) && ((reg == 4) || (reg == 6));              /* FRSTOR, FNSAVE */
+        case 0xff: return (reg == 3) || (reg == 5);                                  /* far CALL, JMP */
+    }
+    return 0;
+}
+
+/* KairoX86#414: 1 while no instruction of the block being compiled can change the status (codegen_changes_status) */
+int codegen_block_status_kept;
+
 int has_ea;
 extern uint32_t codegen_endpc;
 
@@ -964,6 +995,11 @@ generate_call:
     }
 
     fetchdat_pc = op_pc + pc_off;
+    /* KairoX86#414 */
+    if (block->ins == 0)
+        codegen_block_status_kept = 1;
+    if (codegen_changes_status(opcode | ((op_table == x86_dynarec_opcodes_0f) ? 0x100 : 0), fetchdat & 0xff))
+        codegen_block_status_kept = 0;
     codegen_instructions[block->ins].pc        = cpu_state.oldpc;
     codegen_instructions[block->ins].op_ssegs  = last_op_ssegs;
     codegen_instructions[block->ins].op_ea_seg = last_op_ea_seg;

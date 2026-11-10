@@ -461,6 +461,12 @@ codegen_link_patch(codegen_link_slot_t *from, codeblock_t *block, uint32_t phys)
     slot->dirty_mask = block->dirty_mask;
     link_in_remove(slot);
     link_in_insert(block, slot);
+    { /* KairoX86#414: the exit's block (the one owning these slots) keeps its status, and the target accepts every
+         status that block accepts: the same FLAGS bits, and MASK bits that include the block's */
+        const codeblock_t *src = &codeblock[(from - &codegen_link_slots[0][0][0]) / (CODEGEN_LINK_SLOTS * CODEGEN_LINK_WAYS)];
+        slot->status_known = slot->src_status_kept && !((src->status ^ block->status) & CPU_STATUS_FLAGS) &&
+                             !(src->status & CPU_STATUS_MASK & ~block->status);
+    }
     slot->entry = &block->data[BLOCK_START + CODEGEN_LINK_ENTRY_OFFSET];
 }
 #else
