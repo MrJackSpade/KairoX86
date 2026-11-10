@@ -61,7 +61,8 @@ set(KAIRO_FRONTEND "${CMAKE_CURRENT_LIST_DIR}/kairo/frontend.c" "${CMAKE_CURRENT
     "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_voodoo.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_virge.c"
     "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_mach64.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_powervr.c"
     "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_seg.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_seg_run.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_mach64_2d.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_p9100.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_et4000w32.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_cl54xx.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_chips69000.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_tgui.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_xga.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_s3.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_ibm8514.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_mga.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_virge2d.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_banshee2d.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_wd90c3x.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_pgc.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_gxm.c"
-    "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_pages.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/midi_port.c")
+    "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_pages.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/midi_port.c"
+    "${CMAKE_CURRENT_LIST_DIR}/kairo/prefault.c")
 set(QT OFF CACHE BOOL "" FORCE)
 set(OPENAL OFF CACHE BOOL "" FORCE)
 set(RTMIDI OFF CACHE BOOL "" FORCE)

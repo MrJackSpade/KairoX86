@@ -3356,6 +3356,9 @@ mem_reset(void)
         ram = (uint8_t *) kairo_gpu_alloc(ram_size + 16 + 0x400000);
     else
         ram = (uint8_t *) plat_mmap(ram_size + 16, 0, &large_mem); /* allocate and clear the RAM block */
+        /* KairoX86#373: the BIOS writes all of it in the boot's first seconds; a helper thread takes those faults */
+        if (ram != NULL)
+            kairo_prefault(ram, ram_size + 16);
     if (ram == NULL) {
         fatal("Failed to allocate RAM block. Make sure you have enough RAM available.\n");
         return;

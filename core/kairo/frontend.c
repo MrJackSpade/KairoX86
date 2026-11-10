@@ -52,6 +52,7 @@
 #include "kairo_x86.h"
 #include "kairo_host.h"
 #include "hardware.h"
+#include "prefault.h"
 #include <86box/kairo_gpu.h>
 
 /* ---- Globals the 86Box frontends define ---- */
@@ -476,6 +477,7 @@ plat_munmap(void *ptr, size_t size)
             break;
         }
     pthread_mutex_unlock(&mappings_lock);
+    kairo_prefault_forget(ptr); /* KairoX86#373: the helper never touches it again */
     plat_munmap_os(ptr, size);
 }
 
@@ -483,6 +485,7 @@ plat_munmap(void *ptr, size_t size)
 static void
 release_mappings(void)
 {
+    kairo_prefault_stop(); /* KairoX86#373: the helper ends before anything it populates goes */
     pthread_mutex_lock(&mappings_lock);
     for (int i = 0; i < mapping_count; i++)
         plat_munmap_os(mappings[i].at, mappings[i].size);

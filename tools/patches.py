@@ -6254,6 +6254,16 @@ KAIROX86_PAGES_LAZY_FILL = [
      "extern uint8_t    page_ff[4096];\n/* KairoX86#408: the table's entries [first, end) written as the last whole-table loop left every entry, if not yet */\nextern void mem_pages_fill_range(uint32_t first, uint32_t end);\nextern void mem_pages_reset_unmapped(void);\n"),
 ]
 
+
+# KairoX86#373: guest RAM is populated on a helper thread (core/kairo/prefault.c), so the boot's first writes to it
+# (the BIOS's memory test, the guest clearing memory) no longer fault on the emulation thread.
+KAIROX86_PREFAULT = [
+    ('86box/src/include/86box/plat.h', 'extern void     plat_munmap(void *ptr, size_t size);\n',
+     'extern void     plat_munmap(void *ptr, size_t size);\n/* KairoX86#373: first touches made ahead of the emulation thread (core/kairo/prefault.h) */\nextern void     kairo_prefault(void *at, size_t size);\n'),
+    ('86box/src/mem/mem.c', '        ram = (uint8_t *) plat_mmap(ram_size + 16, 0, &large_mem); /* allocate and clear the RAM block */\n',
+     "        ram = (uint8_t *) plat_mmap(ram_size + 16, 0, &large_mem); /* allocate and clear the RAM block */\n        /* KairoX86#373: the BIOS writes all of it in the boot's first seconds; a helper thread takes those faults */\n        if (ram != NULL)\n            kairo_prefault(ram, ram_size + 16);\n"),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -6395,6 +6405,7 @@ PATCHES = {
     'kairox86-rep-stosl-runs': KAIROX86_REP_STOSL_RUNS,
     'kairox86-lazy-refresh': KAIROX86_LAZY_REFRESH,
     'kairox86-pages-lazy-fill': KAIROX86_PAGES_LAZY_FILL,
+    'kairox86-prefault': KAIROX86_PREFAULT,
 }
 
 ADDED = [
