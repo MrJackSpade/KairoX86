@@ -360,6 +360,9 @@ typedef struct svga_t {
 
     /* Return a 32 bpp color from a 15/16 bpp color. */
     uint32_t (*conv_16to32)(struct svga_t *svga, uint16_t color, uint8_t bpp);
+    /* KairoX86#425: for a card's own conv_16to32 whose result is each channel from its own bits as things
+       stand: those channels (video_16to32_channels' layout), in [scratch] or a table of its own; NULL when not */
+    const uint8_t *(*conv_16to32_channels)(struct svga_t *svga, uint8_t *scratch);
 
     /* Plasma display panel attached to this core, if any. The filter has no priv of its
        own in the renderer signature, so it finds its state through this back-pointer. */

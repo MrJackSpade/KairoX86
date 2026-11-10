@@ -74,6 +74,7 @@ uint32_t    *video_8togs          = NULL;
 uint32_t    *video_8to32          = NULL;
 uint32_t    *video_15to32         = NULL;
 uint32_t    *video_16to32         = NULL;
+uint8_t      video_16to32_channels[128]; /* KairoX86#425 */
 monitor_t          monitors[MONITORS_NUM];
 monitor_settings_t monitor_settings[MONITORS_NUM];
 atomic_bool        doresize_monitors[MONITORS_NUM];
@@ -974,6 +975,12 @@ video_init(void)
     video_16to32 = calloc(4, 65536);
     for (uint32_t c = 0; c < 65536; c++)
         video_16to32[c] = calc_16to32(c);
+    for (int c = 0; c < 32; c++) { /* KairoX86#425 */
+        video_16to32_channels[c]      = calc_16to32(c) & 0xff;
+        video_16to32_channels[96 + c] = (calc_16to32(c << 11) >> 16) & 0xff;
+    }
+    for (int c = 0; c < 64; c++)
+        video_16to32_channels[32 + c] = (calc_16to32(c << 5) >> 8) & 0xff;
 
     /* KairoX86#233: the GPU's copy of the 15 and 16-bit colour tables */
     if (kairo_gpu_on)

@@ -6320,6 +6320,34 @@ KAIROX86_DIAG_EXIT_CENSUS = [
      '    k9x_diag_count(block, &k9x_cnt_exits, 1); /* KairoX86#419: instructions are counted as they start (codegen_ir.c) */\n    k9x_exit_record(block, slot);              /* KairoX86#418 */\n'),
 ]
 
+
+# KairoX86#425: svga_render_16bpp_highres draws a line in 86Box's default 16-to-32 colours from video_16to32's three
+# channel tables (NEON on arm64, eight pixels a step) rather than a conv_16to32 call and a 256 KB table read a pixel;
+# the same colours, as calc_16to32 works each channel out from its own bits. A line that wraps the display mask, a
+# card with its own conversion and the GPU path are as before.
+KAIROX86_16BPP_LINES = [
+    ('86box/src/include/86box/vid_svga.h', '    uint32_t (*conv_16to32)(struct svga_t *svga, uint16_t color, uint8_t bpp);\n',
+     "    uint32_t (*conv_16to32)(struct svga_t *svga, uint16_t color, uint8_t bpp);\n    /* KairoX86#425: for a card's own conv_16to32 whose result is each channel from its own bits as things\n       stand: those channels (video_16to32_channels' layout), in [scratch] or a table of its own; NULL when not */\n    const uint8_t *(*conv_16to32_channels)(struct svga_t *svga, uint8_t *scratch);\n"),
+    ('86box/src/video/vid_svga.c', '    svga->conv_16to32                         = svga_conv_16to32;\n',
+     '    svga->conv_16to32                         = svga_conv_16to32;\n    svga->conv_16to32_channels                = NULL; /* KairoX86#425 */\n'),
+    ('86box/src/video/vid_voodoo_banshee.c', 'uint32_t\nbanshee_conv_16to32(svga_t* svga, uint16_t color, UNUSED(uint8_t bpp))\n{',
+     "/* KairoX86#425: banshee_conv_16to32's channels as things stand: video_16to32's without the palette (lut_map), else\n   each channel through the palette half the desktop CLUT selects, as banshee_conv_16to32 takes them */\nstatic const uint8_t *\nbanshee_16to32_channels(svga_t *svga, uint8_t *scratch)\n{\n    const banshee_t *banshee = (banshee_t *) svga->priv;\n\n    if (!svga->lut_map)\n        return video_16to32_channels;\n    const int offset = (banshee->vidProcCfg & VIDPROCCFG_DESKTOP_CLUT_SEL) ? 256 : 0;\n    for (int c = 0; c < 32; c++) {\n        scratch[c]      = getcolr(svga->pallook[(c << 3) + offset]);\n        scratch[96 + c] = getcolb(svga->pallook[(c << 3) + offset]);\n    }\n    for (int c = 0; c < 64; c++)\n        scratch[32 + c] = getcolg(svga->pallook[(c << 2) + offset]);\n    return scratch;\n}\n\nuint32_t\nbanshee_conv_16to32(svga_t* svga, uint16_t color, UNUSED(uint8_t bpp))\n{"),
+    ('86box/src/video/vid_voodoo_banshee.c', '    banshee->svga.conv_16to32 = banshee_conv_16to32;\n',
+     '    banshee->svga.conv_16to32 = banshee_conv_16to32;\n    banshee->svga.conv_16to32_channels = banshee_16to32_channels; /* KairoX86#425 */\n'),
+    ('86box/src/include/86box/video.h', 'extern uint32_t    *video_16to32;\n',
+     "extern uint32_t    *video_16to32;\n/* KairoX86#425: video_16to32's channels, which it computes each from its own bits: blue [0, 32), green [32, 96),\n   red [96, 128) */\nextern uint8_t      video_16to32_channels[128];\n"),
+    ('86box/src/video/video.c', 'uint32_t    *video_16to32         = NULL;\n',
+     'uint32_t    *video_16to32         = NULL;\nuint8_t      video_16to32_channels[128]; /* KairoX86#425 */\n'),
+    ('86box/src/video/video.c', '        video_16to32[c] = calc_16to32(c);\n',
+     '        video_16to32[c] = calc_16to32(c);\n    for (int c = 0; c < 32; c++) { /* KairoX86#425 */\n        video_16to32_channels[c]      = calc_16to32(c) & 0xff;\n        video_16to32_channels[96 + c] = (calc_16to32(c << 11) >> 16) & 0xff;\n    }\n    for (int c = 0; c < 64; c++)\n        video_16to32_channels[32 + c] = (calc_16to32(c << 5) >> 8) & 0xff;\n'),
+    ('86box/src/video/vid_svga_render.c', '\nvoid\nsvga_render_16bpp_highres(svga_t *svga)\n{',
+     "\n#if defined(__aarch64__) || defined(_M_ARM64)\n#    include <arm_neon.h>\n#endif\n/* KairoX86#425: the line's pixels from x on, as svga_render_16bpp_highres's loop draws them (eight a step while x is\n   at most hdisp + scrollcache), with 86Box's default colours (svga_conv_16to32: video_16to32, whose channels\n   video_16to32_channels holds), or a card's own that are channel by channel too (conv_16to32_channels) and VRAM read straight, when the line does not wrap the display mask. Returns where the\n   loop goes on from: x itself when this draws nothing. */\nstatic int\nrender_16bpp_default(svga_t *svga, uint32_t *p, int x)\n{\n    const int      end  = svga->hdisp + svga->scrollcache;\n    const uint32_t mask = svga->vram_display_mask;\n\n    uint8_t        scratch[128];\n    const uint8_t *channels = (svga->conv_16to32 == svga_conv_16to32) ? video_16to32_channels\n                              : svga->conv_16to32_channels ? svga->conv_16to32_channels(svga, scratch) : NULL;\n\n    if ((channels == NULL) || (x > end) || ((mask + 1) & mask))\n        return x;\n    const int      n    = (((end - x) >> 3) + 1) << 3;\n    const uint32_t from = (svga->memaddr + ((uint32_t) x << 1)) & mask;\n    if ((from + (uint32_t) n * 2) > (mask + 1))\n        return x;\n    const uint16_t *src = (const uint16_t *) &svga->vram[from];\n#if defined(__aarch64__) || defined(_M_ARM64)\n    const uint8x16x2_t blue  = { { vld1q_u8(&channels[0]), vld1q_u8(&channels[16]) } };\n    const uint8x16x4_t green = { { vld1q_u8(&channels[32]), vld1q_u8(&channels[48]),\n                                   vld1q_u8(&channels[64]), vld1q_u8(&channels[80]) } };\n    const uint8x16x2_t red   = { { vld1q_u8(&channels[96]), vld1q_u8(&channels[112]) } };\n    const uint8x8_t    alpha = vdup_n_u8(0xff);\n    for (int i = 0; i < n; i += 8) {\n        const uint16x8_t px  = vld1q_u16(&src[i]);\n        uint8x8x4_t      out;\n        out.val[0] = vqtbl2_u8(blue, vmovn_u16(vandq_u16(px, vdupq_n_u16(31))));\n        out.val[1] = vqtbl4_u8(green, vmovn_u16(vandq_u16(vshrq_n_u16(px, 5), vdupq_n_u16(63))));\n        out.val[2] = vqtbl2_u8(red, vmovn_u16(vshrq_n_u16(px, 11)));\n        out.val[3] = alpha;\n        vst4_u8((uint8_t *) &p[i], out);\n    }\n#else\n    for (int i = 0; i < n; i++) {\n        uint16_t c;\n        memcpy(&c, &src[i], 2);\n        p[i] = 0xff000000 | ((uint32_t) channels[96 + (c >> 11)] << 16) |\n               ((uint32_t) channels[32 + ((c >> 5) & 63)] << 8) | channels[c & 31];\n    }\n#endif\n    return x + n;\n}\n\nvoid\nsvga_render_16bpp_highres(svga_t *svga)\n{"),
+    ('86box/src/video/vid_svga_render.c', '            x = render_gpu_direct(svga, p, 16, (svga->render == svga_render_16bpp_highres) && (svga->conv_16to32 == svga_conv_16to32));\n            for (; x <= (svga->hdisp + svga->scrollcache); x += 8) {\n                uint32_t dat = *(uint32_t *) (&svga->vram[(svga->memaddr + (x << 1)) & svga->vram_display_mask]);',
+     '            x = render_gpu_direct(svga, p, 16, (svga->render == svga_render_16bpp_highres) && (svga->conv_16to32 == svga_conv_16to32));\n            if (x == 0) /* KairoX86#425 */\n                x = render_16bpp_default(svga, p, 0);\n            for (; x <= (svga->hdisp + svga->scrollcache); x += 8) {\n                uint32_t dat = *(uint32_t *) (&svga->vram[(svga->memaddr + (x << 1)) & svga->vram_display_mask]);'),
+    ('86box/src/video/vid_svga_render.c', '                x = render_gpu_direct(svga, p, 16, (svga->render == svga_render_16bpp_highres) && (svga->conv_16to32 == svga_conv_16to32));\n                p += x;\n                for (; x <= (svga->hdisp + svga->scrollcache); x += 8) {',
+     '                x = render_gpu_direct(svga, p, 16, (svga->render == svga_render_16bpp_highres) && (svga->conv_16to32 == svga_conv_16to32));\n                if (x == 0) /* KairoX86#425 */\n                    x = render_16bpp_default(svga, p, 0);\n                p += x;\n                for (; x <= (svga->hdisp + svga->scrollcache); x += 8) {'),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -6464,6 +6492,7 @@ PATCHES = {
     'kairox86-prefault': KAIROX86_PREFAULT,
     'kairox86-diag-instructions': KAIROX86_DIAG_INSTRUCTIONS,
     'kairox86-diag-exit-census': KAIROX86_DIAG_EXIT_CENSUS,
+    'kairox86-16bpp-lines': KAIROX86_16BPP_LINES,
 }
 
 ADDED = [
