@@ -529,36 +529,63 @@ build_store_routine(codeblock_t *block, int size, int is_float)
     host_arm64_RET(block, REG_X30);
 }
 
+
+/* KairoX86#416: the next stub at a 64-byte line of its absolute address, so its fast path (about thirteen
+   instructions) is one L1I line, not two: room for the whole stub reserved first (its own codegen_alloc then does not
+   move it to a new allocator block, whose jump would be its first instruction), then NOPs, which nothing runs (each
+   stub ends in a return), up to the line. */
+#define STUB_ROOM 512
+static void
+stub_line(codeblock_t *block)
+{
+    codegen_alloc(block, STUB_ROOM + 64);
+    while (((uintptr_t) &block_write_data[block_pos]) & 63)
+        host_arm64_NOP(block);
+}
 static void
 build_loadstore_routines(codeblock_t *block)
 {
+    stub_line(block);
     codegen_mem_load_byte = &block_write_data[block_pos];
     build_load_routine(block, 1, 0, 0);
+    stub_line(block);
     codegen_mem_load_word = &block_write_data[block_pos];
     build_load_routine(block, 2, 0, 0);
+    stub_line(block);
     codegen_mem_load_long = &block_write_data[block_pos];
     build_load_routine(block, 4, 0, 0);
+    stub_line(block);
     codegen_mem_load_quad = &block_write_data[block_pos];
     build_load_routine(block, 8, 0, 0);
+    stub_line(block);
     codegen_mem_load_single = &block_write_data[block_pos];
     build_load_routine(block, 4, 1, 0);
+    stub_line(block);
     codegen_mem_load_double = &block_write_data[block_pos];
     build_load_routine(block, 8, 1, 0);
+    stub_line(block);
     codegen_mem_load_word_ea = &block_write_data[block_pos];
     build_load_routine(block, 2, 0, 1);
+    stub_line(block);
     codegen_mem_load_long_ea = &block_write_data[block_pos];
     build_load_routine(block, 4, 0, 1);
 
+    stub_line(block);
     codegen_mem_store_byte = &block_write_data[block_pos];
     build_store_routine(block, 1, 0);
+    stub_line(block);
     codegen_mem_store_word = &block_write_data[block_pos];
     build_store_routine(block, 2, 0);
+    stub_line(block);
     codegen_mem_store_long = &block_write_data[block_pos];
     build_store_routine(block, 4, 0);
+    stub_line(block);
     codegen_mem_store_quad = &block_write_data[block_pos];
     build_store_routine(block, 8, 0);
+    stub_line(block);
     codegen_mem_store_single = &block_write_data[block_pos];
     build_store_routine(block, 4, 1);
+    stub_line(block);
     codegen_mem_store_double = &block_write_data[block_pos];
     build_store_routine(block, 8, 1);
 }
