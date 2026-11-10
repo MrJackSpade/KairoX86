@@ -81,6 +81,13 @@ instructions per guest instruction at the desktop, C included (0.87 G host instr
 15.2 M guest instructions). Link misses 11.6 K (target 5.8 K, slice 2.5 K, tsc 2.3 K, irq 0.6 K, status 0.2 K),
 `patch-retarget` 3.9 K (#359).
 
+**Block exits by count** (KairoX86#418's census, a record and counter per exit in a K9X_DIAG core): exits a guest
+second desktop 3.48 M (19.2 guest cycles each), boot 2.72 M, DOOM 2.93 M (22.8 cycles), win98-voodoo3 5.45 M. Near direct,
+plain (nothing that changes what a link validates) and same-page: desktop 42.7%, boot 42.1%, DOOM 86.2%, win98-voodoo3
+38.4%. Windows 98 is flat by count (the top 100 edges hold under half, all VMM); DOOM is concentrated (its top 10 edges
+45.5%), and its column drawer is one loop compiled as two blocks (30.5% of its exits, #421). Exits leaving blocks with no
+C call: 69-80%. By kind at the desktop: Jcc 39.9%, RET 20.0%, indirect CALL/JMP 13.4%, CALL rel 10.6%, JMP rel 8.3%.
+
 **Timer callbacks** (per guest millisecond, desktop / DOOM): the fast PIT's refresh counter 67.9 / 66.9, `svga_poll`
 64.6 / 63.3, `music_poll` 50.8 / 50.0, `sound_poll` 49.0 / 48.3, the KBC polls 20.4 / 20.2, `pollsb` - / 11.1: ~260 a ms
 (#370).
@@ -302,4 +309,5 @@ Measured with `game_profile` on the RG DS; each exact against the core without i
 | KairoX86#378 | Build | The device profile retrained from today's core, with DOOM's demo on the owner's doom486 added to the standard machines (`tools/pgo-train.ps1 -Game`); the recording build linked again (environ's visibility, the core library's profile runtime) | RG DS, tools/ab.ps1 and abb.sh interleaved rounds against the profile it replaced: DOOM's demo 69.98 → 73.37 (+4.8%), win98-pentium +2.7%, pentium +2.5%, xt +2.1%, 486 +1.2%, v20 0.0%, ranges apart; DOOM in the training set against the same retrain without it: DOOM +1.4%, pentium +3.3%, win98-pentium +4.5%, 486 −1.4%, v20 −0.7% (core/pgo/README.md) | fixed |
 | KairoX86#373 | Memory | The boot's first writes to guest RAM faulted on the emulation thread (2,000–14,000 a second early on). A helper thread populates the RAM as it is mapped (`MADV_POPULATE_WRITE`, `kairox86-prefault`); the link slots and code pool are left alone, as populating them cost speed | RG DS, tools/ab.ps1 with the device profile: 486 boot +1.2%, +0.2%, +1.1% over three five-round sets (faster in 9 of 10 rounds shown), pentium +0.6%, xt +0.3%, v20 −0.2%, win98-486 flat; without the profile 486 +1.7%, win98-486 +0.7%; exact on all nine machines (exact.ps1 -Device and -Local) | fixed |
 | KairoX86#419 | Measurement | The diagnostic core's guest instruction counter added the whole block at every exit (an early exit's untaken instructions counted, an in-block loop's repeats missed) and the C loops' instructions not at all; it now counts each instruction as it starts, in translated code (`codegen_ir_compile`) and the C loops (`k9x_cnt_ins_c`) (`kairox86-diag-instructions`); a K9X_DIAG build no longer hides its counters (#376's header) | Linked and unlinked runs count alike (486 boot: 172,577,834 + 24,985,497); the release core's code and data sections identical; the baseline's counters corrected above | fixed |
+| KairoX86#418 | Measurement | The block exit census: a record and run counter per exit compiled in K9X_DIAG cores (`kairox86-diag-exit-census`, `k9x_exit_census`, game_profile's census-start/end.tsv) | Desktop 3.48 M exits a guest second, 42.7% near direct + plain + same-page; DOOM 2.93 M, 86.2%, its column loop split in two blocks (#421); the release core's code and data identical | measured |
 | KairoX86#129 | Idle | A Pentium MMX 233 at its BIOS's F1 prompt runs 23-24 frames/s against 66.67, polling the keyboard from ROM in the interpreter: a wait-loop skip would apply. | — | open |

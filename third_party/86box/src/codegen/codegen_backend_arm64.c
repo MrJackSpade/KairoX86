@@ -120,6 +120,67 @@ codegen_backend_diag_ins(codeblock_t *block, int n)
 {
     k9x_diag_count(block, &k9x_cnt_ins, n);
 }
+
+/* KairoX86#418: a record per block exit compiled; its count is run by the exit itself */
+typedef struct k9x_exit_t {
+    uint64_t             count;
+    codegen_link_slot_t *slot;
+    uint32_t             block_virt; /* the block's first instruction, linear */
+    uint32_t             ins_virt;   /* the instruction the exit leaves from, linear */
+    uint16_t             op;         /* its opcode (codegen.c's diag_op) */
+    uint8_t              modrm;
+    uint8_t              plain;      /* nothing in the block changes what a link validates */
+    uint8_t              calls;      /* C calls in the block's IR */
+    uint8_t              ins;        /* the block's guest instructions */
+} k9x_exit_t;
+#        define K9X_EXITS (1 << 20)
+k9x_exit_t      k9x_exits[K9X_EXITS];
+uint32_t        k9x_nr_exits;
+extern int      k9x_ir_uop;
+extern int      k9x_ir_calls;
+extern void     codegen_diag_exit_info(codeblock_t *block, int uop, uint32_t *pc, uint16_t *op, uint8_t *modrm, uint8_t *plain);
+
+static void
+k9x_exit_record(codeblock_t *block, codegen_link_slot_t *slot)
+{
+    uint32_t pc;
+
+    if (k9x_nr_exits == K9X_EXITS)
+        fatal("k9x_exit_record: more than %d exits compiled\n", K9X_EXITS);
+    k9x_exit_t *e = &k9x_exits[k9x_nr_exits++];
+    codegen_diag_exit_info(block, k9x_ir_uop, &pc, &e->op, &e->modrm, &e->plain);
+    e->slot       = slot;
+    e->block_virt = block->pc;
+    e->ins_virt   = block->_cs + pc;
+    e->calls      = (k9x_ir_calls > 255) ? 255 : (uint8_t) k9x_ir_calls;
+    e->ins        = (block->ins > 255) ? 255 : (uint8_t) block->ins;
+    k9x_diag_count(block, &e->count, 1);
+}
+
+/* Every record run at least once: index, runs, block, exit instruction, opcode, ModRM, plain, calls, the block's
+   instructions, way 0's target (linear; ffffffff if empty) and the ways holding a target */
+void
+k9x_exit_census(const char *path)
+{
+    FILE *f = fopen(path, "w");
+
+    if (f == NULL)
+        fatal("k9x_exit_census: cannot write %s\n", path);
+    for (uint32_t i = 0; i < k9x_nr_exits; i++) {
+        const k9x_exit_t *e = &k9x_exits[i];
+        int               ways = 0;
+
+        if (!e->count)
+            continue;
+        for (int w = 0; w < CODEGEN_LINK_WAYS; w++)
+            if (e->slot[w].entry != NULL)
+                ways++;
+        fprintf(f, "%u\t%llu\t%08x\t%08x\t%03x\t%02x\t%u\t%u\t%u\t%08x\t%d\n", i, (unsigned long long) e->count,
+                e->block_virt, e->ins_virt, e->op, e->modrm, e->plain, e->calls, e->ins,
+                e->slot->entry ? (e->slot->exit_cs + e->slot->exit_pc) : 0xffffffffu, ways);
+    }
+    fclose(f);
+}
 #    endif
 
 /*The memory routines' C paths leave the block themselves when the access
@@ -1779,6 +1840,7 @@ codegen_link_exit(codeblock_t *block)
 #    ifdef K9X_DIAG
     /*Instructions up to this exit, and the exit itself*/
     k9x_diag_count(block, &k9x_cnt_exits, 1); /* KairoX86#419: instructions are counted as they start (codegen_ir.c) */
+    k9x_exit_record(block, slot);              /* KairoX86#418 */
 #    endif
     codegen_alloc(block, 20);
     host_arm64_MOVX_IMM(block, REG_X0, (uint64_t) (uintptr_t) slot);

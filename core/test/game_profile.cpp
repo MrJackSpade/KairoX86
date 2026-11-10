@@ -215,6 +215,17 @@ void write_bmp(const std::string &path, const uint8_t *bgra, uint32_t width, uin
 } // namespace
 
 #ifdef K9X_DIAG
+// KairoX86#418: the block exit census (k9x_exit_census), every exit's runs so far, written to [path]
+static void exit_census(const kairox86::X86Machine &machine, const std::filesystem::path &path) {
+    using Census = void (*)(const char *);
+    const auto census = reinterpret_cast<Census>(machine.symbol("k9x_exit_census"));
+    if (!census) {
+        std::fprintf(stderr, "FAIL: the core has no k9x_exit_census: not a K9X_DIAG core\n");
+        std::exit(1);
+    }
+    census(utf8(path).c_str());
+}
+
 // The core's diagnostic counters (a core built with -DK9X_DIAG), over the measured frames: how the
 // translated code's block exits went (KairoX86#214). Read from the machine's copy of the library.
 struct Diag {
@@ -382,7 +393,10 @@ int main(int argc, char **argv) {
 #endif
         for (long frame = 0; frame < warmup + frames; ++frame) {
 #ifdef K9X_DIAG
-            if (frame == warmup) diag_start = Diag::now(*machine);
+            if (frame == warmup) {
+                diag_start = Diag::now(*machine);
+                exit_census(*machine, work / "census-start.tsv"); // KairoX86#418
+            }
 #endif
             for (const MediaEvent &change : media) {
                 if (change.frame != frame) continue;
@@ -454,6 +468,7 @@ int main(int argc, char **argv) {
         if (times.empty()) return fail("no frames measured");
 #ifdef K9X_DIAG
         Diag::now(*machine).report(diag_start);
+        exit_census(*machine, work / "census-end.tsv"); // KairoX86#418
         {
             // The code map at the end, for telling profile samples apart by guest code
             using CodeMap = void (*)(const char *);

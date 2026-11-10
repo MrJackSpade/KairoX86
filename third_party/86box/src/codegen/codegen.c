@@ -30,6 +30,10 @@ static struct {
     uint32_t op_32;
     int      first_uop;
     int      TOP;
+#if defined(K9X_DIAG) && (defined(__aarch64__) || defined(_M_ARM64))
+    uint16_t diag_op;    /* KairoX86#418: the opcode after its prefixes, | 0x100 from the 0F table, | 0x200 under REP */
+    uint8_t  diag_modrm; /* the byte after it */
+#endif
 } codegen_instructions[MAX_INSTRUCTION_COUNT];
 
 int
@@ -60,6 +64,54 @@ codegen_instructions_at_uop(codeblock_t *block, int uop, int and_after)
         if ((codegen_instructions[c].first_uop == uop) || (and_after && (codegen_instructions[c].first_uop > uop)))
             n++;
     return n;
+}
+#endif
+
+#if defined(K9X_DIAG) && (defined(__aarch64__) || defined(_M_ARM64))
+/* KairoX86#418: whether an instruction can change what the link routine validates (a segment, CR0, the FPU control
+   word, IF/TF, a far transfer, an interrupt) */
+static int
+diag_changes_state(uint16_t op, uint8_t modrm)
+{
+    const int reg = (modrm >> 3) & 7;
+
+    if (op & 0x100) {
+        switch (op & 0xff) {
+            case 0x00: case 0x01: case 0x05: case 0x06: case 0x07: case 0x22: case 0x34: case 0x35:
+            case 0xa1: case 0xa9: case 0xb2: case 0xb4: case 0xb5:
+                return 1;
+        }
+        return 0;
+    }
+    switch (op & 0xff) {
+        case 0x07: case 0x17: case 0x1f: case 0x8e: case 0x9a: case 0x9d: case 0xc4: case 0xc5: case 0xca: case 0xcb:
+        case 0xcc: case 0xcd: case 0xce: case 0xcf: case 0xea: case 0xf4: case 0xfa: case 0xfb:
+            return 1;
+        case 0xd9: return (modrm < 0xc0) && ((reg == 4) || (reg == 5)); /* FLDENV, FLDCW */
+        case 0xdb: return modrm == 0xe3;                                  /* FNINIT */
+        case 0xdd: return (modrm < 0xc0) && (reg == 4);                   /* FRSTOR */
+        case 0xff: return (reg == 3) || (reg == 5);                       /* far CALL, JMP */
+    }
+    return 0;
+}
+
+/* KairoX86#418: the recorded instruction uop [uop] belongs to (the last to begin at or before it), and whether the
+   block holds nothing that diag_changes_state() names */
+void
+codegen_diag_exit_info(codeblock_t *block, int uop, uint32_t *pc, uint16_t *op, uint8_t *modrm, uint8_t *plain)
+{
+    int at = 0;
+
+    for (int c = 0; c < block->ins; c++)
+        if (codegen_instructions[c].first_uop <= uop)
+            at = c;
+    *pc    = codegen_instructions[at].pc;
+    *op    = codegen_instructions[at].diag_op;
+    *modrm = codegen_instructions[at].diag_modrm;
+    *plain = 1;
+    for (int c = 0; c < block->ins; c++)
+        if (diag_changes_state(codegen_instructions[c].diag_op, codegen_instructions[c].diag_modrm))
+            *plain = 0;
 }
 #endif
 
@@ -918,6 +970,11 @@ generate_call:
     codegen_instructions[block->ins].op_32     = last_op_32;
     codegen_instructions[block->ins].TOP       = cpu_state.TOP;
     codegen_instructions[block->ins].first_uop = ir->wr_pos;
+#if defined(K9X_DIAG) && (defined(__aarch64__) || defined(_M_ARM64))
+    codegen_instructions[block->ins].diag_op    = opcode | ((op_table == x86_dynarec_opcodes_0f) ? 0x100 : 0) |
+        (((op_table == x86_dynarec_opcodes_REPE) || (op_table == x86_dynarec_opcodes_REPNE)) ? 0x200 : 0);
+    codegen_instructions[block->ins].diag_modrm = fetchdat & 0xff;
+#endif
 
     codegen_timing_opcode(opcode, fetchdat, op_32, op_pc);
 
