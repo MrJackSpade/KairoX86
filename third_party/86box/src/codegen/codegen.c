@@ -48,6 +48,21 @@ codegen_get_instruction_uop(codeblock_t *block, uint32_t pc, int *first_instruct
 }
 
 
+#if defined(K9X_DIAG) && (defined(__aarch64__) || defined(_M_ARM64))
+/* KairoX86#419: how many of the block's recorded instructions begin at uop [uop] (more than one when some have no
+   uops of their own), or, with [and_after], at it or later (the block's end) */
+int
+codegen_instructions_at_uop(codeblock_t *block, int uop, int and_after)
+{
+    int n = 0;
+
+    for (int c = 0; c < block->ins; c++)
+        if ((codegen_instructions[c].first_uop == uop) || (and_after && (codegen_instructions[c].first_uop > uop)))
+            n++;
+    return n;
+}
+#endif
+
 void
 codegen_set_loop_start(ir_data_t *ir, int first_instruction)
 {

@@ -6264,6 +6264,37 @@ KAIROX86_PREFAULT = [
      "        ram = (uint8_t *) plat_mmap(ram_size + 16, 0, &large_mem); /* allocate and clear the RAM block */\n        /* KairoX86#373: the BIOS writes all of it in the boot's first seconds; a helper thread takes those faults */\n        if (ram != NULL)\n            kairo_prefault(ram, ram_size + 16);\n"),
 ]
 
+
+# KairoX86#419 (diagnostic cores only, K9X_DIAG): guest instructions counted as they run, at each instruction's first
+# uop in translated code and at each dispatch in the C loops (k9x_cnt_ins_c), instead of the whole block's count added
+# at every exit, which counted an early exit's untaken instructions and missed an in-block loop's repeats.
+KAIROX86_DIAG_INSTRUCTIONS = [
+    ('86box/src/codegen/codegen.c', 'void\ncodegen_set_loop_start(ir_data_t *ir, int first_instruction)\n{',
+     "#if defined(K9X_DIAG) && (defined(__aarch64__) || defined(_M_ARM64))\n/* KairoX86#419: how many of the block's recorded instructions begin at uop [uop] (more than one when some have no\n   uops of their own), or, with [and_after], at it or later (the block's end) */\nint\ncodegen_instructions_at_uop(codeblock_t *block, int uop, int and_after)\n{\n    int n = 0;\n\n    for (int c = 0; c < block->ins; c++)\n        if ((codegen_instructions[c].first_uop == uop) || (and_after && (codegen_instructions[c].first_uop > uop)))\n            n++;\n    return n;\n}\n#endif\n\nvoid\ncodegen_set_loop_start(ir_data_t *ir, int first_instruction)\n{"),
+    ('86box/src/codegen/codegen_ir.c', '        if (uop->type & UOP_TYPE_JUMP_DEST) {\n            uop_t *uop_dest = uop;\n\n            while (uop_dest->jump_list_next != -1) {\n                uop_dest = &ir->uops[uop_dest->jump_list_next];\n                codegen_set_jump_dest(block, uop_dest->p);\n            }\n        }\n',
+     '        if (uop->type & UOP_TYPE_JUMP_DEST) {\n            uop_t *uop_dest = uop;\n\n            while (uop_dest->jump_list_next != -1) {\n                uop_dest = &ir->uops[uop_dest->jump_list_next];\n                codegen_set_jump_dest(block, uop_dest->p);\n            }\n        }\n#if defined(K9X_DIAG) && (defined(__aarch64__) || defined(_M_ARM64))\n        { /* KairoX86#419: the guest instructions that begin here, counted as they run */\n            const int starting = codegen_instructions_at_uop(block, c, 0);\n            if (starting)\n                codegen_backend_diag_ins(block, starting);\n        }\n#endif\n'),
+    ('86box/src/codegen/codegen_ir.c', '    codegen_backend_epilogue(block);\n    block_write_data = NULL;\n',
+     "#if defined(K9X_DIAG) && (defined(__aarch64__) || defined(_M_ARM64))\n    { /* KairoX86#419: instructions with no uops at the block's end, where a jump to the end also lands */\n        const int trailing = codegen_instructions_at_uop(block, ir->wr_pos, 1);\n        if (trailing)\n            codegen_backend_diag_ins(block, trailing);\n    }\n#endif\n    codegen_backend_epilogue(block);\n    block_write_data = NULL;\n"),
+    ('86box/src/codegen/codegen_ir.c', '#include "codegen_ir.h"\n',
+     '#include "codegen_ir.h"\n#if defined(K9X_DIAG) && (defined(__aarch64__) || defined(_M_ARM64))\n/* KairoX86#419 */\nextern int  codegen_instructions_at_uop(codeblock_t *block, int uop, int and_after);\nextern void codegen_backend_diag_ins(codeblock_t *block, int n);\n#endif\n'),
+    ('86box/src/codegen/codegen_backend_arm64.c', '    k9x_diag_count(block, &k9x_cnt_ins, block->ins ? block->ins : 1);\n    k9x_diag_count(block, &k9x_cnt_exits, 1);\n',
+     '    k9x_diag_count(block, &k9x_cnt_exits, 1); /* KairoX86#419: instructions are counted as they start (codegen_ir.c) */\n'),
+    ('86box/src/codegen/codegen_backend_arm64.c', '    host_arm64_STR_IMM_Q(block, REG_X17, REG_X16, 0);\n}\n#    endif\n',
+     '    host_arm64_STR_IMM_Q(block, REG_X17, REG_X16, 0);\n}\n/* KairoX86#419: [n] guest instructions begin here (codegen_ir_compile, between uops: X16/X17 free, flags untouched) */\nvoid\ncodegen_backend_diag_ins(codeblock_t *block, int n)\n{\n    k9x_diag_count(block, &k9x_cnt_ins, n);\n}\n#    endif\n'),
+    ('86box/src/cpu/386_dynarec.c', 'uint64_t k9x_c_interp;     /* blocks interpreted by the C loop */\n',
+     "uint64_t k9x_c_interp;     /* blocks interpreted by the C loop */\nuint64_t k9x_cnt_ins_c;    /* KairoX86#419: guest instructions the C loops ran (translated code's are k9x_cnt_ins) */\n"),
+    ('86box/src/cpu/386_dynarec.c', '            cpu_state.pc++;\n            if (dbg)\n                cpu_state.eflags &= ~(RF_FLAG);\n            x86_opcodes[(opcode | cpu_state.op32) & 0x3ff](fetchdat);\n        }\n',
+     '            cpu_state.pc++;\n            if (dbg)\n                cpu_state.eflags &= ~(RF_FLAG);\n#ifdef K9X_DIAG\n            k9x_cnt_ins_c++; /* KairoX86#419 */\n#endif\n            x86_opcodes[(opcode | cpu_state.op32) & 0x3ff](fetchdat);\n        }\n'),
+    ('86box/src/cpu/386_dynarec.c', '                codegen_block_version_check_ins(cs + cpu_state.oldpc);\n\n                x86_opcodes[(opcode | cpu_state.op32) & 0x3ff](fetchdat);\n',
+     '                codegen_block_version_check_ins(cs + cpu_state.oldpc);\n\n#ifdef K9X_DIAG\n                k9x_cnt_ins_c++; /* KairoX86#419 */\n#endif\n                x86_opcodes[(opcode | cpu_state.op32) & 0x3ff](fetchdat);\n'),
+    ('86box/src/cpu/386_dynarec.c', '                cpu_state.pc++;\n\n                x86_opcodes[(opcode | cpu_state.op32) & 0x3ff](fetchdat);\n\n                if (x86_was_reset)\n',
+     '                cpu_state.pc++;\n\n#ifdef K9X_DIAG\n                k9x_cnt_ins_c++; /* KairoX86#419 */\n#endif\n                x86_opcodes[(opcode | cpu_state.op32) & 0x3ff](fetchdat);\n\n                if (x86_was_reset)\n'),
+    ('86box/src/cpu/386_dynarec.c', '                cpu_state.pc++;\n                if (dbg)\n                    cpu_state.eflags &= ~(RF_FLAG);\n                x86_opcodes[(opcode | cpu_state.op32) & 0x3ff](fetchdat);\n                if (x86_was_reset)\n',
+     '                cpu_state.pc++;\n                if (dbg)\n                    cpu_state.eflags &= ~(RF_FLAG);\n#ifdef K9X_DIAG\n                k9x_cnt_ins_c++; /* KairoX86#419 */\n#endif\n                x86_opcodes[(opcode | cpu_state.op32) & 0x3ff](fetchdat);\n                if (x86_was_reset)\n'),
+    ('86box/src/unix/headless_main.c', '    extern uint64_t k9x_cnt_ins, k9x_cnt_exits, k9x_cnt_mem, k9x_cnt_walk;\n    static uint64_t last_ins, last_exits, last_mem, last_walk;\n    fprintf(stderr, "[count] ins=%llu exits=%llu mem=%llu walk=%llu\\n", (unsigned long long) (k9x_cnt_ins - last_ins),\n            (unsigned long long) (k9x_cnt_exits - last_exits), (unsigned long long) (k9x_cnt_mem - last_mem),\n            (unsigned long long) (k9x_cnt_walk - last_walk));\n    last_ins = k9x_cnt_ins; last_exits = k9x_cnt_exits; last_mem = k9x_cnt_mem; last_walk = k9x_cnt_walk;\n',
+     '    extern uint64_t k9x_cnt_ins, k9x_cnt_ins_c, k9x_cnt_exits, k9x_cnt_mem, k9x_cnt_walk;\n    static uint64_t last_ins, last_ins_c, last_exits, last_mem, last_walk;\n    fprintf(stderr, "[count] ins=%llu ins_c=%llu exits=%llu mem=%llu walk=%llu\\n", (unsigned long long) (k9x_cnt_ins - last_ins),\n            (unsigned long long) (k9x_cnt_ins_c - last_ins_c), (unsigned long long) (k9x_cnt_exits - last_exits),\n            (unsigned long long) (k9x_cnt_mem - last_mem), (unsigned long long) (k9x_cnt_walk - last_walk));\n    last_ins = k9x_cnt_ins; last_ins_c = k9x_cnt_ins_c; last_exits = k9x_cnt_exits; last_mem = k9x_cnt_mem; last_walk = k9x_cnt_walk;\n'),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -6406,6 +6437,7 @@ PATCHES = {
     'kairox86-lazy-refresh': KAIROX86_LAZY_REFRESH,
     'kairox86-pages-lazy-fill': KAIROX86_PAGES_LAZY_FILL,
     'kairox86-prefault': KAIROX86_PREFAULT,
+    'kairox86-diag-instructions': KAIROX86_DIAG_INSTRUCTIONS,
 }
 
 ADDED = [

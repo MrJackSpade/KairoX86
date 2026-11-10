@@ -235,6 +235,7 @@ struct Diag {
     static Diag now(const kairox86::X86Machine &machine) {
         static const char *const singles[] = {"k9x_c_dispatch", "k9x_c_dispatch_nofrom", "k9x_c_interp", "k9x_link_patches",
                                               "k9x_patch_first", "k9x_patch_same", "k9x_patch_retarget", "k9x_cnt_ins",
+                                              "k9x_cnt_ins_c", /* KairoX86#419: the C loops' instructions */
                                               "k9x_cnt_exits", "k9x_cnt_mem", "k9x_cnt_changed"};
         Diag d;
         for (const char *name : singles) d.values.push_back(*counters(machine, name));
@@ -255,7 +256,7 @@ struct Diag {
 
     void report(const Diag &start) const {
         static const char *const names[] = {"dispatch", "dispatch-nofrom", "interp", "patches", "patch-first", "patch-same",
-                                            "patch-retarget", "ins", "exits", "mem", "changed", "miss-target", "miss-gen",
+                                            "patch-retarget", "ins", "ins-c", "exits", "mem", "changed", "miss-target", "miss-gen",
                                             "miss-tsc", "miss-slice", "miss-timer", "miss-irq", "miss-status", "miss-other",
                                             "other-cpu", "other-status", "other-npxc", "other-cr0", "other-page", "other-exec",
                                             "other-hash", "other-dirty", "other-top", "other-two-page", "other-none"};

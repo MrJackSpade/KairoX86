@@ -114,6 +114,12 @@ k9x_diag_count(codeblock_t *block, uint64_t *counter, int add)
     host_arm64_ADDX_IMM(block, REG_X17, REG_X17, add);
     host_arm64_STR_IMM_Q(block, REG_X17, REG_X16, 0);
 }
+/* KairoX86#419: [n] guest instructions begin here (codegen_ir_compile, between uops: X16/X17 free, flags untouched) */
+void
+codegen_backend_diag_ins(codeblock_t *block, int n)
+{
+    k9x_diag_count(block, &k9x_cnt_ins, n);
+}
 #    endif
 
 /*The memory routines' C paths leave the block themselves when the access
@@ -1772,8 +1778,7 @@ codegen_link_exit(codeblock_t *block)
 
 #    ifdef K9X_DIAG
     /*Instructions up to this exit, and the exit itself*/
-    k9x_diag_count(block, &k9x_cnt_ins, block->ins ? block->ins : 1);
-    k9x_diag_count(block, &k9x_cnt_exits, 1);
+    k9x_diag_count(block, &k9x_cnt_exits, 1); /* KairoX86#419: instructions are counted as they start (codegen_ir.c) */
 #    endif
     codegen_alloc(block, 20);
     host_arm64_MOVX_IMM(block, REG_X0, (uint64_t) (uintptr_t) slot);

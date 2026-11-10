@@ -8,6 +8,11 @@
 #include "codegen_allocator.h"
 #include "codegen_backend.h"
 #include "codegen_ir.h"
+#if defined(K9X_DIAG) && (defined(__aarch64__) || defined(_M_ARM64))
+/* KairoX86#419 */
+extern int  codegen_instructions_at_uop(codeblock_t *block, int uop, int and_after);
+extern void codegen_backend_diag_ins(codeblock_t *block, int n);
+#endif
 #include "codegen_reg.h"
 
 extern int       has_ea;
@@ -112,6 +117,13 @@ codegen_ir_compile(ir_data_t *ir, codeblock_t *block)
                 codegen_set_jump_dest(block, uop_dest->p);
             }
         }
+#if defined(K9X_DIAG) && (defined(__aarch64__) || defined(_M_ARM64))
+        { /* KairoX86#419: the guest instructions that begin here, counted as they run */
+            const int starting = codegen_instructions_at_uop(block, c, 0);
+            if (starting)
+                codegen_backend_diag_ins(block, starting);
+        }
+#endif
 
         if ((uop->type & UOP_MASK) == UOP_INVALID)
             continue;
@@ -200,6 +212,13 @@ codegen_ir_compile(ir_data_t *ir, codeblock_t *block)
         }
     }
 
+#if defined(K9X_DIAG) && (defined(__aarch64__) || defined(_M_ARM64))
+    { /* KairoX86#419: instructions with no uops at the block's end, where a jump to the end also lands */
+        const int trailing = codegen_instructions_at_uop(block, ir->wr_pos, 1);
+        if (trailing)
+            codegen_backend_diag_ins(block, trailing);
+    }
+#endif
     codegen_backend_epilogue(block);
     block_write_data = NULL;
 #if 0
