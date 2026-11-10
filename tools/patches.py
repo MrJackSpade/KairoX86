@@ -6384,6 +6384,19 @@ KAIROX86_MMIO_WRITE_TLB = [
      '        page_lookup[addr >> 12]->write_l(addr, val, page_lookup[addr >> 12]);\n        return;\n    }\n\n    if (cr0 >> 31) {\n        a          = mmutranslate_write_kept(addr); /* KairoX86#423 */\n        addr64a[0] = (uint32_t) a;'),
 ]
 
+
+# KairoX86#422: get_cf (ADC, SBB, RCL, RCR) works the carry out as uops when the flags op is known at compile time and its
+# carry depends only on flags_res/op1/op2 or the C bit (ADD, SUB, logic, ROL, ROR, INC, DEC), not an ordered jit_CF_SET
+# call; recorded with codegen_flags_rebuild_known()'s rebuilds for the unroll check.
+KAIROX86_CF_KNOWN = [
+    ('86box/src/codegen/codegen_ops_helpers.c', '\nint\ncodegen_flags_rebuild_known(ir_data_t *ir, int carry_only)\n{',
+     "\n/*KairoX86#422: CF_SET() as uops into [dest_reg] when the flags op is known here and its carry depends only on\n  flags_res, flags_op1, flags_op2 or the flags' C bit (x86_flags.h's expression for that op, on the same values);\n  returns 0, emitting nothing, otherwise. Recorded as codegen_flags_rebuild_known()'s rebuilds are, so\n  codegen_can_unroll_full() does not copy it past a loop's own flag changes.*/\nint\ncodegen_cf_known(ir_data_t *ir, int dest_reg)\n{\n#if defined __aarch64__ || defined _M_ARM64 || defined __amd64__ || defined _M_X64\n    const int op = codegen_flags_changed ? cpu_state.flags_op : FLAGS_UNKNOWN;\n    int       producer;\n\n    switch (op) {\n        case FLAGS_ADD8: case FLAGS_ADD16: case FLAGS_ADD32:\n        case FLAGS_SUB8: case FLAGS_SUB16: case FLAGS_SUB32:\n        case FLAGS_ZN8: case FLAGS_ZN16: case FLAGS_ZN32:\n        case FLAGS_ROL8: case FLAGS_ROL16: case FLAGS_ROL32:\n        case FLAGS_ROR8: case FLAGS_ROR16: case FLAGS_ROR32:\n        case FLAGS_INC8: case FLAGS_INC16: case FLAGS_INC32:\n        case FLAGS_DEC8: case FLAGS_DEC16: case FLAGS_DEC32:\n            break;\n        default:\n            return 0;\n    }\n    /*At most three versions of dest_reg, without passing REG_VERSION_MAX*/\n    if (reg_last_version[IREG_GET_REG(dest_reg)] + 3 > REG_VERSION_MAX)\n        return 0;\n    for (producer = ir->wr_pos - 1; producer >= 0; producer--) {\n        if (IREG_GET_REG(ir->uops[producer].dest_reg_a.reg) == IREG_GET_REG(IREG_flags_op))\n            break;\n    }\n    if ((producer < 0) || (flags_known_nr == FLAGS_KNOWN_MAX))\n        return 0;\n    flags_known_site[flags_known_nr]     = ir->wr_pos;\n    flags_known_producer[flags_known_nr] = producer;\n    flags_known_nr++;\n\n    switch (op) {\n        case FLAGS_ADD8:\n        case FLAGS_ADD16:\n            uop_ADD(ir, dest_reg, IREG_flags_op1, IREG_flags_op2);\n            uop_AND_IMM(ir, dest_reg, dest_reg, (op == FLAGS_ADD8) ? 0x100 : 0x10000);\n            uop_SHR_IMM(ir, dest_reg, dest_reg, (op == FLAGS_ADD8) ? 8 : 16);\n            break;\n        case FLAGS_ADD32:\n            uop_CMP_SET(ir, dest_reg, IREG_flags_res, IREG_flags_op1, UOP_CC_B);\n            break;\n        case FLAGS_SUB8: case FLAGS_SUB16: case FLAGS_SUB32:\n            uop_CMP_SET(ir, dest_reg, IREG_flags_op1, IREG_flags_op2, UOP_CC_B);\n            break;\n        case FLAGS_ZN8: case FLAGS_ZN16: case FLAGS_ZN32:\n            uop_MOV_IMM(ir, dest_reg, 0);\n            break;\n        case FLAGS_ROL8: case FLAGS_ROL16: case FLAGS_ROL32:\n            uop_AND_IMM(ir, dest_reg, IREG_flags_res, 1);\n            break;\n        case FLAGS_ROR8: case FLAGS_ROR16: case FLAGS_ROR32:\n            uop_SHR_IMM(ir, dest_reg, IREG_flags_res, (op == FLAGS_ROR8) ? 7 : (op == FLAGS_ROR16) ? 15 : 31);\n            uop_AND_IMM(ir, dest_reg, dest_reg, 1);\n            break;\n        default: /*INC and DEC keep the carry in flags*/\n            uop_MOVZX(ir, dest_reg, IREG_flags);\n            uop_AND_IMM(ir, dest_reg, dest_reg, C_FLAG);\n            break;\n    }\n    return 1;\n#else\n    (void) ir;\n    (void) dest_reg;\n    return 0;\n#endif\n}\n\nint\ncodegen_flags_rebuild_known(ir_data_t *ir, int carry_only)\n{"),
+    ('86box/src/codegen/codegen_ops_helpers.h', 'int codegen_flags_rebuild_known(ir_data_t *ir, int carry_only);\n',
+     'int codegen_flags_rebuild_known(ir_data_t *ir, int carry_only);\nint codegen_cf_known(ir_data_t *ir, int dest_reg); /* KairoX86#422 */\n'),
+    ('86box/src/codegen/codegen_ops_arith.c', 'static inline void\nget_cf(ir_data_t *ir, int dest_reg)\n{\n    uop_CALL_FUNC_RESULT_ORDERED(ir, dest_reg, jit_CF_SET);\n}',
+     'static inline void\nget_cf(ir_data_t *ir, int dest_reg)\n{\n    if (!codegen_cf_known(ir, dest_reg)) /* KairoX86#422 */\n        uop_CALL_FUNC_RESULT_ORDERED(ir, dest_reg, jit_CF_SET);\n}'),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -6531,6 +6544,7 @@ PATCHES = {
     'kairox86-16bpp-lines': KAIROX86_16BPP_LINES,
     'kairox86-16bpp-tiles': KAIROX86_16BPP_TILES,
     'kairox86-mmio-write-tlb': KAIROX86_MMIO_WRITE_TLB,
+    'kairox86-cf-known': KAIROX86_CF_KNOWN,
 }
 
 ADDED = [
