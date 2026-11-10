@@ -99,6 +99,36 @@ in 37 s (#372). SMC cooldowns: 344 in the whole boot.
 **Interrupts and segment loads** at the desktop: V86 → ring 0 interrupts and the IRETs back 14.5 K each, far RET
 14.6 K, V86-mode segment loads 190 K, protected-mode 103 K (#371).
 
+## Pentium-class workloads (KairoX86#417, RG DS, 2026-11-10)
+
+Today's release core (with its profile), simpleperf on the emulation thread for 20 s once each workload runs; the
+counters from a K9X_DIAG core over the same frames.
+
+**Daytona USA's demo** (the owner's eXoWin9x machine: 686BX, Pentium Pro 150, Voodoo3 3000, AWE32; frames 6300-10300,
+its frame and sound hashes repeat): **21.4 of 76.9 frames/s (28%)**.
+
+| Region | Share of the emulation thread |
+|---|---|
+| Translated code | 62.6%: link routine and exits ~27.0%, block code ~23.6%, memory stubs ~12.0% |
+| The core library (C) | 27.3%: `jit_flags_rebuild_zpna` 3.74%, `banshee_render_16bpp_tiled` 3.74%, `writememll` 3.23%, `banshee_write_linear_l` 2.77%, `writememwl` 2.25%, `banshee_write_linear_w` 1.33%, `jit_CF_SET` 1.31% |
+| game_profile's per-frame hash (harness only) | 8.6% |
+
+Counters (per guest second): 96 M guest instructions (1.56 cycles each at 150 MHz), **12.3 M block exits** (one per
+7.8 instructions; 86.0% near direct, plain and same-page), 34.8 M stub accesses; link misses 53 K, almost all target.
+
+**core/test/workload/mmxint** (first-party: an MMX pass, a flags-reading shift/rotate pass and a 640x480 16 bpp LFB
+fill, forever; frames 1000-3000, repeating):
+
+| Machine | Speed | Largest costs |
+|---|---|---|
+| TX97, Pentium MMX 233, S3 Trio64V2 | 51.1 of 58.8 frames/s (87%) | `svga_render_16bpp_highres` 27.9% + `svga_conv_16to32` 3.9%, the LFB chain 15.1%, flag rebuilds 5.6% |
+| 686BX, Pentium II 300, Voodoo3 3000 | 16.0 of 62.5 frames/s (26%) | the LFB chain 28.9% (`banshee_write_linear_l` 16.7%, `writememll` 12.2%), `svga_render_16bpp_highres` 19.3%, flag rebuilds 8.7% |
+
+Tickets: #422 (flag rebuilds), #423 (the LFB write chain), #424 (Banshee tiled scanlines), #425 (16 bpp scanlines),
+#414 (direct chaining: up to ~23% of Daytona's thread). A profile retrained with these in its training set gained the
+workloads +4.3% (TX97) and +7.7% (686BX) but cost the 486's boot 1.0% (1.7% with the standard machines weighted 3:1),
+so today's profile stays.
+
 ## 486DX2-66 target (ASUS PVI-486AP4, 32MB, S3 Trio64V2, SB16) — RG DS
 The standard's `win98-486` machine (its reference disk was then in that harness's own folder). 100% real time = wall ≤ emulated.
 
