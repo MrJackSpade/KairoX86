@@ -60,6 +60,50 @@ typedef struct io_trap_s {
 uint8_t initialized = 0;
 io_t   *io[NPORTS];
 io_t   *io_last[NPORTS];
+
+/* KairoX86#380: by port, the one handler that takes a byte read (inb) or write (outb), with its priv: nr 0 for none, 1
+   for that one, 2 for two or more (the list then, in its order) */
+typedef struct io_direct_in_t {
+    uint8_t (*fn)(uint16_t port, void *priv);
+    void   *priv;
+    int     nr;
+} io_direct_in_t;
+typedef struct io_direct_out_t {
+    void  (*fn)(uint16_t port, uint8_t val, void *priv);
+    void   *priv;
+    int     nr;
+} io_direct_out_t;
+static io_direct_in_t  io_direct_inb[NPORTS];
+static io_direct_out_t io_direct_outb[NPORTS];
+
+/* The port's direct entries, from its list */
+static void
+io_direct_update(uint16_t port)
+{
+    io_direct_in_t  in  = { NULL, NULL, 0 };
+    io_direct_out_t out = { NULL, NULL, 0 };
+
+    for (io_t *p = io[port]; p != NULL; p = p->next) {
+        if (p->inb) {
+            if (in.nr++ == 0) {
+                in.fn   = p->inb;
+                in.priv = p->priv;
+            }
+        }
+        if (p->outb) {
+            if (out.nr++ == 0) {
+                out.fn   = p->outb;
+                out.priv = p->priv;
+            }
+        }
+    }
+    if (in.nr > 2)
+        in.nr = 2;
+    if (out.nr > 2)
+        out.nr = 2;
+    io_direct_inb[port]  = in;
+    io_direct_outb[port] = out;
+}
 uint8_t io_turbo_map[NPORTS >> 3];
 int io_turbo_throttle = 0;
 
@@ -125,6 +169,8 @@ io_init(void)
         /* io[c] should be NULL. */
         io[c] = io_last[c] = NULL;
     }
+    memset(io_direct_inb, 0, sizeof(io_direct_inb)); /* KairoX86#380 */
+    memset(io_direct_outb, 0, sizeof(io_direct_outb));
 
     memset(io_claims, 0x00, sizeof(io_claims));
     memset(io_claimed, 0x00, sizeof(io_claimed));
@@ -211,6 +257,7 @@ io_sethandler_common(uint16_t base, uint16_t size,
         q->next = NULL;
 
         io_last[base + c] = q;
+        io_direct_update(base + c); /* KairoX86#380 */
 
         q = NULL;
     }
@@ -246,6 +293,7 @@ io_removehandler_common(uint16_t base, uint16_t size,
                     io_last[base + c] = p->prev;
                 free(p);
                 p = NULL;
+                io_direct_update(base + c); /* KairoX86#380 */
                 break;
             }
             p = q;
@@ -435,6 +483,15 @@ inb(uint16_t port)
 #endif
     } else if (io_claim_byte(port, 0, 0)) {
         found = 1;
+    } else if (io_direct_inb[port].nr < 2) {
+        /* KairoX86#380: none, or the one handler */
+        if (io_direct_inb[port].nr) {
+            ret &= io_direct_inb[port].fn(port, io_direct_inb[port].priv);
+            found = 1;
+#ifdef ENABLE_IO_LOG
+            qfound = 1;
+#endif
+        }
     } else {
         p = io[port];
         while (p) {
@@ -511,6 +568,15 @@ outb(uint16_t port, uint8_t val)
 #endif
     } else if (io_claim_byte(port, 1, val)) {
         found = 1;
+    } else if (io_direct_outb[port].nr < 2) {
+        /* KairoX86#380: none, or the one handler */
+        if (io_direct_outb[port].nr) {
+            io_direct_outb[port].fn(port, val, io_direct_outb[port].priv);
+            found = 1;
+#ifdef ENABLE_IO_LOG
+            qfound = 1;
+#endif
+        }
     } else {
         p = io[port];
         while (p) {
