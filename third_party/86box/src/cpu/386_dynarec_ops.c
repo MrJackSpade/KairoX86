@@ -94,6 +94,16 @@ fetch_ea_16_long(UNUSED(uint32_t rmdat))
 /*The handler every dynarec table uses for an opcode this CPU doesn't have,
   so the recompiler can leave those to it instead of compiling them*/
 const OpFn dynarec_op_illegal = ILLEGAL;
+
+/*KairoX86#396: FLDCW's work once its word is read, for the compiled FLDCW: as opFLDCW_a16/a32 do it*/
+void
+codegen_fldcw(uint32_t w)
+{
+    const int was_es = cpu_state.npxs & FPU_SW_Summary;
+
+    x87_set_control_word((uint16_t) w);
+    x87_legacy_status_es(was_es, x87_op);
+}
 /*The handlers the FPU tables use for an escape this FPU doesn't have (FUCOM
   and FUCOMPP before the 387, FNSTSW AX on the 8087): #UD on the 486 and
   later, nothing before (x87_ops.h)*/

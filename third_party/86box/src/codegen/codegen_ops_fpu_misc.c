@@ -74,6 +74,31 @@ ropFSTP(codeblock_t *block, ir_data_t *ir, UNUSED(uint8_t opcode), uint32_t fetc
     return op_pc;
 }
 
+/*KairoX86#396: FLDCW m16: the word read as uops, then codegen_fldcw (the interpreter's control-word load and ES); after
+  it, as after the interpreted FLDCW, the next FPU or MMX instruction enters again (an unmasked error may now be pending)
+  and the next compiled FPU instruction checks the control word's classes*/
+extern void codegen_fldcw(uint32_t w);
+uint32_t
+ropFLDCW(codeblock_t *block, ir_data_t *ir, UNUSED(uint8_t opcode), uint32_t fetchdat, uint32_t op_32, uint32_t op_pc)
+{
+    x86seg *target_seg;
+
+    uop_FP_ENTER(ir);
+    uop_MOV_IMM(ir, IREG_oldpc, cpu_state.oldpc);
+    op_pc--;
+    target_seg = codegen_generate_ea(ir, op_ea_seg, fetchdat, op_ssegs, &op_pc, op_32, 0);
+    codegen_check_seg_read(block, ir, target_seg);
+    CHECK_SEG_LIMITS(block, ir, target_seg, IREG_eaaddr, 1);
+    uop_MEM_LOAD_REG(ir, IREG_temp0_W, ireg_seg_base(target_seg), IREG_eaaddr);
+    uop_LOAD_FUNC_ARG_REG(ir, 0, IREG_temp0_W);
+    uop_CALL_FUNC(ir, codegen_fldcw);
+    codegen_fpu_entered     = 0;
+    codegen_mmx_entered     = 0;
+    codegen_fpu_class_dirty = 1;
+
+    return op_pc + 1;
+}
+
 uint32_t
 ropFSTCW(codeblock_t *block, ir_data_t *ir, UNUSED(uint8_t opcode), uint32_t fetchdat, uint32_t op_32, uint32_t op_pc)
 {
