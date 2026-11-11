@@ -206,58 +206,72 @@ stub_abort_exit(codeblock_t *block)
 /*ea_rule: take the direct load whenever the address is at most 0xffc into
   its page, aligned or not, as the interpreter's eal_r path does; readmemwl
   and readmemll charge timing_misaligned only on the slow path.*/
+
+/* KairoX86#430: a memory stub's fast path's branches to its slow path, between the two passes */
+typedef struct stub_slow_t {
+    uint32_t *branch_offset;
+    uint32_t *misaligned_offset;
+} stub_slow_t;
+
 static void
-build_load_routine(codeblock_t *block, int size, int is_float, int ea_rule)
+build_load_routine(codeblock_t *block, int size, int is_float, int ea_rule, int phase, stub_slow_t *s) /* KairoX86#430: phase 0 fast, 1 slow */
 {
     uint32_t *branch_offset;
     uint32_t *misaligned_offset;
 
-#    ifdef K9X_DIAG
-    k9x_diag_count(block, &k9x_cnt_mem, 1);
-#    endif
-    /*In - W0 = address
-      Out - W0 = data, W1 = abrt*/
-    /*MOV W1, W0, LSR #12
-      MOV X2, #readlookup2
-      LDR X1, [X2, X1, LSL #3]
-      CMP X1, #-1
-      BEQ +
-      LDRB W0, [X1, X0]
-      MOV W1, #0
-      RET
-    * STP X29, X30, [SP, #-16]
-      BL readmembl
-      LDRB R1, cpu_state.abrt
-      LDP X29, X30, [SP, #-16]
-      RET
-    */
-    codegen_alloc(block, ((size == 2) && !is_float && !ea_rule) ? 260 : 80);
-    host_arm64_MOV_REG_LSR(block, REG_W1, REG_W0, 12);
-    host_arm64_MOVX_IMM(block, REG_X2, (uint64_t) readlookup2);
-    host_arm64_LDRX_REG_LSL3(block, REG_X1, REG_X2, REG_X1);
-    if (ea_rule) {
-        host_arm64_AND_IMM(block, REG_W2, REG_W0, 0xfff);
-        host_arm64_CMP_IMM(block, REG_W2, 0xffc);
-        misaligned_offset = host_arm64_BHI_(block);
-    } else if (size != 1) {
-        host_arm64_TST_IMM(block, REG_W0, size - 1);
-        misaligned_offset = host_arm64_BNE_(block);
+    if (phase == 0) {
+    #    ifdef K9X_DIAG
+        k9x_diag_count(block, &k9x_cnt_mem, 1);
+    #    endif
+        /*In - W0 = address
+          Out - W0 = data, W1 = abrt*/
+        /*MOV W1, W0, LSR #12
+          MOV X2, #readlookup2
+          LDR X1, [X2, X1, LSL #3]
+          CMP X1, #-1
+          BEQ +
+          LDRB W0, [X1, X0]
+          MOV W1, #0
+          RET
+        * STP X29, X30, [SP, #-16]
+          BL readmembl
+          LDRB R1, cpu_state.abrt
+          LDP X29, X30, [SP, #-16]
+          RET
+        */
+        codegen_alloc(block, ((size == 2) && !is_float && !ea_rule) ? 260 : 80);
+        host_arm64_MOV_REG_LSR(block, REG_W1, REG_W0, 12);
+        host_arm64_MOVX_IMM(block, REG_X2, (uint64_t) readlookup2);
+        host_arm64_LDRX_REG_LSL3(block, REG_X1, REG_X2, REG_X1);
+        if (ea_rule) {
+            host_arm64_AND_IMM(block, REG_W2, REG_W0, 0xfff);
+            host_arm64_CMP_IMM(block, REG_W2, 0xffc);
+            misaligned_offset = host_arm64_BHI_(block);
+        } else if (size != 1) {
+            host_arm64_TST_IMM(block, REG_W0, size - 1);
+            misaligned_offset = host_arm64_BNE_(block);
+        }
+        host_arm64_CMPX_IMM(block, REG_X1, -1);
+        branch_offset = host_arm64_BEQ_(block);
+        if (size == 1 && !is_float)
+            host_arm64_LDRB_REG(block, REG_W0, REG_W1, REG_W0);
+        else if (size == 2 && !is_float)
+            host_arm64_LDRH_REG(block, REG_W0, REG_W1, REG_W0);
+        else if (size == 4 && !is_float)
+            host_arm64_LDR_REG(block, REG_W0, REG_W1, REG_W0);
+        else if (size == 4 && is_float)
+            host_arm64_LDR_REG_F32(block, REG_V_TEMP, REG_W1, REG_W0);
+        else if (size == 8)
+            host_arm64_LDR_REG_F64(block, REG_V_TEMP, REG_W1, REG_W0);
+        host_arm64_MOVZ_IMM(block, REG_W1, 0);
+        host_arm64_RET(block, REG_X30);
+        s->branch_offset     = branch_offset;
+        s->misaligned_offset = misaligned_offset;
+        return;
     }
-    host_arm64_CMPX_IMM(block, REG_X1, -1);
-    branch_offset = host_arm64_BEQ_(block);
-    if (size == 1 && !is_float)
-        host_arm64_LDRB_REG(block, REG_W0, REG_W1, REG_W0);
-    else if (size == 2 && !is_float)
-        host_arm64_LDRH_REG(block, REG_W0, REG_W1, REG_W0);
-    else if (size == 4 && !is_float)
-        host_arm64_LDR_REG(block, REG_W0, REG_W1, REG_W0);
-    else if (size == 4 && is_float)
-        host_arm64_LDR_REG_F32(block, REG_V_TEMP, REG_W1, REG_W0);
-    else if (size == 8)
-        host_arm64_LDR_REG_F64(block, REG_V_TEMP, REG_W1, REG_W0);
-    host_arm64_MOVZ_IMM(block, REG_W1, 0);
-    host_arm64_RET(block, REG_X30);
-
+    branch_offset     = s->branch_offset;
+    misaligned_offset = s->misaligned_offset;
+    codegen_alloc(block, 640);
     if ((size == 2) && !is_float && !ea_rule) {
         uint32_t *page_end;
         uint32_t *not_ram;
@@ -467,53 +481,60 @@ build_store_tracked(codeblock_t *block, int size, uint32_t **to_c)
 #    endif
 
 static void
-build_store_routine(codeblock_t *block, int size, int is_float)
+build_store_routine(codeblock_t *block, int size, int is_float, int phase, stub_slow_t *s) /* KairoX86#430: phase 0 fast, 1 slow */
 {
     uint32_t *branch_offset;
     uint32_t *misaligned_offset;
 
-#    ifdef K9X_DIAG
-    k9x_diag_count(block, &k9x_cnt_mem, 1);
-#    endif
-    /*In - R0 = address, R1 = data
-      Out - R1 = abrt*/
-    /*MOV W2, W0, LSR #12
-      MOV X3, #writelookup2
-      LDR X2, [X3, X2, LSL #3]
-      CMP X2, #-1
-      BEQ +
-      STRB W1, [X2, X0]
-      MOV W1, #0
-      RET
-    * STP X29, X30, [SP, #-16]
-      BL writemembl
-      LDRB R1, cpu_state.abrt
-      LDP X29, X30, [SP, #-16]
-      RET
-    */
-    codegen_alloc(block, 80);
-    host_arm64_MOV_REG_LSR(block, REG_W2, REG_W0, 12);
-    host_arm64_MOVX_IMM(block, REG_X3, (uint64_t) writelookup2);
-    host_arm64_LDRX_REG_LSL3(block, REG_X2, REG_X3, REG_X2);
-    if (size != 1) {
-        host_arm64_TST_IMM(block, REG_W0, size - 1);
-        misaligned_offset = host_arm64_BNE_(block);
+    if (phase == 0) {
+    #    ifdef K9X_DIAG
+        k9x_diag_count(block, &k9x_cnt_mem, 1);
+    #    endif
+        /*In - R0 = address, R1 = data
+          Out - R1 = abrt*/
+        /*MOV W2, W0, LSR #12
+          MOV X3, #writelookup2
+          LDR X2, [X3, X2, LSL #3]
+          CMP X2, #-1
+          BEQ +
+          STRB W1, [X2, X0]
+          MOV W1, #0
+          RET
+        * STP X29, X30, [SP, #-16]
+          BL writemembl
+          LDRB R1, cpu_state.abrt
+          LDP X29, X30, [SP, #-16]
+          RET
+        */
+        codegen_alloc(block, 80);
+        host_arm64_MOV_REG_LSR(block, REG_W2, REG_W0, 12);
+        host_arm64_MOVX_IMM(block, REG_X3, (uint64_t) writelookup2);
+        host_arm64_LDRX_REG_LSL3(block, REG_X2, REG_X3, REG_X2);
+        if (size != 1) {
+            host_arm64_TST_IMM(block, REG_W0, size - 1);
+            misaligned_offset = host_arm64_BNE_(block);
+        }
+        host_arm64_CMPX_IMM(block, REG_X2, -1);
+        branch_offset = host_arm64_BEQ_(block);
+        if (size == 1 && !is_float)
+            host_arm64_STRB_REG(block, REG_X1, REG_X2, REG_X0);
+        else if (size == 2 && !is_float)
+            host_arm64_STRH_REG(block, REG_X1, REG_X2, REG_X0);
+        else if (size == 4 && !is_float)
+            host_arm64_STR_REG(block, REG_X1, REG_X2, REG_X0);
+        else if (size == 4 && is_float)
+            host_arm64_STR_REG_F32(block, REG_V_TEMP, REG_X2, REG_X0);
+        else if (size == 8)
+            host_arm64_STR_REG_F64(block, REG_V_TEMP, REG_X2, REG_X0);
+        host_arm64_MOVZ_IMM(block, REG_X1, 0);
+        host_arm64_RET(block, REG_X30);
+        s->branch_offset     = branch_offset;
+        s->misaligned_offset = misaligned_offset;
+        return;
     }
-    host_arm64_CMPX_IMM(block, REG_X2, -1);
-    branch_offset = host_arm64_BEQ_(block);
-    if (size == 1 && !is_float)
-        host_arm64_STRB_REG(block, REG_X1, REG_X2, REG_X0);
-    else if (size == 2 && !is_float)
-        host_arm64_STRH_REG(block, REG_X1, REG_X2, REG_X0);
-    else if (size == 4 && !is_float)
-        host_arm64_STR_REG(block, REG_X1, REG_X2, REG_X0);
-    else if (size == 4 && is_float)
-        host_arm64_STR_REG_F32(block, REG_V_TEMP, REG_X2, REG_X0);
-    else if (size == 8)
-        host_arm64_STR_REG_F64(block, REG_V_TEMP, REG_X2, REG_X0);
-    host_arm64_MOVZ_IMM(block, REG_X1, 0);
-    host_arm64_RET(block, REG_X30);
-
+    branch_offset     = s->branch_offset;
+    misaligned_offset = s->misaligned_offset;
+    codegen_alloc(block, 640);
     host_arm64_branch_set_offset(branch_offset, &block_write_data[block_pos]);
 #    if !defined(USE_GDBSTUB)
     if (size <= 4 && !is_float) {
@@ -563,49 +584,66 @@ stub_line(codeblock_t *block)
 static void
 build_loadstore_routines(codeblock_t *block)
 {
-    stub_line(block);
-    codegen_mem_load_byte = &block_write_data[block_pos];
-    build_load_routine(block, 1, 0, 0);
-    stub_line(block);
-    codegen_mem_load_word = &block_write_data[block_pos];
-    build_load_routine(block, 2, 0, 0);
-    stub_line(block);
-    codegen_mem_load_long = &block_write_data[block_pos];
-    build_load_routine(block, 4, 0, 0);
-    stub_line(block);
-    codegen_mem_load_quad = &block_write_data[block_pos];
-    build_load_routine(block, 8, 0, 0);
-    stub_line(block);
-    codegen_mem_load_single = &block_write_data[block_pos];
-    build_load_routine(block, 4, 1, 0);
-    stub_line(block);
-    codegen_mem_load_double = &block_write_data[block_pos];
-    build_load_routine(block, 8, 1, 0);
-    stub_line(block);
-    codegen_mem_load_word_ea = &block_write_data[block_pos];
-    build_load_routine(block, 2, 0, 1);
-    stub_line(block);
-    codegen_mem_load_long_ea = &block_write_data[block_pos];
-    build_load_routine(block, 4, 0, 1);
+    /* KairoX86#430: every fast path first, each on its own line, side by side (order B), then every slow path */
+    stub_slow_t slow[14];
 
     stub_line(block);
-    codegen_mem_store_byte = &block_write_data[block_pos];
-    build_store_routine(block, 1, 0);
-    stub_line(block);
-    codegen_mem_store_word = &block_write_data[block_pos];
-    build_store_routine(block, 2, 0);
+    codegen_mem_load_long = &block_write_data[block_pos];
+    build_load_routine(block, 4, 0, 0, 0, &slow[0]);
     stub_line(block);
     codegen_mem_store_long = &block_write_data[block_pos];
-    build_store_routine(block, 4, 0);
+    build_store_routine(block, 4, 0, 0, &slow[1]);
+    stub_line(block);
+    codegen_mem_store_byte = &block_write_data[block_pos];
+    build_store_routine(block, 1, 0, 0, &slow[2]);
+    stub_line(block);
+    codegen_mem_store_word = &block_write_data[block_pos];
+    build_store_routine(block, 2, 0, 0, &slow[3]);
+    stub_line(block);
+    codegen_mem_load_word = &block_write_data[block_pos];
+    build_load_routine(block, 2, 0, 0, 0, &slow[4]);
+    stub_line(block);
+    codegen_mem_load_byte = &block_write_data[block_pos];
+    build_load_routine(block, 1, 0, 0, 0, &slow[5]);
+    stub_line(block);
+    codegen_mem_load_long_ea = &block_write_data[block_pos];
+    build_load_routine(block, 4, 0, 1, 0, &slow[6]);
+    stub_line(block);
+    codegen_mem_load_word_ea = &block_write_data[block_pos];
+    build_load_routine(block, 2, 0, 1, 0, &slow[7]);
+    stub_line(block);
+    codegen_mem_load_quad = &block_write_data[block_pos];
+    build_load_routine(block, 8, 0, 0, 0, &slow[8]);
     stub_line(block);
     codegen_mem_store_quad = &block_write_data[block_pos];
-    build_store_routine(block, 8, 0);
+    build_store_routine(block, 8, 0, 0, &slow[9]);
+    stub_line(block);
+    codegen_mem_load_single = &block_write_data[block_pos];
+    build_load_routine(block, 4, 1, 0, 0, &slow[10]);
     stub_line(block);
     codegen_mem_store_single = &block_write_data[block_pos];
-    build_store_routine(block, 4, 1);
+    build_store_routine(block, 4, 1, 0, &slow[11]);
+    stub_line(block);
+    codegen_mem_load_double = &block_write_data[block_pos];
+    build_load_routine(block, 8, 1, 0, 0, &slow[12]);
     stub_line(block);
     codegen_mem_store_double = &block_write_data[block_pos];
-    build_store_routine(block, 8, 1);
+    build_store_routine(block, 8, 1, 0, &slow[13]);
+
+    build_load_routine(block, 4, 0, 0, 1, &slow[0]);
+    build_store_routine(block, 4, 0, 1, &slow[1]);
+    build_store_routine(block, 1, 0, 1, &slow[2]);
+    build_store_routine(block, 2, 0, 1, &slow[3]);
+    build_load_routine(block, 2, 0, 0, 1, &slow[4]);
+    build_load_routine(block, 1, 0, 0, 1, &slow[5]);
+    build_load_routine(block, 4, 0, 1, 1, &slow[6]);
+    build_load_routine(block, 2, 0, 1, 1, &slow[7]);
+    build_load_routine(block, 8, 0, 0, 1, &slow[8]);
+    build_store_routine(block, 8, 0, 1, &slow[9]);
+    build_load_routine(block, 4, 1, 0, 1, &slow[10]);
+    build_store_routine(block, 4, 1, 1, &slow[11]);
+    build_load_routine(block, 8, 1, 0, 1, &slow[12]);
+    build_store_routine(block, 8, 1, 1, &slow[13]);
 }
 
 static void
