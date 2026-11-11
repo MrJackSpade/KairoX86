@@ -6476,6 +6476,14 @@ KAIROX86_UNLINK_ON_WRITE = [
      "    host_arm64_LDR_IMM_X(block, REG_X9, REG_X1, LINK_SLOT(block_nr));\n    /* KairoX86#353: the first page's dirty mask is not tested: a store into a linked block's code empties its links */\n"),
 ]
 
+
+# KairoX86#352: a block prefetches its first exit's slot line as it is entered, so the link routine's first load
+# no longer waits on a miss past L2.
+KAIROX86_SLOT_PREFETCH = [
+    ('86box/src/codegen/codegen_backend_arm64.c', '    host_arm64_MOVX_IMM(block, REG_CPUSTATE, (uint64_t) &cpu_state);\n\n#    ifdef CODEGEN_BACKEND_HAS_BLOCK_LINK\n    link_site = 0;',
+     "    host_arm64_MOVX_IMM(block, REG_CPUSTATE, (uint64_t) &cpu_state);\n\n#    ifdef CODEGEN_BACKEND_HAS_BLOCK_LINK\n    /* KairoX86#352: the first exit's slot line, which the link routine's first load waits on, fetched while the\n       block runs (PRFM never faults and changes nothing the guest sees) */\n    host_arm64_MOVX_IMM(block, REG_X16, (uint64_t) (uintptr_t) &codegen_link_slots[get_block_nr(block)][0][0]);\n    host_arm64_PRFM_IMM(block, REG_X16, 0);\n    link_site = 0;"),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -6628,6 +6636,7 @@ PATCHES = {
     'kairox86-link-status-known': KAIROX86_LINK_STATUS_KNOWN,
     'kairox86-link-cr0-known': KAIROX86_LINK_CR0_KNOWN,
     'kairox86-unlink-on-write': KAIROX86_UNLINK_ON_WRITE,
+    'kairox86-slot-prefetch': KAIROX86_SLOT_PREFETCH,
 }
 
 ADDED = [

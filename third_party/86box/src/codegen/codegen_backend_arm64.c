@@ -1862,6 +1862,10 @@ codegen_backend_prologue(codeblock_t *block)
     host_arm64_MOVX_IMM(block, REG_CPUSTATE, (uint64_t) &cpu_state);
 
 #    ifdef CODEGEN_BACKEND_HAS_BLOCK_LINK
+    /* KairoX86#352: the first exit's slot line, which the link routine's first load waits on, fetched while the
+       block runs (PRFM never faults and changes nothing the guest sees) */
+    host_arm64_MOVX_IMM(block, REG_X16, (uint64_t) (uintptr_t) &codegen_link_slots[get_block_nr(block)][0][0]);
+    host_arm64_PRFM_IMM(block, REG_X16, 0);
     link_site = 0;
 #    endif
     codegen_imm_store_forget();
