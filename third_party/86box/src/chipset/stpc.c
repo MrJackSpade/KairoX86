@@ -747,6 +747,7 @@ stpc_reg_write(uint16_t addr, uint8_t val, void *priv)
             case 0x57:
                 pic_elcr_write(dev->reg_offset, val, (dev->reg_offset & 1) ? &pic2 : &pic);
                 if (dev->reg_offset == 0x57)
+                    pit_refresh_sync(); /* KairoX86#410 */
                     refresh_at_enable = (val & 0x01);
                 break;
 
@@ -991,6 +992,7 @@ stpc_init(const device_t *info)
     device_add(&port_92_pci_device);
 
     pic_elcr_io_handler(0);
+    pit_refresh_sync(); /* KairoX86#410 */
     refresh_at_enable = 0;
 
     return dev;

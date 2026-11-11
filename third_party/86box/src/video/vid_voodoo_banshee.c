@@ -504,6 +504,25 @@ banshee_updatemapping(banshee_t *banshee)
     mem_mapping_set_addr(&banshee->reg_mapping_high, banshee->memBaseAddr0 + 0xc00000, 20 << 20);
 }
 
+/* KairoX86#425: banshee_conv_16to32's channels as things stand: video_16to32's without the palette (lut_map), else
+   each channel through the palette half the desktop CLUT selects, as banshee_conv_16to32 takes them */
+static const uint8_t *
+banshee_16to32_channels(svga_t *svga, uint8_t *scratch)
+{
+    const banshee_t *banshee = (banshee_t *) svga->priv;
+
+    if (!svga->lut_map)
+        return video_16to32_channels;
+    const int offset = (banshee->vidProcCfg & VIDPROCCFG_DESKTOP_CLUT_SEL) ? 256 : 0;
+    for (int c = 0; c < 32; c++) {
+        scratch[c]      = getcolr(svga->pallook[(c << 3) + offset]);
+        scratch[96 + c] = getcolb(svga->pallook[(c << 3) + offset]);
+    }
+    for (int c = 0; c < 64; c++)
+        scratch[32 + c] = getcolg(svga->pallook[(c << 2) + offset]);
+    return scratch;
+}
+
 uint32_t
 banshee_conv_16to32(svga_t* svga, uint16_t color, UNUSED(uint8_t bpp))
 {
@@ -576,20 +595,17 @@ banshee_render_16bpp_tiled(svga_t *svga)
         return;
     }
 
+    /* KairoX86#424: banshee_conv_16to32's channels for the line (#425's), each tile's 64 pixels converted with them */
+    uint8_t        scratch[128];
+    const uint8_t *channels = banshee_16to32_channels(svga, scratch);
     for (int x = 0; x < svga->hdisp; x += 64) {
         if (svga->hwcursor_on || svga->overlay_on)
             svga->changedvram[addr >> 12] = 2;
         if (svga->changedvram[addr >> 12] || svga->fullchange) {
             const uint16_t *vram_p = (uint16_t *) &svga->vram[addr & svga->vram_display_mask];
 
-            /* KairoX86#214: with no LUT mapping, the conversion is the table */
-            if (!svga->lut_map) {
-                for (uint8_t xx = 0; xx < 64; xx++)
-                    *p++ = video_16to32[*vram_p++];
-            } else {
-                for (uint8_t xx = 0; xx < 64; xx++)
-                    *p++ = banshee_conv_16to32(svga, *vram_p++, 16);
-            }
+            video_16to32_run(p, vram_p, 64, channels);
+            p += 64;
 
             drawn = 1;
         } else
@@ -3569,6 +3585,7 @@ banshee_init_common(const device_t *info, const char *fn, const int has_sgram,
     banshee->ddc     = ddc_init(i2c_gpio_get_bus(banshee->i2c_ddc));
 
     banshee->svga.conv_16to32 = banshee_conv_16to32;
+    banshee->svga.conv_16to32_channels = banshee_16to32_channels; /* KairoX86#425 */
 
     switch (type) {
         case TYPE_BANSHEE:

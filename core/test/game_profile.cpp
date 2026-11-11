@@ -58,6 +58,9 @@
 #include <vector>
 
 #include "kairo/startup_typer.h"
+#ifndef _WIN32
+#include <dlfcn.h>
+#endif
 #include "x86_machine.h"
 
 #ifdef _WIN32
@@ -212,10 +215,24 @@ void write_bmp(const std::string &path, const uint8_t *bgra, uint32_t width, uin
 } // namespace
 
 #ifdef K9X_DIAG
+// KairoX86#418: the block exit census (k9x_exit_census), every exit's runs so far, written to [path]
+static void exit_census(const kairox86::X86Machine &machine, const std::filesystem::path &path) {
+    using Census = void (*)(const char *);
+    const auto census = reinterpret_cast<Census>(machine.symbol("k9x_exit_census"));
+    if (!census) {
+        std::fprintf(stderr, "FAIL: the core has no k9x_exit_census: not a K9X_DIAG core\n");
+        std::exit(1);
+    }
+    census(utf8(path).c_str());
+}
+
 // The core's diagnostic counters (a core built with -DK9X_DIAG), over the measured frames: how the
 // translated code's block exits went (KairoX86#214). Read from the machine's copy of the library.
 struct Diag {
     std::vector<uint64_t> values;
+    // The timer callbacks run (86Box's timer.c counts each callback function's runs: KairoX86#402)
+    std::vector<uint64_t> timer_runs;
+    std::vector<const void *> timer_callbacks;
 
     static const uint64_t *counters(const kairox86::X86Machine &machine, const char *name) {
         const auto *found = static_cast<const uint64_t *>(machine.symbol(name));
@@ -229,6 +246,7 @@ struct Diag {
     static Diag now(const kairox86::X86Machine &machine) {
         static const char *const singles[] = {"k9x_c_dispatch", "k9x_c_dispatch_nofrom", "k9x_c_interp", "k9x_link_patches",
                                               "k9x_patch_first", "k9x_patch_same", "k9x_patch_retarget", "k9x_cnt_ins",
+                                              "k9x_cnt_ins_c", /* KairoX86#419: the C loops' instructions */
                                               "k9x_cnt_exits", "k9x_cnt_mem", "k9x_cnt_changed"};
         Diag d;
         for (const char *name : singles) d.values.push_back(*counters(machine, name));
@@ -236,17 +254,36 @@ struct Diag {
         d.values.insert(d.values.end(), miss, miss + 8);
         const uint64_t *miss2 = counters(machine, "k9x_miss2");
         d.values.insert(d.values.end(), miss2, miss2 + 11);
+        const uint64_t *runs = counters(machine, "k9x_timer_n");
+        d.timer_runs.assign(runs, runs + 32);
+        const auto *callbacks = static_cast<const void *const *>(machine.symbol("k9x_timer_cb"));
+        if (!callbacks) {
+            std::fprintf(stderr, "FAIL: the core has no k9x_timer_cb: not a K9X_DIAG core\n");
+            std::exit(1);
+        }
+        d.timer_callbacks.assign(callbacks, callbacks + 32);
         return d;
     }
 
     void report(const Diag &start) const {
         static const char *const names[] = {"dispatch", "dispatch-nofrom", "interp", "patches", "patch-first", "patch-same",
-                                            "patch-retarget", "ins", "exits", "mem", "changed", "miss-target", "miss-gen",
+                                            "patch-retarget", "ins", "ins-c", "exits", "mem", "changed", "miss-target", "miss-gen",
                                             "miss-tsc", "miss-slice", "miss-timer", "miss-irq", "miss-status", "miss-other",
                                             "other-cpu", "other-status", "other-npxc", "other-cr0", "other-page", "other-exec",
                                             "other-hash", "other-dirty", "other-top", "other-two-page", "other-none"};
         for (size_t i = 0; i < values.size(); ++i)
             std::printf("diag %s %llu\n", names[i], (unsigned long long) (values[i] - start.values[i]));
+        // Each timer callback's runs over the measured frames, by its address in the core's library (as an offset
+        // from the library's start where the platform says it, for llvm-addr2line on the build's library)
+        for (size_t i = 0; i < timer_runs.size() && timer_callbacks[i]; ++i) {
+            uintptr_t at = reinterpret_cast<uintptr_t>(timer_callbacks[i]);
+#ifndef _WIN32
+            Dl_info info{};
+            if (dladdr(timer_callbacks[i], &info) && info.dli_fbase) at -= reinterpret_cast<uintptr_t>(info.dli_fbase);
+#endif
+            std::printf("diag timer 0x%llx %llu\n", (unsigned long long) at,
+                        (unsigned long long) (timer_runs[i] - (i < start.timer_runs.size() ? start.timer_runs[i] : 0)));
+        }
     }
 };
 #endif
@@ -356,7 +393,10 @@ int main(int argc, char **argv) {
 #endif
         for (long frame = 0; frame < warmup + frames; ++frame) {
 #ifdef K9X_DIAG
-            if (frame == warmup) diag_start = Diag::now(*machine);
+            if (frame == warmup) {
+                diag_start = Diag::now(*machine);
+                exit_census(*machine, work / "census-start.tsv"); // KairoX86#418
+            }
 #endif
             for (const MediaEvent &change : media) {
                 if (change.frame != frame) continue;
@@ -428,6 +468,7 @@ int main(int argc, char **argv) {
         if (times.empty()) return fail("no frames measured");
 #ifdef K9X_DIAG
         Diag::now(*machine).report(diag_start);
+        exit_census(*machine, work / "census-end.tsv"); // KairoX86#418
         {
             // The code map at the end, for telling profile samples apart by guest code
             using CodeMap = void (*)(const char *);

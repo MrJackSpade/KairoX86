@@ -114,6 +114,73 @@ k9x_diag_count(codeblock_t *block, uint64_t *counter, int add)
     host_arm64_ADDX_IMM(block, REG_X17, REG_X17, add);
     host_arm64_STR_IMM_Q(block, REG_X17, REG_X16, 0);
 }
+/* KairoX86#419: [n] guest instructions begin here (codegen_ir_compile, between uops: X16/X17 free, flags untouched) */
+void
+codegen_backend_diag_ins(codeblock_t *block, int n)
+{
+    k9x_diag_count(block, &k9x_cnt_ins, n);
+}
+
+/* KairoX86#418: a record per block exit compiled; its count is run by the exit itself */
+typedef struct k9x_exit_t {
+    uint64_t             count;
+    codegen_link_slot_t *slot;
+    uint32_t             block_virt; /* the block's first instruction, linear */
+    uint32_t             ins_virt;   /* the instruction the exit leaves from, linear */
+    uint16_t             op;         /* its opcode (codegen.c's diag_op) */
+    uint8_t              modrm;
+    uint8_t              plain;      /* nothing in the block changes what a link validates */
+    uint8_t              calls;      /* C calls in the block's IR */
+    uint8_t              ins;        /* the block's guest instructions */
+} k9x_exit_t;
+#        define K9X_EXITS (1 << 20)
+k9x_exit_t      k9x_exits[K9X_EXITS];
+uint32_t        k9x_nr_exits;
+extern int      k9x_ir_uop;
+extern int      k9x_ir_calls;
+extern void     codegen_diag_exit_info(codeblock_t *block, int uop, uint32_t *pc, uint16_t *op, uint8_t *modrm, uint8_t *plain);
+
+static void
+k9x_exit_record(codeblock_t *block, codegen_link_slot_t *slot)
+{
+    uint32_t pc;
+
+    if (k9x_nr_exits == K9X_EXITS)
+        fatal("k9x_exit_record: more than %d exits compiled\n", K9X_EXITS);
+    k9x_exit_t *e = &k9x_exits[k9x_nr_exits++];
+    codegen_diag_exit_info(block, k9x_ir_uop, &pc, &e->op, &e->modrm, &e->plain);
+    e->slot       = slot;
+    e->block_virt = block->pc;
+    e->ins_virt   = block->_cs + pc;
+    e->calls      = (k9x_ir_calls > 255) ? 255 : (uint8_t) k9x_ir_calls;
+    e->ins        = (block->ins > 255) ? 255 : (uint8_t) block->ins;
+    k9x_diag_count(block, &e->count, 1);
+}
+
+/* Every record run at least once: index, runs, block, exit instruction, opcode, ModRM, plain, calls, the block's
+   instructions, way 0's target (linear; ffffffff if empty) and the ways holding a target */
+void
+k9x_exit_census(const char *path)
+{
+    FILE *f = fopen(path, "w");
+
+    if (f == NULL)
+        fatal("k9x_exit_census: cannot write %s\n", path);
+    for (uint32_t i = 0; i < k9x_nr_exits; i++) {
+        const k9x_exit_t *e = &k9x_exits[i];
+        int               ways = 0;
+
+        if (!e->count)
+            continue;
+        for (int w = 0; w < CODEGEN_LINK_WAYS; w++)
+            if (e->slot[w].entry != NULL)
+                ways++;
+        fprintf(f, "%u\t%llu\t%08x\t%08x\t%03x\t%02x\t%u\t%u\t%u\t%08x\t%d\n", i, (unsigned long long) e->count,
+                e->block_virt, e->ins_virt, e->op, e->modrm, e->plain, e->calls, e->ins,
+                e->slot->entry ? (e->slot->exit_cs + e->slot->exit_pc) : 0xffffffffu, ways);
+    }
+    fclose(f);
+}
 #    endif
 
 /*The memory routines' C paths leave the block themselves when the access
@@ -264,12 +331,14 @@ build_load_routine(codeblock_t *block, int size, int is_float, int ea_rule)
   user fills it before reading it. Anything else returns through to_c[] to
   the C path.
   In - W0 = address, W1 = data. Returns the number of to_c[] branches.*/
+extern void k9x_store_new_dirty(page_t *page, uint32_t addr, uint32_t bytes); /* KairoX86#353 (mem.c) */
 static int
 build_store_tracked(codeblock_t *block, int size, uint32_t **to_c)
 {
     const uint32_t bytes = (1 << size) - 1; /*the store's bytes in the byte mask*/
     uint32_t *done[3];
     uint32_t *add_evict;
+    uint32_t *new_dirty; /* KairoX86#353 */
     int       nr_to_c = 0;
 
     host_arm64_MOVX_IMM(block, REG_X3, (uint64_t) &codegen_in_recompile);
@@ -339,8 +408,9 @@ build_store_tracked(codeblock_t *block, int size, uint32_t **to_c)
     host_arm64_MOVZ_IMM(block, REG_X7, 1);
     host_arm64_LSLX(block, REG_X7, REG_X7, REG_X6);
     host_arm64_LDR_IMM_X(block, REG_X8, REG_X4, offsetof(page_t, dirty_mask));
-    host_arm64_ORRX_REG(block, REG_X8, REG_X8, REG_X7, 0);
-    host_arm64_STR_IMM_Q(block, REG_X8, REG_X4, offsetof(page_t, dirty_mask));
+    host_arm64_ORRX_REG(block, REG_X14, REG_X8, REG_X7, 0);
+    host_arm64_STR_IMM_Q(block, REG_X14, REG_X4, offsetof(page_t, dirty_mask));
+    host_arm64_SUBX_REG(block, REG_X14, REG_X14, REG_X8); /* KairoX86#353: nonzero if the bit was clear */
 
     /*W9 = byte in chunk, X10 = byte_mask, W13 = chunk word offset*/
     host_arm64_AND_IMM(block, REG_W9, REG_W0, 63);
@@ -350,8 +420,12 @@ build_store_tracked(codeblock_t *block, int size, uint32_t **to_c)
     host_arm64_LDR_IMM_X(block, REG_X11, REG_X4, offsetof(page_t, byte_dirty_mask));
     host_arm64_ADDX_REG_UXTW(block, REG_X11, REG_X11, REG_W13);
     host_arm64_LDR_IMM_X(block, REG_X12, REG_X11, 0);
-    host_arm64_ORRX_REG(block, REG_X12, REG_X12, REG_X10, 0);
-    host_arm64_STR_IMM_Q(block, REG_X12, REG_X11, 0);
+    host_arm64_ORRX_REG(block, REG_X15, REG_X12, REG_X10, 0);
+    host_arm64_STR_IMM_Q(block, REG_X15, REG_X11, 0);
+    host_arm64_SUBX_REG(block, REG_X15, REG_X15, REG_X12); /* KairoX86#353: nonzero if a byte's bit was clear */
+    host_arm64_ORRX_REG(block, REG_X14, REG_X14, REG_X15, 0);
+    host_arm64_CMPX_IMM(block, REG_X14, 0);
+    new_dirty = host_arm64_BNE_(block);
 
     /*A page not yet on the evict list goes on it when the store hits code*/
     host_arm64_LDR_IMM_W(block, REG_W12, REG_X4, offsetof(page_t, evict_prev));
@@ -374,6 +448,17 @@ build_store_tracked(codeblock_t *block, int size, uint32_t **to_c)
 
     for (int c = 0; c < 3; c++)
         host_arm64_branch_set_offset(done[c], &block_write_data[block_pos]);
+    host_arm64_MOVZ_IMM(block, REG_X1, 0);
+    host_arm64_RET(block, REG_X30);
+
+    /*KairoX86#353: a dirty bit that was clear: the links to the page's blocks go, and the evict list as above, in C*/
+    host_arm64_branch_set_offset(new_dirty, &block_write_data[block_pos]);
+    host_arm64_STP_PREIDX_X(block, REG_X29, REG_X30, REG_XSP, -16);
+    host_arm64_MOV_REG(block, REG_W1, REG_W0, 0);
+    host_arm64_MOVX_REG(block, REG_X0, REG_X4, 0);
+    host_arm64_MOVZ_IMM(block, REG_W2, bytes);
+    host_arm64_call(block, (void *) k9x_store_new_dirty);
+    host_arm64_LDP_POSTIDX_X(block, REG_X29, REG_X30, REG_XSP, 16);
     host_arm64_MOVZ_IMM(block, REG_X1, 0);
     host_arm64_RET(block, REG_X30);
 
@@ -462,36 +547,63 @@ build_store_routine(codeblock_t *block, int size, int is_float)
     host_arm64_RET(block, REG_X30);
 }
 
+
+/* KairoX86#416: the next stub at a 64-byte line of its absolute address, so its fast path (about thirteen
+   instructions) is one L1I line, not two: room for the whole stub reserved first (its own codegen_alloc then does not
+   move it to a new allocator block, whose jump would be its first instruction), then NOPs, which nothing runs (each
+   stub ends in a return), up to the line. */
+#define STUB_ROOM 512
+static void
+stub_line(codeblock_t *block)
+{
+    codegen_alloc(block, STUB_ROOM + 64);
+    while (((uintptr_t) &block_write_data[block_pos]) & 63)
+        host_arm64_NOP(block);
+}
 static void
 build_loadstore_routines(codeblock_t *block)
 {
+    stub_line(block);
     codegen_mem_load_byte = &block_write_data[block_pos];
     build_load_routine(block, 1, 0, 0);
+    stub_line(block);
     codegen_mem_load_word = &block_write_data[block_pos];
     build_load_routine(block, 2, 0, 0);
+    stub_line(block);
     codegen_mem_load_long = &block_write_data[block_pos];
     build_load_routine(block, 4, 0, 0);
+    stub_line(block);
     codegen_mem_load_quad = &block_write_data[block_pos];
     build_load_routine(block, 8, 0, 0);
+    stub_line(block);
     codegen_mem_load_single = &block_write_data[block_pos];
     build_load_routine(block, 4, 1, 0);
+    stub_line(block);
     codegen_mem_load_double = &block_write_data[block_pos];
     build_load_routine(block, 8, 1, 0);
+    stub_line(block);
     codegen_mem_load_word_ea = &block_write_data[block_pos];
     build_load_routine(block, 2, 0, 1);
+    stub_line(block);
     codegen_mem_load_long_ea = &block_write_data[block_pos];
     build_load_routine(block, 4, 0, 1);
 
+    stub_line(block);
     codegen_mem_store_byte = &block_write_data[block_pos];
     build_store_routine(block, 1, 0);
+    stub_line(block);
     codegen_mem_store_word = &block_write_data[block_pos];
     build_store_routine(block, 2, 0);
+    stub_line(block);
     codegen_mem_store_long = &block_write_data[block_pos];
     build_store_routine(block, 4, 0);
+    stub_line(block);
     codegen_mem_store_quad = &block_write_data[block_pos];
     build_store_routine(block, 8, 0);
+    stub_line(block);
     codegen_mem_store_single = &block_write_data[block_pos];
     build_store_routine(block, 4, 1);
+    stub_line(block);
     codegen_mem_store_double = &block_write_data[block_pos];
     build_store_routine(block, 8, 1);
 }
@@ -1140,6 +1252,7 @@ build_link_routine(codeblock_t *block)
     uint32_t *miss[LINK_MAX_MISS];
     int       nr_miss = 0;
     uint32_t *nmi_set;
+    uint32_t *status_known; /* KairoX86#414 */
     uint32_t *nmi_ok;
     uint32_t *irq_ok;
     uint32_t *irq_ok_2;
@@ -1191,11 +1304,7 @@ build_link_routine(codeblock_t *block)
     host_arm64_LDR_IMM_W(block, REG_W2, REG_CPUSTATE, rep_state_offset(&cpu_state.pc));
     host_arm64_LDR_IMM_W(block, REG_W3, REG_CPUSTATE, rep_state_offset(&cpu_state.seg_cs.base));
     host_arm64_LDP_IMM_X(block, REG_X5, REG_X15, REG_X0, LINK_SLOT(exit_pc));
-    /*Start the cache miss a check below waits on: the target's page's dirty
-      mask. PRFM never faults, so an empty slot's NULL pointer is harmless;
-      X12 is reloaded before it is used again.*/
-    host_arm64_LDR_IMM_X(block, REG_X12, REG_X0, LINK_SLOT(dirty_mask));
-    host_arm64_PRFM_IMM(block, REG_X12, 0);
+    /* KairoX86#353: no dirty-mask test on the hit path, so no prefetch for it (codegen_link_page_written()) */
     host_arm64_ORRX_REG(block, REG_X4, REG_X2, REG_X3, 32);
     host_arm64_ADD_REG(block, REG_W2, REG_W2, REG_W3, 0);
     host_arm64_MOVX_REG(block, REG_X1, REG_X0, 0);
@@ -1265,6 +1374,15 @@ build_link_routine(codeblock_t *block)
     miss[nr_miss++] = host_arm64_TBNZ_SHORT_(block, REG_W5, 0);
     host_arm64_short_branch_set_offset(irq_ok, &block_write_data[block_pos]);
     host_arm64_short_branch_set_offset(irq_ok_2, &block_write_data[block_pos]);
+    /*KairoX86#414: the target accepts the status the exit's block left with (slot status_known): no compare*/
+    host_arm64_LDRB_IMM_W(block, REG_W4, REG_X1, LINK_SLOT(status_known));
+    status_known = host_arm64_CBNZ_SHORT_(block, REG_W4);
+    /*KairoX86#356: paging and cache-disable bits as when the slot was filled (W13 = CR0); a status_known way's block
+      runs none of CR0's writers, so it skips this too*/
+    host_arm64_LDR_IMM_W(block, REG_W9, REG_X1, LINK_SLOT(cr0_bits));
+    host_arm64_AND_IMM(block, REG_W10, REG_W13, 0xc0000000);
+    host_arm64_CMP_REG(block, REG_W10, REG_W9);
+    miss[nr_miss++] = host_arm64_BNE_SHORT_(block);
 
     /*Status and FPU rounding as when the slot was filled, compared as one
       word against W6. Only the C loop refreshes the PC24 and RC_NZ status
@@ -1294,6 +1412,7 @@ build_link_routine(codeblock_t *block)
     host_arm64_EOR_REG(block, REG_W4, REG_W4, REG_W6, 0);
     host_arm64_TST_IMM(block, REG_W4, ~(uint32_t) (CPU_STATUS_FPU_PC24 | CPU_STATUS_FPU_RC_NZ));
     miss[nr_miss++] = host_arm64_BNE_SHORT_(block);
+    host_arm64_short_branch_set_offset(status_known, &block_write_data[block_pos]); /* KairoX86#414 */
 
     /*The TSC. If it moved, update_tsc() ran inside the block and the C loop
       does the rest of that arithmetic. X11 = new tsc*/
@@ -1347,10 +1466,7 @@ build_link_routine(codeblock_t *block)
 
     /*Paging and cache-disable bits as when the slot was filled. W9 = them,
       W12 = phys_page*/
-    host_arm64_LDP_IMM_W(block, REG_W9, REG_W12, REG_X1, LINK_SLOT(cr0_bits));
-    host_arm64_AND_IMM(block, REG_W10, REG_W13, 0xc0000000);
-    host_arm64_CMP_REG(block, REG_W10, REG_W9);
-    miss[nr_miss++] = host_arm64_BNE_SHORT_(block);
+    host_arm64_LDP_IMM_W(block, REG_W9, REG_W12, REG_X1, LINK_SLOT(cr0_bits)); /* KairoX86#356: compared above */
 
     /*get_phys(cs + pc) gives phys_page. W8 = nonzero if get_phys() would
       miss its cache*/
@@ -1373,10 +1489,7 @@ build_link_routine(codeblock_t *block)
     /*The block lookup and the checks made before running it. X9 =
       block_nr | top_mask << 16 | top << 24 | two_page << 32*/
     host_arm64_LDR_IMM_X(block, REG_X9, REG_X1, LINK_SLOT(block_nr));
-    host_arm64_LDP_IMM_X(block, REG_X10, REG_X13, REG_X1, LINK_SLOT(page_mask));
-    host_arm64_LDR_IMM_X(block, REG_X13, REG_X13, 0);
-    host_arm64_TSTX_REG(block, REG_X13, REG_X10);
-    miss[nr_miss++] = host_arm64_BNE_SHORT_(block);
+    /* KairoX86#353: the first page's dirty mask is not tested: a store into a linked block's code empties its links */
     host_arm64_LDR_IMM_W(block, REG_W10, REG_CPUSTATE, rep_state_offset(&cpu_state.TOP));
     host_arm64_UBFX(block, REG_W13, REG_W9, 16, 8);
     host_arm64_AND_REG(block, REG_W10, REG_W10, REG_W13, 0);
@@ -1501,8 +1614,9 @@ build_link_routine(codeblock_t *block)
       get_phys_virt, and translate through readlookup2[] with paging on or
       through rammask with paging off*/
     host_arm64_short_branch_set_offset(uncached, &block_write_data[block_pos]);
-    no_paging = host_arm64_TBZ_SHORT_(block, REG_W9, 31);
+    no_paging = host_arm64_TBZ_SHORT_(block, REG_W13, 31); /* KairoX86#356: paging as it is now, as get_phys() decides */
     host_arm64_LDP_IMM_X(block, REG_X10, REG_X13, REG_X1, LINK_SLOT(xlat));
+    miss[nr_miss++] = host_arm64_CBZ_SHORT_(block, REG_X10); /* KairoX86#356: filled with paging off */
     host_arm64_LDR_IMM_X(block, REG_X10, REG_X10, 0);
     host_arm64_CMPX_REG(block, REG_X10, REG_X13);
     xlat_same = host_arm64_BEQ_SHORT_(block);
@@ -1772,9 +1886,14 @@ codegen_link_exit(codeblock_t *block)
 
 #    ifdef K9X_DIAG
     /*Instructions up to this exit, and the exit itself*/
-    k9x_diag_count(block, &k9x_cnt_ins, block->ins ? block->ins : 1);
-    k9x_diag_count(block, &k9x_cnt_exits, 1);
+    k9x_diag_count(block, &k9x_cnt_exits, 1); /* KairoX86#419: instructions are counted as they start (codegen_ir.c) */
+    k9x_exit_record(block, slot);              /* KairoX86#418 */
 #    endif
+    /* KairoX86#414: the slots now belong to this block: its classification, and no way known until refilled */
+    for (int w = 0; w < CODEGEN_LINK_WAYS; w++) {
+        slot[w].src_status_kept = (uint8_t) codegen_block_status_kept;
+        slot[w].status_known    = 0;
+    }
     codegen_alloc(block, 20);
     host_arm64_MOVX_IMM(block, REG_X0, (uint64_t) (uintptr_t) slot);
     host_arm64_B(block, codegen_link_rout);

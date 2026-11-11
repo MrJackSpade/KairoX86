@@ -20,17 +20,29 @@ import com.mrjackspade.kairo.frontend.UiText
  *   no-retry flag that makes it send READ MULTIPLE as C0h. FreeDOS's FDISK asks for all eight
  *   drives, and the drive rejects the C0h, so block mode breaks FreeDOS 1.3's installer.
  * - [WIN9X]: a Pentium MMX 233 on the ASUS TX97, 64 MB, S3 Trio64V2/DX, Sound Blaster 16, IDE with
- *   a blank 2 GB hard disk, which its BIOS detects at each start (LBA), and an ATAPI CD-ROM, its
- *   BIOS booting the CD first (Windows 98 SE Setup, started from a DOS floppy with the CD's driver).
+ *   a blank 2 GB hard disk, which its BIOS detects at each start (LBA), and an ATAPI CD-ROM. Its
+ *   BIOS boots A, then the CD, then C (Boot Sequence A,CDROM,C: CMOS byte 3Ch, outside the
+ *   checksummed 10h-2Dh): a boot floppy or bootable CD always starts, the installed disk when neither
+ *   is in (KairoX86#342). It booted the CD first before, so once FDISK had written a partition
+ *   table, Windows 98 Setup's boot floppy never started again: the empty partition's MBR stopped at
+ *   "PRESS A KEY TO REBOOT".
  */
 object X86Presets {
     /**
      * A preset: its folder in assets/presets, its row's name, the hardware whose firmware it needs,
-     * and the blank hard disk its 86box.cfg names (KairoX86#162), written into the new folder as
-     * [HARD_DISK].
+     * the blank hard disk its 86box.cfg names (KairoX86#162), written into the new folder as
+     * [HARD_DISK], and how its stored CMOS ([cmosFile], among [files]) holds that disk ([cmos]), so New
+     * game keeps it for any disk (KairoX86#341).
      */
     class Preset(val id: String, val label: Int, val files: List<String>, val machine: String, val cards: Map<String, String>,
-                 val hardDisk: X86BlankDisk? = null)
+                 val hardDisk: X86BlankDisk? = null, val cmos: X86Cmos? = null) {
+        /** The stored CMOS among [files], with [cmos]; none for a preset without one. */
+        val cmosFile: String? = files.singleOrNull { it.startsWith("nvr/") }
+
+        init {
+            require((cmos == null) == (cmosFile == null)) { "Preset $id: a stored CMOS needs its kind (X86Cmos), and only one does" }
+        }
+    }
 
     /** A new machine's blank hard disk, as its 86box.cfg names it (hdd_01_fn). */
     const val HARD_DISK = "disk.vhd"
@@ -40,9 +52,9 @@ object X86Presets {
     // The 486's disk is the 504 MB a DOS-era BIOS addresses by CHS (1024 cylinders, 16 heads, 63
     // sectors); the Pentium's is 2 GB, past it by LBA, room for Windows 98 and its games.
     val DOS_486 = Preset("486", R.string.preset_486, listOf("86box.cfg", "nvr/486ap4.nvr"), "486ap4",
-        mapOf(X86Hardware.VIDEO to "s3_trio64v2dx_pci", X86Hardware.SOUND to "sb16"), X86BlankDisk(1024, 16, 63))
+        mapOf(X86Hardware.VIDEO to "s3_trio64v2dx_pci", X86Hardware.SOUND to "sb16"), X86BlankDisk(1024, 16, 63), X86Cmos.Award450)
     val WIN9X = Preset("pentium", R.string.preset_win9x, listOf("86box.cfg", "nvr/tx97.nvr"), "tx97",
-        mapOf(X86Hardware.VIDEO to "s3_trio64v2dx_pci", X86Hardware.SOUND to "sb16"), X86BlankDisk(4096, 16, 63))
+        mapOf(X86Hardware.VIDEO to "s3_trio64v2dx_pci", X86Hardware.SOUND to "sb16"), X86BlankDisk(4096, 16, 63), X86Cmos.Detected)
 
     val all = listOf(XT, DOS_486, WIN9X)
 
@@ -63,12 +75,9 @@ object X86Presets {
     /** The presets as new entries the create flow writes, each from its assets. */
     fun blankDisks(context: Context): List<BlankDisk> = all.map { preset ->
         val assets = preset.files.map { path ->
-            path to { output: java.io.OutputStream ->
-                context.assets.open("presets/${preset.id}/$path").use { it.copyTo(output) }
-                Unit
-            }
+            BlankDisk.File(path) { output -> context.assets.open("presets/${preset.id}/$path").use { it.copyTo(output) } }
         }
-        val disk = preset.hardDisk?.let { blank -> listOf(HARD_DISK to { output: java.io.OutputStream -> blank.write(output) }) }.orEmpty()
+        val disk = preset.hardDisk?.let { blank -> listOf(BlankDisk.File(HARD_DISK) { output -> blank.write(output) }) }.orEmpty()
         BlankDisk.Folder("preset-${preset.id}", UiText.res(preset.label), assets + disk) { unavailable(preset) }
     }
 }

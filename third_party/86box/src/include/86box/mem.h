@@ -250,6 +250,9 @@ page_in_evict_list(page_t *page)
 }
 void page_remove_from_evict_list(page_t *page);
 void page_add_to_evict_list(page_t *page);
+#ifdef USE_DYNAREC
+extern void codegen_link_page_written(page_t *page); /* KairoX86#353 (codegen_block.c) */
+#endif
 
 extern uint8_t *ram;
 extern uint32_t rammask;
@@ -266,6 +269,9 @@ extern int        writelookup[256];
 extern int        writelnext;
 extern uint32_t   ram_mapped_addr[64];
 extern uint8_t    page_ff[4096];
+/* KairoX86#408: the table's entries [first, end) written as the last whole-table loop left every entry, if not yet */
+extern void mem_pages_fill_range(uint32_t first, uint32_t end);
+extern void mem_pages_reset_unmapped(void);
 
 extern mem_mapping_t ram_low_mapping;
 extern mem_mapping_t ram_mid_mapping;

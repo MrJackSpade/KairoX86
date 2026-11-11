@@ -122,6 +122,7 @@ row_allocate(uint8_t row_id, uint8_t set)
     if (rows[row_id].ram_size == 0x00000000)
         return;
 
+    mem_pages_fill_range(rows[row_id].host_base >> 12, (rows[row_id].host_base + rows[row_id].host_size) >> 12); /* KairoX86#408 */
     for (uint32_t c = (rows[row_id].host_base >> 12); c < ((rows[row_id].host_base + rows[row_id].host_size) >> 12); c++) {
         offset = c - (rows[row_id].host_base >> 12);
 
@@ -258,15 +259,7 @@ row_init(const device_t *info)
     mem_mapping_disable(&ram_mid_mapping);
     mem_mapping_disable(&ram_high_mapping);
 
-    for (uint32_t c = 0; c < pages_sz; c++) {
-        pages[c].mem = page_ff;
-        pages[c].write_b = NULL;
-        pages[c].write_w = NULL;
-        pages[c].write_l = NULL;
-        pages[c].evict_prev = EVICT_NOT_IN_LIST;
-        pages[c].byte_dirty_mask = &byte_dirty_mask[c * 64];
-        pages[c].byte_code_present_mask = &byte_code_present_mask[c * 64];
-    }
+    mem_pages_reset_unmapped(); /* KairoX86#408: every entry unmapped, the unwritten ones by mem.c's template */
 
     /* Set all memory space above the default allocated area to external. */
     boundary = ((uint32_t) rows_default) * row_unit;

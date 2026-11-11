@@ -458,6 +458,43 @@
         if (trap)                                                                                                 \
             cycles_end = cycles + 1; /*Force the instruction to end after only one iteration when trap flag set*/ \
         while (CNT_REG > 0) {                                                                                     \
+            /* KairoX86#381: a run of dwords on one page the write lookup maps straight (writememl's plain store, \
+               with no side effect), the segment checks passed: stored in one loop, the same memory, registers,   \
+               cycles and writes as element by element, ending at the element the loop would end at */            \
+            if (!(cpu_state.flags & D_FLAG) && !smi_line && (es != 0xffffffff) && !SEG_NOT_WRITABLE(&cpu_state.seg_es) && \
+                !((msw & 1) && !(cpu_state.eflags & VM_FLAG) && !(cpu_state.seg_es.access & 0x80)) &&             \
+                ((uint32_t) DEST_REG >= cpu_state.seg_es.limit_low)) {                                            \
+                const uint32_t  lin = es + DEST_REG;                                                              \
+                const uintptr_t wl  = writelookup2[lin >> 12];                                                    \
+                if (!(lin & 3) && (wl != (uintptr_t) LOOKUP_INV)) {                                               \
+                    const int ec   = is486 ? 4 : 5;                                                               \
+                    uint64_t  n    = (0x1000 - (lin & 0xfff)) >> 2;                                               \
+                    const uint64_t dmax = (sizeof(DEST_REG) == 2) ? 0xffff : 0xffffffff;                          \
+                    if (n > (uint64_t) CNT_REG)                                                                   \
+                        n = CNT_REG;                                                                              \
+                    if (n > (uint64_t) ((cycles - cycles_end) / ec) + 1)                                          \
+                        n = (uint64_t) ((cycles - cycles_end) / ec) + 1;                                          \
+                    if (n > ((dmax - (uint64_t) DEST_REG) + 1) / 4)                                               \
+                        n = ((dmax - (uint64_t) DEST_REG) + 1) / 4;                                               \
+                    if ((uint64_t) cpu_state.seg_es.limit_high < (uint64_t) DEST_REG + 3)                         \
+                        n = 0;                                                                                    \
+                    else if (n > (((uint64_t) cpu_state.seg_es.limit_high - DEST_REG - 3) / 4) + 1)               \
+                        n = (((uint64_t) cpu_state.seg_es.limit_high - DEST_REG - 3) / 4) + 1;                    \
+                    if (n > 0) {                                                                                  \
+                        uint32_t *p = (uint32_t *) (wl + (uintptr_t) lin);                                        \
+                        for (uint64_t i = 0; i < n; i++)                                                          \
+                            p[i] = EAX;                                                                           \
+                        DEST_REG += (uint32_t) (4 * n);                                                           \
+                        CNT_REG -= (uint32_t) n;                                                                  \
+                        cycles -= (int) (ec * n);                                                                 \
+                        writes += (int) n;                                                                        \
+                        total_cycles += (int) (ec * n);                                                           \
+                        if ((cycles < cycles_end) || smi_line)                                                    \
+                            break;                                                                                \
+                        continue;                                                                                 \
+                    }                                                                                             \
+                }                                                                                                 \
+            }                                                                                                     \
                                                                                                                   \
             SEG_CHECK_WRITE_REP(&cpu_state.seg_es);                                                               \
             CHECK_WRITE_REP(&cpu_state.seg_es, DEST_REG, DEST_REG + 3UL);                                         \

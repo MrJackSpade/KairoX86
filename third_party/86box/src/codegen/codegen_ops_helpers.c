@@ -55,6 +55,78 @@ codegen_flags_known_reset(void)
   Each flag is the expression CF_SET() .. VF_SET() in x86_flags.h use for
   that op, on the same values, ORed into flags in place. Uses temp1 and
   temp3 only: callers hold operands in temp0 and shift counts in temp2.*/
+/*KairoX86#422: CF_SET() as uops into [dest_reg] when the flags op is known here and its carry depends only on
+  flags_res, flags_op1, flags_op2 or the flags' C bit (x86_flags.h's expression for that op, on the same values);
+  returns 0, emitting nothing, otherwise. Recorded as codegen_flags_rebuild_known()'s rebuilds are, so
+  codegen_can_unroll_full() does not copy it past a loop's own flag changes.*/
+int
+codegen_cf_known(ir_data_t *ir, int dest_reg)
+{
+#if defined __aarch64__ || defined _M_ARM64 || defined __amd64__ || defined _M_X64
+    const int op = codegen_flags_changed ? cpu_state.flags_op : FLAGS_UNKNOWN;
+    int       producer;
+
+    switch (op) {
+        case FLAGS_ADD8: case FLAGS_ADD16: case FLAGS_ADD32:
+        case FLAGS_SUB8: case FLAGS_SUB16: case FLAGS_SUB32:
+        case FLAGS_ZN8: case FLAGS_ZN16: case FLAGS_ZN32:
+        case FLAGS_ROL8: case FLAGS_ROL16: case FLAGS_ROL32:
+        case FLAGS_ROR8: case FLAGS_ROR16: case FLAGS_ROR32:
+        case FLAGS_INC8: case FLAGS_INC16: case FLAGS_INC32:
+        case FLAGS_DEC8: case FLAGS_DEC16: case FLAGS_DEC32:
+            break;
+        default:
+            return 0;
+    }
+    /*At most three versions of dest_reg, without passing REG_VERSION_MAX*/
+    if (reg_last_version[IREG_GET_REG(dest_reg)] + 3 > REG_VERSION_MAX)
+        return 0;
+    for (producer = ir->wr_pos - 1; producer >= 0; producer--) {
+        if (IREG_GET_REG(ir->uops[producer].dest_reg_a.reg) == IREG_GET_REG(IREG_flags_op))
+            break;
+    }
+    if ((producer < 0) || (flags_known_nr == FLAGS_KNOWN_MAX))
+        return 0;
+    flags_known_site[flags_known_nr]     = ir->wr_pos;
+    flags_known_producer[flags_known_nr] = producer;
+    flags_known_nr++;
+
+    switch (op) {
+        case FLAGS_ADD8:
+        case FLAGS_ADD16:
+            uop_ADD(ir, dest_reg, IREG_flags_op1, IREG_flags_op2);
+            uop_AND_IMM(ir, dest_reg, dest_reg, (op == FLAGS_ADD8) ? 0x100 : 0x10000);
+            uop_SHR_IMM(ir, dest_reg, dest_reg, (op == FLAGS_ADD8) ? 8 : 16);
+            break;
+        case FLAGS_ADD32:
+            uop_CMP_SET(ir, dest_reg, IREG_flags_res, IREG_flags_op1, UOP_CC_B);
+            break;
+        case FLAGS_SUB8: case FLAGS_SUB16: case FLAGS_SUB32:
+            uop_CMP_SET(ir, dest_reg, IREG_flags_op1, IREG_flags_op2, UOP_CC_B);
+            break;
+        case FLAGS_ZN8: case FLAGS_ZN16: case FLAGS_ZN32:
+            uop_MOV_IMM(ir, dest_reg, 0);
+            break;
+        case FLAGS_ROL8: case FLAGS_ROL16: case FLAGS_ROL32:
+            uop_AND_IMM(ir, dest_reg, IREG_flags_res, 1);
+            break;
+        case FLAGS_ROR8: case FLAGS_ROR16: case FLAGS_ROR32:
+            uop_SHR_IMM(ir, dest_reg, IREG_flags_res, (op == FLAGS_ROR8) ? 7 : (op == FLAGS_ROR16) ? 15 : 31);
+            uop_AND_IMM(ir, dest_reg, dest_reg, 1);
+            break;
+        default: /*INC and DEC keep the carry in flags*/
+            uop_MOVZX(ir, dest_reg, IREG_flags);
+            uop_AND_IMM(ir, dest_reg, dest_reg, C_FLAG);
+            break;
+    }
+    return 1;
+#else
+    (void) ir;
+    (void) dest_reg;
+    return 0;
+#endif
+}
+
 int
 codegen_flags_rebuild_known(ir_data_t *ir, int carry_only)
 {

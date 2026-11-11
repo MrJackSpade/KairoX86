@@ -341,6 +341,7 @@ extern int cpu_reps;
 extern int cpu_notreps;
 
 extern int codegen_block_cycles;
+extern int codegen_block_status_kept; /* KairoX86#414 */
 
 extern void (*codegen_timing_start)(void);
 extern void (*codegen_timing_prefix)(uint8_t prefix, uint32_t fetchdat);

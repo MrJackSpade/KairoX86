@@ -252,6 +252,11 @@ extern uint32_t    *video_8togs;
 extern uint32_t    *video_8to32;
 extern uint32_t    *video_15to32;
 extern uint32_t    *video_16to32;
+/* KairoX86#425: video_16to32's channels, which it computes each from its own bits: blue [0, 32), green [32, 96),
+   red [96, 128) */
+extern uint8_t      video_16to32_channels[128];
+/* KairoX86#424: [n] (a multiple of 8) 16-bit pixels at [src] to [dst] through [channels] (video.c) */
+extern void         video_16to32_run(uint32_t *dst, const uint16_t *src, int n, const uint8_t *channels);
 extern int          enable_overscan;
 extern int          force_43;
 extern int          force_device_aspect;

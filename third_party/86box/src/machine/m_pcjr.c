@@ -64,6 +64,15 @@ static uint8_t key_queue[16];
 static int     key_queue_start = 0;
 static int     key_queue_end   = 0;
 
+/* KairoX86#404: how many more bytes this keyboard's 16-byte queue holds, so the host sends a key only
+   when all of its bytes fit (keyboard_room): a key added to a full queue overwrote bytes the guest had
+   not read, and a lost E0 made Left into keypad 4. */
+static int
+kairo_key_room(void)
+{
+    return 15 - ((key_queue_end - key_queue_start) & 0x0f);
+}
+
 /*PCjr keyboard has no escape scancodes, and no scancodes beyond 54
   Map right alt to 54h (FN) */
 const scancode scancode_pcjr[512] = {
@@ -915,6 +924,7 @@ machine_pcjr_init(UNUSED(const machine_t *model))
     timer_add(&pcjr->send_delay_timer, kbd_poll, pcjr, 1);
     keyboard_set_table(scancode_pcjr);
     keyboard_send = kbd_adddata_ex;
+    keyboard_room = kairo_key_room;
 
     /* Technically it's the SN76496N, but the SN76489 is identical to the SN76496N. */
     device_add(&sn76489_device);

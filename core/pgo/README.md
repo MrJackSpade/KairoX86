@@ -33,10 +33,32 @@ without the profile by default, since a change under test makes the recorded one
 
 ## Training and evaluation
 
-Training: the standard's `xt`, `486`, `win98-486` and `win98-pentium` machines. `v20`, `at`, `386sx`
-and `pentium` are held out, so the evaluation includes machines the profile has never seen.
+Training: the standard's `xt`, `486`, `win98-486` and `win98-pentium` machines, and DOOM's demo on
+the owner's `doom486` machine (PVI-486AP4, DX2-66, S3, SB16; `C:` and `DOOM` typed at FreeDOS's
+prompt, 3,500 frames of title and demo then 2,500 more), which the repository cannot hold:
+`tools\pgo-train.ps1 -Device <adb address> -Game <doom486 folder>`
+([#378](https://github.com/MrJackSpade/KairoX86/issues/378)). `v20`, `at`, `386sx`, `pentium` and
+`win98-voodoo3` are held out, so the evaluation includes machines the profile has never seen.
 
-RG DS, `tools/exact.ps1 -BasePgo off -TreePgo use` from the same source (frames a second, the core
+RG DS, the retrain of #378 (frames a second, interleaved `tools/ab.ps1` rounds, medians; every run's
+end state alike). Against the profile it replaced, trained on the standard machines alone before
+#376, #408 and #410 changed the core:
+
+| Workload | Before | After | |
+| --- | --- | --- | --- |
+| DOOM's demo (trained) | 69.98 | 73.37 | +4.8% |
+| xt (trained) | 102.18 | 104.33 | +2.1% |
+| 486 (trained) | 74.01 | 74.92 | +1.2% |
+| win98-pentium (trained) | 52.52 | 53.94 | +2.7% |
+| v20 (held out) | 72.39 | 72.39 | 0.0% |
+| pentium (held out) | 33.43 | 34.28 | +2.5% |
+
+DOOM in the training set, against the same retrain without it: DOOM +1.4%, pentium +3.3%,
+win98-pentium +4.5%, win98-voodoo3 about +1%, xt +0.7%, at +0.5%, 386sx +0.3%, win98-486 −0.2%,
+v20 −0.7%, 486 −1.4%. With it, DOOM's demo and the 486's floppy boot both run faster than the real
+DX2-66 (71.4 frames a second).
+
+As first recorded (#123), `tools/exact.ps1 -BasePgo off -TreePgo use` from the same source (frames a second, the core
 without the profile against the core with it; every machine's pictures, sound and end state exact):
 
 | Machine | Without | With | |

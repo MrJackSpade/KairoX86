@@ -65,6 +65,10 @@ public:
     std::string error() override { return error_; }
     // With the picture on the GPU (gpu_picture), no pixels here (machine_core.h)
     const uint8_t *frame(uint32_t &width, uint32_t &height) override { return machine_->frame(width, height); }
+    bool picture_target(uint8_t *pixels, size_t bytes) override {
+        machine_->picture_target(pixels, bytes);
+        return true;
+    }
 #ifdef __ANDROID__
     kairo::GpuPicture *gpu_picture() override { return picture_.get(); }
     // The picture on the GPU signs the frame it shows exactly as the processor's copy would be signed

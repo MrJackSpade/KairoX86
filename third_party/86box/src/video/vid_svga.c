@@ -2181,6 +2181,7 @@ svga_init(const device_t *info, svga_t *svga, void *priv, int memsize,
     svga->hwcursor_draw                       = hwcursor_draw;
     svga->overlay_draw                        = overlay_draw;
     svga->conv_16to32                         = svga_conv_16to32;
+    svga->conv_16to32_channels                = NULL; /* KairoX86#425 */
     svga->render                              = svga_render_blank;
 
     svga->hwcursor.cur_xsize = svga->hwcursor.cur_ysize = 32;

@@ -246,12 +246,12 @@ ui_emu_status(int speed_percent)
     static uint64_t last_changed;
     fprintf(stderr, "[changed] %llu\n", (unsigned long long) (k9x_cnt_changed - last_changed));
     last_changed = k9x_cnt_changed;
-    extern uint64_t k9x_cnt_ins, k9x_cnt_exits, k9x_cnt_mem, k9x_cnt_walk;
-    static uint64_t last_ins, last_exits, last_mem, last_walk;
-    fprintf(stderr, "[count] ins=%llu exits=%llu mem=%llu walk=%llu\n", (unsigned long long) (k9x_cnt_ins - last_ins),
-            (unsigned long long) (k9x_cnt_exits - last_exits), (unsigned long long) (k9x_cnt_mem - last_mem),
-            (unsigned long long) (k9x_cnt_walk - last_walk));
-    last_ins = k9x_cnt_ins; last_exits = k9x_cnt_exits; last_mem = k9x_cnt_mem; last_walk = k9x_cnt_walk;
+    extern uint64_t k9x_cnt_ins, k9x_cnt_ins_c, k9x_cnt_exits, k9x_cnt_mem, k9x_cnt_walk;
+    static uint64_t last_ins, last_ins_c, last_exits, last_mem, last_walk;
+    fprintf(stderr, "[count] ins=%llu ins_c=%llu exits=%llu mem=%llu walk=%llu\n", (unsigned long long) (k9x_cnt_ins - last_ins),
+            (unsigned long long) (k9x_cnt_ins_c - last_ins_c), (unsigned long long) (k9x_cnt_exits - last_exits),
+            (unsigned long long) (k9x_cnt_mem - last_mem), (unsigned long long) (k9x_cnt_walk - last_walk));
+    last_ins = k9x_cnt_ins; last_ins_c = k9x_cnt_ins_c; last_exits = k9x_cnt_exits; last_mem = k9x_cnt_mem; last_walk = k9x_cnt_walk;
     extern uint64_t k9x_miss2[12];
     static uint64_t last_miss2[12];
     fprintf(stderr, "[other] flags=%llu status=%llu npxc=%llu cr0=%llu xlat=%llu mem_exec=%llu hash=%llu dirty=%llu top=%llu two_page=%llu none=%llu\n",

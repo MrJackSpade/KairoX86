@@ -61,7 +61,8 @@ set(KAIRO_FRONTEND "${CMAKE_CURRENT_LIST_DIR}/kairo/frontend.c" "${CMAKE_CURRENT
     "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_voodoo.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_virge.c"
     "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_mach64.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_powervr.c"
     "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_seg.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_seg_run.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_mach64_2d.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_p9100.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_et4000w32.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_cl54xx.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_chips69000.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_tgui.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_xga.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_s3.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_ibm8514.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_mga.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_virge2d.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_banshee2d.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_wd90c3x.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_pgc.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_gxm.c"
-    "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_pages.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/midi_port.c")
+    "${CMAKE_CURRENT_LIST_DIR}/kairo/gpu_pages.c" "${CMAKE_CURRENT_LIST_DIR}/kairo/midi_port.c"
+    "${CMAKE_CURRENT_LIST_DIR}/kairo/prefault.c")
 set(QT OFF CACHE BOOL "" FORCE)
 set(OPENAL OFF CACHE BOOL "" FORCE)
 set(RTMIDI OFF CACHE BOOL "" FORCE)
@@ -116,6 +117,13 @@ endif()
 # measured frames (KairoX86#214). Never in a build that ships; needs -DKAIRO_PGO=OFF, as the
 # counters change the profiled code.
 option(K9X_DIAG "Build the core with its diagnostic counters" OFF)
+# The library's C declares its externs hidden (KairoX86#376): a global defined in the library is read
+# with one PC-relative load instead of through the GOT. Not in a K9X_DIAG build: its counters are
+# found by name from game_profile, and the header's pragma would hide their definitions too (#419).
+if(NOT K9X_DIAG)
+    include("${KAIROX86_ROOT}/shared/cmake/KairoHiddenExterns.cmake")
+    kairo_hide_c_externs()
+endif()
 if(K9X_DIAG)
     if(KAIRO_PGO)
         message(FATAL_ERROR "The counters change the profiled code: add -DKAIRO_PGO=OFF to a K9X_DIAG build")
@@ -182,6 +190,11 @@ target_compile_definitions(kairox86_core PRIVATE
 add_dependencies(kairox86_core 86Box)
 if(ANDROID)
     target_link_libraries(kairox86_core PUBLIC dl log)
+endif()
+# Its objects record a profile in a KAIROX86_PGO_GENERATE build: whatever links it (the app's library, defined
+# outside this folder's link options) links the profile runtime too.
+if(KAIROX86_PGO_GENERATE)
+    target_link_options(kairox86_core INTERFACE -fprofile-generate)
 endif()
 
 # The boot test (shared/tools/test-core.ps1 on the host; built for the device too, to run over adb).

@@ -52,6 +52,7 @@
 #include "kairo_x86.h"
 #include "kairo_host.h"
 #include "hardware.h"
+#include "prefault.h"
 #include <86box/kairo_gpu.h>
 
 /* ---- Globals the 86Box frontends define ---- */
@@ -97,10 +98,14 @@ static int                 configured_time_sync; /* the machine's own time_sync,
 static pthread_mutex_t blit_lock = PTHREAD_MUTEX_INITIALIZER;
 static char            title[512] = EMU_NAME;
 
-/* The last picture, copied from the video card's bitmap on 86Box's blit thread. */
+/* The last picture, copied from the video card's bitmap on 86Box's blit thread: into the host's buffer when it named one
+   large enough (KairoX86#406: picture_target), else into the machine's own. */
 static pthread_mutex_t picture_lock = PTHREAD_MUTEX_INITIALIZER;
 static uint32_t       *picture;
-static int             picture_alloc;
+static uint32_t       *own_picture;
+static int             own_alloc;
+static uint32_t       *picture_next;      /* the host's buffer for the next picture, or NULL */
+static size_t          picture_next_words;
 static int             picture_width;
 static int             picture_height;
 
@@ -472,6 +477,7 @@ plat_munmap(void *ptr, size_t size)
             break;
         }
     pthread_mutex_unlock(&mappings_lock);
+    kairo_prefault_forget(ptr); /* KairoX86#373: the helper never touches it again */
     plat_munmap_os(ptr, size);
 }
 
@@ -479,6 +485,7 @@ plat_munmap(void *ptr, size_t size)
 static void
 release_mappings(void)
 {
+    kairo_prefault_stop(); /* KairoX86#373: the helper ends before anything it populates goes */
     pthread_mutex_lock(&mappings_lock);
     for (int i = 0; i < mapping_count; i++)
         plat_munmap_os(mappings[i].at, mappings[i].size);
@@ -497,17 +504,25 @@ static void
 picture_copy(const bitmap_t *target, int x, int y, int w, int h, int across, int down)
 {
     pthread_mutex_lock(&picture_lock);
-    if ((w * h) > picture_alloc) {
-        uint32_t *grown = realloc(picture, (size_t) w * (size_t) h * sizeof(uint32_t));
-        if (grown == NULL) {
-            /* The last picture stays as it was; the machine ends with why. */
-            pthread_mutex_unlock(&picture_lock);
-            machine_over("The PC stopped: no memory for its picture");
-            return;
+    uint32_t *into;
+    if ((picture_next != NULL) && ((size_t) w * (size_t) h <= picture_next_words)) {
+        into         = picture_next;
+        picture_next = NULL;
+    } else {
+        if ((w * h) > own_alloc) {
+            uint32_t *grown = realloc(own_picture, (size_t) w * (size_t) h * sizeof(uint32_t));
+            if (grown == NULL) {
+                /* The last picture stays as it was; the machine ends with why. */
+                pthread_mutex_unlock(&picture_lock);
+                machine_over("The PC stopped: no memory for its picture");
+                return;
+            }
+            own_picture = grown;
+            own_alloc   = w * h;
         }
-        picture       = grown;
-        picture_alloc = w * h;
+        into = own_picture;
     }
+    picture = into;
 #ifdef KAIROX86_CHECK_NATIVE_SIZE
     /* A test build (KairoX86#37): every line's pixels come in runs of [across] alike, whatever the
        runs' phase, so keeping one of each loses nothing; a frame where they do not is reported. */
@@ -611,6 +626,16 @@ api_gpu_frames(void)
     frames_on = true;
     fprintf(stderr, "kairo-gpu: frames handed over on the GPU (hardware buffers)\n");
     return true;
+}
+
+/* KairoX86#406: the host's buffer for the next picture (kairo_x86.h picture_target) */
+static void
+api_picture_target(void *pixels, size_t bytes)
+{
+    pthread_mutex_lock(&picture_lock);
+    picture_next       = pixels;
+    picture_next_words = bytes / sizeof(uint32_t);
+    pthread_mutex_unlock(&picture_lock);
 }
 
 static void
@@ -1186,10 +1211,45 @@ joystick_process(uint8_t gp)
                 joystick_state[gp][i / buttons].button[i % buttons] = input_buttons[i];
 }
 
+/*
+ * KairoX86#404: the host's key events wait here until the guest's keyboard has room for all of an
+ * event's bytes. A keyboard's queue holds 16 bytes and 86Box's overwrote unread ones when it was
+ * full: several key events in one frame (a burst of Left taps, 8 bytes each with Num Lock's fake
+ * Shift) lost an E0, and Left reached the guest as keypad 4. Waiting keys go in as the guest reads,
+ * at each millisecond of the frame, whole and in order; with room, at once, as before. A keyboard that
+ * does not say how much room it has (keyboard_room NULL) takes every event at once, as before.
+ */
+#define KEY_EVENTS 64
+/* The most bytes one key event sends: Pause's make code (E1 1D 45 E1 9D C5), a gray key with Num
+   Lock's fake Shift (E0 2A E0 4B). */
+#define KEY_EVENT_BYTES 8
+static struct {
+    uint16_t scancode;
+    bool     down;
+} key_events[KEY_EVENTS];
+static unsigned key_event_first, key_event_count;
+
+/* Sends the waiting key events the keyboard has room for, oldest first. */
+static void
+feed_keys(void)
+{
+    while ((key_event_count > 0) && (!keyboard_room || (keyboard_room() >= KEY_EVENT_BYTES))) {
+        keyboard_input(key_events[key_event_first].down, key_events[key_event_first].scancode);
+        key_event_first = (key_event_first + 1) % KEY_EVENTS;
+        key_event_count--;
+    }
+}
+
 static void
 api_key(int scancode, bool down)
 {
-    keyboard_input(down, (uint16_t) scancode);
+    /* As a keyboard's own buffer overruns: a key event with no room at all is lost whole, never in part. */
+    if (key_event_count == KEY_EVENTS)
+        return;
+    key_events[(key_event_first + key_event_count) % KEY_EVENTS].scancode = (uint16_t) scancode;
+    key_events[(key_event_first + key_event_count) % KEY_EVENTS].down     = down;
+    key_event_count++;
+    feed_keys();
 }
 
 static void
@@ -1429,6 +1489,13 @@ api_start(const char *vm_folder, const char *rom_folder, const struct KairoX86Ho
 
     host        = *given;
     host_thread = pthread_self();
+    /* No picture yet, and no buffer of an earlier session's host to draw in (KairoX86#406) */
+    pthread_mutex_lock(&picture_lock);
+    picture        = NULL;
+    picture_next   = NULL;
+    picture_width  = 0;
+    picture_height = 0;
+    pthread_mutex_unlock(&picture_lock);
     if (setjmp(stopped)) {
         running = false;
         return false;
@@ -1504,6 +1571,7 @@ api_run_frame(void)
     const unsigned changes = floppy_changes;
     frame_ms               = 0;
     while ((monitors[0].mon_renderedframes == frames) && (frame_ms < KAIRO_X86_MAX_FRAME_MS)) {
+        feed_keys();
         pc_run();
         frame_ms++;
         /* The guest turned the PC off (ACPI, APM or a soft power switch: plat_power_off, which
@@ -1556,6 +1624,8 @@ api_reset(void)
     running = true;
     pc_reset_hard();
     halted_ms = 0;
+    /* Keys pressed before the reset are not the new start's */
+    key_event_count = 0;
     running   = false;
 }
 
@@ -1641,6 +1711,7 @@ static const struct KairoX86Api api = {
     .gpu_frames      = api_gpu_frames,
     .gpu_frame_slot  = api_gpu_frame_slot,
     .gpu_frame       = api_gpu_frame,
+    .picture_target  = api_picture_target,
 };
 
 KAIRO_X86_EXPORT const struct KairoX86Api *

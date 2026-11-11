@@ -3,51 +3,61 @@
   "compilerVersion": "19.0.1",
   "ndkProvenance": "28.2.13676358",
   "abi": "arm64-v8a",
-  "sourceRevision": "70266b8c3f93ae2dad7278c560f89daddb3da1fa",
-  "portableTextSha256": "1f4778d8b2495691d9959c88c86e9d4cefe08c0c30f10a7fd6fe37bc09ca1d43",
-  "functionRecords": 3641,
-  "pathOccurrencesRewritten": 2613,
+  "sourceRevision": "96d9253cba1299dd519395f7c7c1df515aa7eec1",
+  "portableTextSha256": "a03244796261476d3e78efb4beb63d442843faddca00490b75fefd50c3710788",
+  "functionRecords": 3700,
+  "pathOccurrencesRewritten": 2693,
   "normalization": "The checkout root in function names is @KAIRO_SOURCE@/ (shared/cmake/KairoPgo.cmake puts the actual root back before indexing). LF newlines, one final newline.",
-  "training": "tools/pgo-train.ps1 on the RG DS: xt,486,win98-486,win98-pentium through their exactness-standard frames",
+  "training": "tools/pgo-train.ps1 on the RG DS: xt,486,win98-486,win98-pentium through their exactness-standard frames, and DOOM's demo on doom486",
   "inputs": [
     {
-      "name": "486-23755-15855846763450956933_0",
-      "rawProfileSha256": "099a84a5a3fc4c4e85906ce5cf6102e7fb9872f07b08fee96326aa9c985e5ab1",
+      "name": "486-32765-15856158066994453637_0",
+      "rawProfileSha256": "e03d2fca0271ae6f017f1e7f71a9edfa390f8857b0df6b2c3607c59caafee7c2",
       "weight": 1
     },
     {
-      "name": "486-23755-8674028440380211389_0",
-      "rawProfileSha256": "d209fea594db278c377ad75ccebd8950004b554b66f46c6524dbe3291cd8d2ff",
+      "name": "486-32765-8677865600986570941_0",
+      "rawProfileSha256": "dad36c171ebe38ec96372f1be17298520ea82c77768fba44cf013d912359210b",
       "weight": 1
     },
     {
-      "name": "win98-486-23778-15855846763450956933_0",
-      "rawProfileSha256": "a6b7f6dde5cfc860ca73f9236d4610836c73aab16bb4ae39f56afe55690e951c",
+      "name": "win98-486-328-15856158066994453637_0",
+      "rawProfileSha256": "170d816765e09240989d69d6e2bdf1ff2c1f7e92cdb5aeffc8425d8fdc53ed1a",
       "weight": 1
     },
     {
-      "name": "win98-486-23778-8674028440380211389_0",
-      "rawProfileSha256": "a157d242cb25f11407424d21da38e82658495746dd602622f56562d39f5292ce",
+      "name": "win98-486-328-8677865600986570941_0",
+      "rawProfileSha256": "f5259460a2a6eeb2ede1a1b8b66d3b29c17b22cf92095b01c83eec1e23dff64b",
       "weight": 1
     },
     {
-      "name": "win98-pentium-23803-15855846763450956933_0",
-      "rawProfileSha256": "e8cf1a9a1fa0b402f2479ca47bb2e619219da19233f702825fedcc8f635fa7a7",
+      "name": "win98-pentium-363-15856158066994453637_0",
+      "rawProfileSha256": "adfd2520e016bfc8f4aafb25efc689d4f0ca1838458598a1110e38e32e1fec86",
       "weight": 1
     },
     {
-      "name": "win98-pentium-23803-8674028440380211389_0",
-      "rawProfileSha256": "647d52375c268a41c859283ed928c0fb2289853e57dac47ac1c7a01465d1389c",
+      "name": "win98-pentium-363-8677865600986570941_0",
+      "rawProfileSha256": "c6b4becef933b34d508fbec9f55d545dd25c9edb39e7e8661851c0b9542180c3",
       "weight": 1
     },
     {
-      "name": "xt-23740-15855846763450956933_0",
-      "rawProfileSha256": "e3c12c0e8eeb2888a7bafece61c4302bfda27baaf4edf7a3cd52903142a4e797",
+      "name": "xt-32751-15856158066994453637_0",
+      "rawProfileSha256": "bec503e1437344d46ea16a83deab0ca5ec02adbe820b8ad374b19d04ef3a7a56",
       "weight": 1
     },
     {
-      "name": "xt-23740-8674028440380211389_0",
-      "rawProfileSha256": "dcc513c1e0a067e743ec22e09f89b66d0c6895d43fdec5a27202f3b061428c99",
+      "name": "xt-32751-8677865600986570941_0",
+      "rawProfileSha256": "e6ab4d152c3809494ffba597bb2e0e97f89300a897a6a8a3feddbd5861430110",
+      "weight": 1
+    },
+    {
+      "name": "doom-431-15856158066994453637_0",
+      "rawProfileSha256": "135c75811cd3fee347b4d244135b93e07ef5e3514b045b9616df8501a22a86b2",
+      "weight": 1
+    },
+    {
+      "name": "doom-431-8677865600986570941_0",
+      "rawProfileSha256": "4a3e8332ff0e6ed54d692d13e0ebf2fb948ce8deccc9dd8225657c31a3c4c9d6",
       "weight": 1
     }
   ]

@@ -51,6 +51,8 @@ public:
     bool gpu_frames();
     // The slot (0 to KAIRO_X86_FRAME_SLOTS - 1) the next frame is copied to, before run_frame.
     void gpu_frame_slot(int slot);
+    // KairoX86#406 (kairo_x86.h picture_target): where the next picture frame() gives is copied, before run_frame.
+    void picture_target(void *pixels, size_t bytes);
     // After run_frame: the last frame's slot (-1 before any), and its buffer (an AHardwareBuffer the slot holds), the
     // picture's size, the bitmap pixels each picture pixel stands for, and how many frames have been copied.
     struct GpuFrame {

@@ -8,6 +8,127 @@ The record below began in the Kairo9X proof of concept, whose speed fixes are th
 
 Status: `open` · `fixed` · `rejected` (not exact, or no gain) · `measured` · `noted`
 
+## Host: the RG DS (KairoX86#345, 2026-11-09)
+
+- **SoC and cores:** Rockchip RK3568, four Cortex-A55 r2p0 (MIDR implementer 0x41, part 0xd05, variant 2, revision 0),
+  in-order and dual-issue; 4 KB pages; 3 GB RAM. The kernel (6.1.141) exposes no cache sysfs and **has no huge pages**:
+  no `transparent_hugepage`, no hugetlbfs (#373), so `MADV_HUGEPAGE` does nothing.
+- **Memory latency** (a pointer chase over random 64-byte lines, pinned to one core): ≤32 KB 1.1-1.3 ns (L1D);
+  64-256 KB 14-18 ns; 512 KB 49.5 ns; ≥1 MB 147-207 ns (DRAM). The step at 64 KB is also where the 16-entry L1 dTLB's
+  reach ends (64 KB); the A55's 1,024-entry L2 TLB (TRM) reaches 4 MB, and the L1 instruction micro-TLB 60 KB.
+  Instruction cache 32 KB, 4-way, 64-byte lines (the A55 TRM; set aliasing at a 1 KB stride costs 3.3-3.5%, #366).
+- **Copy bandwidth:** `memcpy` of 64 MB 2.60 GB/s (5.2 GB/s of read + write traffic), one core.
+- **Clock:** the `performance` governor holds 1.99 GHz; through this round's runs (minutes of headless load) the clock
+  never moved and the SoC went 37 → 51 °C against trip points of 75, 85 and 115 °C. The GPU (800 MHz), video decoder
+  and display controller devfreqs are fixed at their maximum. (A ten-minute in-app run was not taken.)
+- **PMU:** `simpleperf` counts `instructions`, `raw-cpu-cycles`, `raw-l1i-cache-refill`, `raw-l1i-tlb-refill`,
+  `raw-itlb-walk`, `raw-l1d-cache-refill`, `raw-l1d-tlb-refill`, `raw-dtlb-walk`, `raw-l2d-cache-refill`,
+  `raw-br-pred`, `raw-br-mis-pred`, `raw-stall-frontend` and `raw-stall-backend`, five or six at once, per thread
+  (`-t`). There is no ETM, SPE or branch-record event (so no BOLT profile, #377).
+
+## Measuring a change: the A/B protocol (KairoX86#349)
+
+`tools/ab.ps1 -Device <serial> -A <build> -B <build> -Machine <names> -Rounds n` runs two prebuilt cores (Build-Core
+output folders) interleaved on the device, A B A B, each run through core/test/exact/run.sh, and prints every run, each
+core's median and spread, and the difference of the medians; it fails if any round's hashes differ. Exactness is
+tools/exact.ps1's job; this is the speed comparison after it.
+
+The noise floor on the RG DS (2026-11-09; one core against itself, five interleaved rounds; the governor at
+`performance`, the clock at 1.99 GHz throughout, 37 → 51 °C, no throttling):
+
+| Workload | A median (range) | A′ median (range) | A′ − A |
+|---|---|---|---|
+| win98-486, 4286 frames | 49.05 (48.68–49.28) | 48.97 (48.87–49.25) | −0.2% |
+| DOOM's demo (doom486, 2500 frames after 3500) | 70.16 (69.83–70.36) | 69.97 (69.62–70.09) | −0.3% |
+| 486 (DOS), 1500 frames, two rounds | 73.14 (72.71–73.58) | 72.39 (71.35–73.44) | −1.0% |
+
+A single pair of runs spreads about ±0.6% (±1% on the short DOS 486 machine); five-round medians agree within 0.3% on
+the long runs. A difference below ~1% of five-round medians, or below ~1.5% on the DOS 486, is noise.
+
+## Baseline on today's core (KairoX86#348, RG DS, 2026-11-09)
+
+The release core with its profile at c49da61 (hidden extern declarations, #376) unless noted; the diagnostic counters
+from a K9X_DIAG core without the profile. Per guest second unless noted.
+
+**Speed** (game_profile, frames a second against the guest's): win98-486 4286-frame boot 49.0 of 58.82; win98-pentium
+52.6 of 71.43; win98-voodoo3 31.6 of 76.92; DOOM's demo 70.2 of 71.43; the standard's DOS machines xt 103.4, v20 72.8,
+at 93.0, 386sx 81.7, 486 73.9, pentium 33.5 (the latter a BIOS prompt with the cache off, #350).
+
+**Where the emulation thread's time goes** (simpleperf attached at the win98-486 idle desktop, 20 s):
+
+| Region | Share |
+|---|---|
+| Translated code | 55% |
+| — of it: the link routine and exits / the memory stubs / block code | 39.7% / 19.6% / 41.8% |
+| The core library (C) | 30%: `readmemll` 10.0%, `writememll` 6.9%, `jit_flags_rebuild` 3.4%, `mmutranslatereal` 3.4%, `timer_enable` 3.1%, `loadseg` 3.0%, `addreadlookup` 3.0%, `exec386_dynarec` 2.7%, `flushmmucache_nopc` 2.5%, `pmodeint` 2.3%, `svga_poll` 2.1%, `pmodeiret` 1.8% |
+| game_profile's per-frame hash (harness only) | 14% |
+
+In DOOM's demo the VRAM write chain (`writemembl` → `s3_write` → `svga_write_linear`, with the word forms) is ~25% of
+all samples across threads (#369).
+
+**The PMU** (the emulation thread, 10 s): desktop IPC 0.49, front-end stalls 30% of cycles, back-end 37%, 9.6 M branch
+mispredictions a second, 17.8 L1I refills per 1k instructions (58% of translated code's on the stubs and the link
+routine), 5.8 M L1 iTLB refills, 19.5 M L1 dTLB refills, 1.24 M dTLB walks; DOOM IPC 0.73, 3.8 L1I refills per 1k (#346).
+
+**The diagnostic counters** at the desktop (frames 5000-6500, 25.5 guest seconds; corrected by KairoX86#419, which counts
+guest instructions as they run, in translated code and in the C loops, and over the measured frames only): **18.3 M guest
+instructions a second** (3.6 guest cycles each on the 66.67 MHz DX2), 3.5 M block exits (one per 5.2 guest instructions),
+14.3 M stub memory accesses, `interp` 0; DOOM's demo 24.2 M instructions (2.75 cycles each), 2.9 M exits (one per 8.3),
+12.8 M stub accesses; the win98-pentium boot 16.6 M instructions, 46% of them run by the C loops (the cache-off BIOS
+prompt, #350). The figures first written here (88 M instructions, 16.0 M exits, 66 M stub accesses a second) divided a
+count over the whole run by the measured window's seconds, and counted each exit as the whole block. About 57 host
+instructions per guest instruction at the desktop, C included (0.87 G host instructions a wall second, #351, for
+15.2 M guest instructions). Link misses 11.6 K (target 5.8 K, slice 2.5 K, tsc 2.3 K, irq 0.6 K, status 0.2 K),
+`patch-retarget` 3.9 K (#359).
+
+**Block exits by count** (KairoX86#418's census, a record and counter per exit in a K9X_DIAG core): exits a guest
+second desktop 3.48 M (19.2 guest cycles each), boot 2.72 M, DOOM 2.93 M (22.8 cycles), win98-voodoo3 5.45 M. Near direct,
+plain (nothing that changes what a link validates) and same-page: desktop 42.7%, boot 42.1%, DOOM 86.2%, win98-voodoo3
+38.4%. Windows 98 is flat by count (the top 100 edges hold under half, all VMM); DOOM is concentrated (its top 10 edges
+45.5%), and its column drawer is one loop compiled as two blocks (30.5% of its exits, #421). Exits leaving blocks with no
+C call: 69-80%. By kind at the desktop: Jcc 39.9%, RET 20.0%, indirect CALL/JMP 13.4%, CALL rel 10.6%, JMP rel 8.3%.
+
+**Timer callbacks** (per guest millisecond, desktop / DOOM): the fast PIT's refresh counter 67.9 / 66.9, `svga_poll`
+64.6 / 63.3, `music_poll` 50.8 / 50.0, `sound_poll` 49.0 / 48.3, the KBC polls 20.4 / 20.2, `pollsb` - / 11.1: ~260 a ms
+(#370).
+
+**Compiles** (a counting core): the win98-486 boot's first 20 s 21.7 K compiles (6.0% of the wall time), the next 74 s
+56.0 K (4.6%) with 72 K evictions once the 32 K block slots fill; at the desktop 82 compiles in 27 s; DOOM's demo 793
+in 37 s (#372). SMC cooldowns: 344 in the whole boot.
+
+**Interrupts and segment loads** at the desktop: V86 → ring 0 interrupts and the IRETs back 14.5 K each, far RET
+14.6 K, V86-mode segment loads 190 K, protected-mode 103 K (#371).
+
+## Pentium-class workloads (KairoX86#417, RG DS, 2026-11-10)
+
+Today's release core (with its profile), simpleperf on the emulation thread for 20 s once each workload runs; the
+counters from a K9X_DIAG core over the same frames.
+
+**Daytona USA's demo** (the owner's eXoWin9x machine: 686BX, Pentium Pro 150, Voodoo3 3000, AWE32; frames 6300-10300,
+its frame and sound hashes repeat): **21.4 of 76.9 frames/s (28%)**.
+
+| Region | Share of the emulation thread |
+|---|---|
+| Translated code | 62.6%: link routine and exits ~27.0%, block code ~23.6%, memory stubs ~12.0% |
+| The core library (C) | 27.3%: `jit_flags_rebuild_zpna` 3.74%, `banshee_render_16bpp_tiled` 3.74%, `writememll` 3.23%, `banshee_write_linear_l` 2.77%, `writememwl` 2.25%, `banshee_write_linear_w` 1.33%, `jit_CF_SET` 1.31% |
+| game_profile's per-frame hash (harness only) | 8.6% |
+
+Counters (per guest second): 96 M guest instructions (1.56 cycles each at 150 MHz), **12.3 M block exits** (one per
+7.8 instructions; 86.0% near direct, plain and same-page), 34.8 M stub accesses; link misses 53 K, almost all target.
+
+**core/test/workload/mmxint** (first-party: an MMX pass, a flags-reading shift/rotate pass and a 640x480 16 bpp LFB
+fill, forever; frames 1000-3000, repeating):
+
+| Machine | Speed | Largest costs |
+|---|---|---|
+| TX97, Pentium MMX 233, S3 Trio64V2 | 51.1 of 58.8 frames/s (87%) | `svga_render_16bpp_highres` 27.9% + `svga_conv_16to32` 3.9%, the LFB chain 15.1%, flag rebuilds 5.6% |
+| 686BX, Pentium II 300, Voodoo3 3000 | 16.0 of 62.5 frames/s (26%) | the LFB chain 28.9% (`banshee_write_linear_l` 16.7%, `writememll` 12.2%), `svga_render_16bpp_highres` 19.3%, flag rebuilds 8.7% |
+
+Tickets: #422 (flag rebuilds), #423 (the LFB write chain), #424 (Banshee tiled scanlines), #425 (16 bpp scanlines),
+#414 (direct chaining: up to ~23% of Daytona's thread). A profile retrained with these in its training set gained the
+workloads +4.3% (TX97) and +7.7% (686BX) but cost the 486's boot 1.0% (1.7% with the standard machines weighted 3:1),
+so today's profile stays.
+
 ## 486DX2-66 target (ASUS PVI-486AP4, 32MB, S3 Trio64V2, SB16) — RG DS
 The standard's `win98-486` machine (its reference disk was then in that harness's own folder). 100% real time = wall ≤ emulated.
 
@@ -208,4 +329,23 @@ Measured with `game_profile` on the RG DS; each exact against the core without i
 | KairoX86#214 | Video | 320-wide packed 8bpp (mode 13h, and DOOM's unchained form) took the generic renderer's slow loop on the emulation thread, 10% of DOOM's time: the #42 fast path and drawing thread took only lines of a dot per pixel, and now take lowres lines too, each pixel twice across. The drawing thread was then woken for every line (a futex wake per line, ~4% of the emulation thread), now once 32 lines wait; a job holds its line and palette (KairoX86#38), and every line is still drawn before the frame is shown (`kairox86-lowres-8bpp`). `tools/exact.ps1`: all eight exact; DOOM's demo, 5,501 frame hashes, exact. | DOOM demo on the doom486 machine (PGO off): 16.66 → 15.15 ms a frame, 60.0 → 66.0 frames/s (guest 71.43) | fixed |
 | KairoX86#214 | Sound | Nuked OPL3 (86Box's default FM driver; #39 threaded only ymfm) generated on the emulation thread, catching up at every register access. Its synthesis is now on a thread of its own, exact and without delay: the emulation thread queues each write with its sample position, and sound.c's per-sample poll tells the thread the present every 128 samples (no new timer). The thread generates up to each position before applying what is there. A read takes no catch-up (status and timers are the driver's). An address write's bank reads newm from a shadow once every 0x105 write is applied, and from the chip, after waiting for the thread to reach the present, while one is still in its write buffer. `update()` waits for the buffer's end (`kairox86-opl3-thread`). `tools/exact.ps1`: all eight exact; DOOM's demo (OPL3 music), 5,501 frame and sound hashes, exact; `--runs 2` match. | DOOM demo (PGO off): 15.21 → 14.55 ms a frame, 65.8 → 68.7 frames/s (guest 71.43) | fixed |
 | KairoX86#214 | Video | The planar byte write a card that decodes its own addresses makes (the S3's in unchained 256-colour modes) in its plainest form (write mode 0, every bit taken, no logic operation, no set/reset, plain planar addressing) skips the general path's clz/ctz plane bounds and per-plane flag tests, with the same steps in the same order (`kairox86-plain-planar-write`). `tools/exact.ps1`: all eight exact; DOOM's demo, 5,501 hashes, exact. | DOOM demo (PGO off): 14.53 → 14.26 ms a frame, 68.8 → 70.1 frames/s (guest 71.43) | fixed |
+| KairoX86#405 | Video | The MediaGX's display (`gxm_render_line`, `gxm_poll`'s 16% of a FreeDOS boot's samples) read every pixel through `gxm_gmem` and chose its mode per pixel. A line in one span of the graphics memory (no wrap, every access inside it) is now read straight from that span in a loop for its mode (planar, 16 bpp, 8 bpp; chain 4 keeps the loop): the same pixels. ECS P5GX-M, MediaGX 233, FreeDOS boot, 3000 frames, three interleaved rounds | 48.38 → 53.30 frames/s (of 71.43), +10.2%; picture hashes identical on core/test/gpu's gxm.c (1277 frames: 5-6-5, 5-5-5, cursor, overlay) and the FreeDOS boot (3001 frames: 640×350, 640×480, 720×400) | fixed |
+| KairoX86#406 | App | The frame host copied every picture a second time on the emulation worker (publish, 0.3-0.55 ms a frame). The core now draws each picture into the spare of three buffers the host rotates (kairo_x86.h `picture_target`), and publish swaps it in | dos486 FreeDOS prompt: publish 0.55 → 0.025 ms, 51.77-52.26 → 54.01-54.23 frames/s (+4%); exact on all nine machines | fixed |
+| KairoX86#381 | CPU | REP STOSD in the interpreter (`opREP_STOSL`, 14-20% of emulation in the P6 Windows 98 boot: Windows clearing its 1 GB) stored element by element through the write checks. A run of dwords on a page the write lookup maps straight (writememl's plain store), the same segment checks passed, is stored in one loop with the same registers, cycles, writes and end point | win98-voodoo3 (Pentium Pro, 1 GB): 29.01 → 30.39 frames/s (+4.8%), two interleaved rounds; win98-pentium (64 MB): within noise; exact on all nine machines | fixed |
+| KairoX86#376 | Build | `-fvisibility=hidden` hides what a file defines, not what it declares: every global of 86Box's that another file of the library defines was read through the GOT (an extra dependent load: 176 in the dispatch loop, 21 in `readmemll`, 42 in `writememll`). The library's C now force-includes shared/cmake/kairo_hidden_externs.h (libc first, then `#pragma GCC visibility push(hidden)`), so each such global is one PC-relative load; the GOT shrank from 17 KB to 1.4 KB | RG DS, the exactness standard's release builds (PGO on): xt +4.1%, v20 +2.9%, at +9.6%, 386sx +9.6%, 486 +8.0%, pentium +12.4%, win98-486 +4.7%, win98-pentium +11.0% (47.38 → 52.58), win98-voodoo3 +4.8%; DOOM's demo +2.3% (68.8 → 70.3, two interleaved rounds); exact on all nine machines | fixed |
+| KairoX86#410 | Timers | The fast PIT's refresh counter (counter 1, a rate generator with a count of ~18 driving the refresh bit: ~67,000 timer callbacks a guest second on every 486 and later, the busiest timer of all) ran a callback per expiry that only added to its count and flipped port 61h's bit 4. Its timer now skips 4,095 expiries at a time, applied exactly where they can be seen: port 61h, every PIT access, the refresh-enable writes and a TSC write (`kairox86-lazy-refresh`) | RG DS, tools/ab.ps1, three interleaved rounds: 486 73.16 → 74.25 (+1.5%), win98-486 49.08 → 49.42 (+0.7%), win98-pentium 52.21 → 52.37 (+0.3%), ranges apart on all three; DOOM's demo five rounds 69.91 → 70.50 (+0.8%, ranges apart); exact on all nine machines (exact.ps1 -Device and -Local) | fixed |
+| KairoX86#408 | Memory | A 386's page table `pages[]` covers 4 GB: 1,048,576 entries of ~104 bytes, all written at every reset, ~105 MB resident and ~26,000 page faults for entries no guest reaches. Only the first 1 MB, the RAM and the top 16 MB are written at reset; any other entry when something first reaches it, as the last whole-table loop left it (`kairox86-pages-lazy-fill`) | RG DS, peak resident set three rounds: 486 299.1 → 193.9 MB (−35%), win98-pentium 330.8 → 226.5 MB (−32%); a one-frame start seven interleaved rounds 1383 → 1179 ms (−14.7%, ranges 1373–1400 and 1171–1191 apart); frame rate unchanged (486 73.94 → 74.02, +0.1%); exact on all nine machines (exact.ps1 -Device and -Local) | fixed |
+| KairoX86#407 | Presentation | Presenting costs emulation ~2 ms a frame, but not through the presenter's own CPU: the upload's copy is ~0.35 ms of it; the rest is the swap, after which SurfaceFlinger, its timer and binder threads and the composer (real-time threads) preempt the emulation thread on the CPU they last ran on (~500 ms of run-queue wait in 10 s). The app's other threads are now kept off the fastest CPU, the emulation threads left free (shared `emulation_core.h`) | RG DS, DOOM's demo in the app (UI test build), 24 interleaved pairs in one session: emulation 16.44 → 15.82 ms a frame (−3.7%), faster in 19 of 24 pairs | fixed |
+| KairoX86#378 | Build | The device profile retrained from today's core, with DOOM's demo on the owner's doom486 added to the standard machines (`tools/pgo-train.ps1 -Game`); the recording build linked again (environ's visibility, the core library's profile runtime) | RG DS, tools/ab.ps1 and abb.sh interleaved rounds against the profile it replaced: DOOM's demo 69.98 → 73.37 (+4.8%), win98-pentium +2.7%, pentium +2.5%, xt +2.1%, 486 +1.2%, v20 0.0%, ranges apart; DOOM in the training set against the same retrain without it: DOOM +1.4%, pentium +3.3%, win98-pentium +4.5%, 486 −1.4%, v20 −0.7% (core/pgo/README.md) | fixed |
+| KairoX86#373 | Memory | The boot's first writes to guest RAM faulted on the emulation thread (2,000–14,000 a second early on). A helper thread populates the RAM as it is mapped (`MADV_POPULATE_WRITE`, `kairox86-prefault`); the link slots and code pool are left alone, as populating them cost speed | RG DS, tools/ab.ps1 with the device profile: 486 boot +1.2%, +0.2%, +1.1% over three five-round sets (faster in 9 of 10 rounds shown), pentium +0.6%, xt +0.3%, v20 −0.2%, win98-486 flat; without the profile 486 +1.7%, win98-486 +0.7%; exact on all nine machines (exact.ps1 -Device and -Local) | fixed |
+| KairoX86#419 | Measurement | The diagnostic core's guest instruction counter added the whole block at every exit (an early exit's untaken instructions counted, an in-block loop's repeats missed) and the C loops' instructions not at all; it now counts each instruction as it starts, in translated code (`codegen_ir_compile`) and the C loops (`k9x_cnt_ins_c`) (`kairox86-diag-instructions`); a K9X_DIAG build no longer hides its counters (#376's header) | Linked and unlinked runs count alike (486 boot: 172,577,834 + 24,985,497); the release core's code and data sections identical; the baseline's counters corrected above | fixed |
+| KairoX86#418 | Measurement | The block exit census: a record and run counter per exit compiled in K9X_DIAG cores (`kairox86-diag-exit-census`, `k9x_exit_census`, game_profile's census-start/end.tsv) | Desktop 3.48 M exits a guest second, 42.7% near direct + plain + same-page; DOOM 2.93 M, 86.2%, its column loop split in two blocks (#421); the release core's code and data identical | measured |
+| KairoX86#425 | Video | 16 bpp SVGA scanlines converted in C a pixel at a time (an indirect call and a 256 KB table read each), 20-28% of a 16 bpp workload's emulation thread. A line is now converted from three channel tables, eight pixels a step with NEON, for the default conversion and the Voodoo Banshee/3's (`kairox86-16bpp-lines`) | RG DS, core/test/workload/mmxint (640x480 16 bpp): TX97 + S3 Trio64V2 51.69 → 83.22 frames/s (**+61%**), 686BX + Voodoo3 16.00 → 20.06 (**+25%**), every frame's hash identical; exact on all nine machines (exact.ps1 -Device and -Local) | fixed |
+| KairoX86#424 | Video | The Voodoo3's tiled 16 bpp desktop converted a pixel at a time (3.7% of Daytona's emulation thread); each tile's 64 pixels now go through #425's channel-table conversion, NEON on arm64 (`kairox86-16bpp-tiles`) | RG DS, Daytona USA's demo (frames 6300-8300), two interleaved rounds: 19.68 / 19.78 → 20.00 / 19.97 frames/s (**+1.3%**, ranges apart), every frame's hash alike; exact on all nine machines | fixed |
+| KairoX86#423 | Memory | A write to device memory with paging on (Windows 9x games writing the Voodoo3's linear framebuffer) walked the page tables in C every time, RAM's writelookup2 not covering it; the write paths now keep the walk until the write lookups are flushed (`kairox86-mmio-write-tlb`) | RG DS, Daytona USA's demo (frames 6300-8300): 20.00 / 19.97 / 20.10 → 20.33 / 20.29 frames/s (**+1.5%**, ranges apart), every frame's hash alike; exact on all nine machines | fixed |
+| KairoX86#422 | Recompiler | ADC/SBB/RCL/RCR read the carry through an ordered C call (`jit_CF_SET`, every cached register written back) even when the flags op was known at compile time; for ADD, SUB, logic, ROL, ROR, INC and DEC it is now a few uops (`kairox86-cf-known`) | RG DS: Daytona USA's demo 20.34 / 20.46 → 20.72 / 20.74 frames/s (**+1.6%**, ranges apart, frames alike), mmxint on the 686BX 20.31 / 20.05 → 20.60 / 20.54 (+1.9%), on the TX97 within noise (85.13 → 84.83 over four rounds, overlapping); exact on all nine machines (exact.ps1 -Device, -Unlinked, -Local) | fixed |
+| KairoX86#416 | Recompiler | The memory stubs were laid out back to back in emission order, so several hot fast paths straddled two 64-byte L1I lines; each now starts on a line of its absolute address (`kairox86-stub-lines`). Aligning the link routine's hit path as well was tried and measured as noise (DOOM +0.1/+0.2%, win98-486 −0.5/+0.3%), so it was left out | RG DS: win98-486 49.53 / 49.16 → 50.12 / 49.94 (**+1.4%**), DOOM's demo 73.00 / 73.33 → 74.01 / 74.18 (**+1.3%**), the DOS 486 +0.1% and win98-pentium +0.1% (noise); exact on all nine machines (exact.ps1 -Device, -Unlinked) | fixed |
+| KairoX86#414 | Link routine | Every link hit recomputed the status (NOTFLATES from ES, npxc) and compared it with the slot's; for a way whose exit's block cannot change the status and whose target accepts every status that block accepts, the compare is skipped (`kairox86-link-status-known`) | RG DS: DOOM's demo 73.00 → 74.20 frames/s (**+1.6%**), Daytona USA's demo 20.49 → 20.88 (**+1.9%**), win98-486 48.79 → 49.49 (**+1.4%**); exact on all nine machines (exact.ps1 -Device, -Unlinked, -Local) | fixed |
+| KairoX86#356 | Link routine | The CR0 compare is skipped with #414's status compare for a way whose block cannot write CR0; the phys check takes paging from the current CR0 (`kairox86-link-cr0-known`) | RG DS: DOOM's demo 74.13 → 74.84 (**+1.0%**, five-round medians), win98-486 49.32 → 49.58 (**+0.5%**), Daytona USA's demo 20.98 → 21.06 (+0.4%); exact on all nine machines (exact.ps1 -Device, -Unlinked) | fixed |
+| KairoX86#353 | Link routine | Every hit loaded the target page's dirty mask (a line of `pages[]` that misses) to test it; a store that sets a clear dirty bit on code now empties the page's links instead (`kairox86-unlink-on-write`) | RG DS: DOOM's demo 75.11 → 76.45 frames/s (**+1.8%**, three-round medians, self-modifying, end states alike), win98-486 49.81 → 50.62 (**+1.6%**), Daytona USA's demo 20.86 → 21.27 (**+2.0%**); exact on all nine machines (exact.ps1 -Device, -Unlinked, -Local) | fixed |
 | KairoX86#129 | Idle | A Pentium MMX 233 at its BIOS's F1 prompt runs 23-24 frames/s against 66.67, polling the keyboard from ROM in the interpreter: a wait-loop skip would apply. | — | open |

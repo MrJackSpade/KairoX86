@@ -445,6 +445,7 @@ ali6117_reg_write(uint16_t addr, uint8_t val, void *priv)
                     return; /* read-only registers */
 
                 case 0x10:
+                    pit_refresh_sync(); /* KairoX86#410 */
                     refresh_at_enable          = !(val & 0x02) || !!(dev->regs[0x20] & 0x80);
                     dev->regs[dev->reg_offset] = val;
 
@@ -504,6 +505,7 @@ ali6117_reg_write(uint16_t addr, uint8_t val, void *priv)
 
                 case 0x20:
                     val &= 0xbf;
+                    pit_refresh_sync(); /* KairoX86#410 */
                     refresh_at_enable = !(dev->regs[0x10] & 0x02) || !!(val & 0x80);
                     dev->regs[dev->reg_offset] = val;
                     ali6117_bank_recalc(dev);
@@ -653,6 +655,7 @@ ali6117_reset(void *priv)
 
     cpu_set_isa_speed(7159091);
 
+    pit_refresh_sync(); /* KairoX86#410 */
     refresh_at_enable = 1;
 
     ali6117_bank_recalc(dev);

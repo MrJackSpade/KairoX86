@@ -76,6 +76,7 @@ et6000_write(uint16_t addr, uint8_t val, void *priv)
                 case 0: /* System Configuration Register */
                     dev->regs[INDEX] = val & 0xdf;
                     et6000_shadow_control(0xa0000, 0x20000, val & 1, val & 1);
+                    pit_refresh_sync(); /* KairoX86#410 */
                     refresh_at_enable = !(val & 0x10);
                     break;
 

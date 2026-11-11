@@ -173,6 +173,10 @@ struct KairoX86Api {
 	bool (*gpu_frames)(void);
 	void (*gpu_frame_slot)(int slot);
 	void *(*gpu_frame)(int *slot, int *width, int *height, int *across, int *down, uint64_t *number);
+	/* KairoX86#406: where the next picture screen() gives is copied: [bytes] of the host's, which it neither reads
+	 * nor writes until a later picture replaces that one (a picture larger than it goes to the machine's own buffer
+	 * instead). Between frames; the latest picture stays where it is until the next one is copied. */
+	void (*picture_target)(void *pixels, size_t bytes);
 };
 #define KAIRO_X86_FRAME_SLOTS 4
 

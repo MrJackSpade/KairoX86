@@ -383,6 +383,14 @@ link_page_blocks_changed(page_t *page)
         codegen_link_block_changed(&codeblock[block_nr]);
 }
 
+/* KairoX86#353: a store set a dirty bit that was clear, on code of [page]: no link may enter its blocks before the C
+   loop has made its dirty check for them (the link routine does not test the first page's dirty mask) */
+void
+codegen_link_page_written(page_t *page)
+{
+    link_page_blocks_changed(page);
+}
+
 void
 codegen_link_patch(codegen_link_slot_t *from, codeblock_t *block, uint32_t phys)
 {
@@ -461,6 +469,12 @@ codegen_link_patch(codegen_link_slot_t *from, codeblock_t *block, uint32_t phys)
     slot->dirty_mask = block->dirty_mask;
     link_in_remove(slot);
     link_in_insert(block, slot);
+    { /* KairoX86#414: the exit's block (the one owning these slots) keeps its status, and the target accepts every
+         status that block accepts: the same FLAGS bits, and MASK bits that include the block's */
+        const codeblock_t *src = &codeblock[(from - &codegen_link_slots[0][0][0]) / (CODEGEN_LINK_SLOTS * CODEGEN_LINK_WAYS)];
+        slot->status_known = slot->src_status_kept && !((src->status ^ block->status) & CPU_STATUS_FLAGS) &&
+                             !(src->status & CPU_STATUS_MASK & ~block->status);
+    }
     slot->entry = &block->data[BLOCK_START + CODEGEN_LINK_ENTRY_OFFSET];
 }
 #else
@@ -1035,6 +1049,7 @@ codegen_block_init(uint32_t phys_addr)
     codeblock_t *block;
     page_t      *page = &pages[phys_addr >> 12];
 
+    mem_pages_fill_range(phys_addr >> 12, (phys_addr >> 12) + 1); /* KairoX86#408 */
     if (!page->block)
         mem_flush_write_page(phys_addr, cs + cpu_state.pc);
     block = block_free_list_get();
@@ -1215,6 +1230,7 @@ codegen_block_generate_end_mask_recompile(void)
 
         block->phys_2 = get_phys_noabrt(pc_2);
         if (block->phys_2 != -1) {
+            mem_pages_fill_range(block->phys_2 >> 12, (block->phys_2 >> 12) + 1); /* KairoX86#408 */
             page_t *page_2 = &pages[block->phys_2 >> 12];
 
             if (block->flags & CODEBLOCK_BYTE_MASK) {
@@ -1290,6 +1306,7 @@ codegen_block_generate_end_mask_mark(void)
     if ((block->pc ^ codegen_endpc) & ~0xfff) {
         block->phys_2 = get_phys_noabrt(codegen_endpc);
         if (block->phys_2 != -1) {
+            mem_pages_fill_range(block->phys_2 >> 12, (block->phys_2 >> 12) + 1); /* KairoX86#408 */
             page_t *page_2 = &pages[block->phys_2 >> 12];
 
             start_pc = 0;

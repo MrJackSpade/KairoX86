@@ -24,8 +24,9 @@ import com.mrjackspade.kairo.frontend.R as FrontendR
  * 6. The name (the shared engine's page).
  *
  * Create writes the machine folder: its `86box.cfg` (the preset's, or a new one, with every choice
- * made), the preset's CMOS while its machine and disk are the preset's own (the CMOS holds the
- * disk's geometry), the blank disk, and the drives' images, copied in (unpacked from an archive).
+ * made), the preset's CMOS while its machine and hard disk controller are the preset's own, with the
+ * hard disk the player chose in it (KairoX86#341: [X86Cmos]), the blank disk, and the drives'
+ * images, copied in (unpacked from an archive).
  */
 object X86NewGame {
     private const val CUSTOM = "custom"
@@ -66,7 +67,7 @@ object X86NewGame {
             configs.getOrPut(kind) { IniText(context.assets.open("presets/${preset.id}/86box.cfg").use { it.readBytes().toString(Charsets.UTF_8) }) }
         }
         val floppies = X86BlankFloppy.all.map { floppy ->
-            BlankDisk.Image(floppy.id, UiText.res(FrontendR.string.kairo_blank_floppy, floppy.label), "img", floppy::write)
+            BlankDisk.Image(floppy.id, UiText.res(FrontendR.string.kairo_blank_floppy, floppy.label), "img", write = floppy::write)
         }
         fun pc(values: Map<String, String>) = values[NewGameWorkflow.KIND].let { it == CUSTOM || it in presets }
 
@@ -223,30 +224,35 @@ object X86NewGame {
         config[X86Library.HARD_DISKS, "hdd_01_fn"] = geometry?.let { X86Presets.HARD_DISK }
         config[X86Library.HARD_DISKS, "hdd_01_parameters"] = geometry?.let { "${it.sectors}, ${it.heads}, ${it.cylinders}, 0, $bus" }
         config[X86Library.HARD_DISKS, "hdd_01_ide_channel"] = geometry?.takeIf { bus == "ide" }?.let { "0:0" }
-        val files = mutableListOf<Pair<String, (OutputStream) -> Unit>>("86box.cfg" to { output -> output.write(config.toString().toByteArray()) })
-        // The preset's CMOS holds its machine and disk: kept only while both are the preset's
+        val files = mutableListOf(BlankDisk.File("86box.cfg") { output -> output.write(config.toString().toByteArray()) })
+        // The preset's CMOS holds its board's settings (its boot order among them) and its disk: kept
+        // while the board and its hard disk controller are the preset's, the chosen disk written in
+        // (KairoX86#341). Another board, or a disk on another controller, starts on its BIOS's defaults.
         if (preset != null && values[X86Settings.machine.option.id] == preset.machine &&
-            geometry?.id == preset.hardDisk?.let { Geometry(it.cylinders, it.heads, it.sectors).id }) {
-            for (path in preset.files.filter { it != "86box.cfg" }) files += path to { output ->
-                context.assets.open("presets/${preset.id}/$path").use { it.copyTo(output) }
+            values[X86Settings.hdc.option.id] == (X86Settings.hdc.read(presetConfig ?: config) ?: X86Settings.hdc.option.default(values))) {
+            for (path in preset.files.filter { it != "86box.cfg" }) files += BlankDisk.File(path) { output ->
+                val stored = context.assets.open("presets/${preset.id}/$path").use { it.readBytes() }
+                output.write(if (path != preset.cmosFile) stored
+                    else checkNotNull(preset.cmos).withDriveC(stored, geometry?.let { X86Cmos.Disk(it.cylinders, it.heads, it.sectors) }))
             }
         }
-        geometry?.let { files += X86Presets.HARD_DISK to { output -> X86BlankDisk(it.cylinders, it.heads, it.sectors).write(output) } }
+        geometry?.let { files += BlankDisk.File(X86Presets.HARD_DISK) { output -> X86BlankDisk(it.cylinders, it.heads, it.sectors).write(output) } }
         // Each drive's image, with the files it is made of, copied in by their own names (one image in two
         // drives, once), and named in 86box.cfg; two different files of one name cannot both be there.
         val named = HashMap<String, List<X86Library.ImageFile>>()
         for ((slot, image) in media) {
             val name = image?.first()?.name
             if (image != null && name != null && name !in named) {
-                for (file in image) check(files.none { it.first.equals(file.name, ignoreCase = true) }) {
+                for (file in image) check(files.none { it.path.equals(file.name, ignoreCase = true) }) {
                     context.getString(R.string.machine_disk_name_taken, file.name)
                 }
                 named[name] = image
-                image.forEach { file -> files += file.name to file.write }
+                // Each by its size, so the Creating page shows how far the copy is (Kairo#184); -1 is not known
+                image.forEach { file -> files += BlankDisk.File(file.name, file.size.coerceAtLeast(0), file.write) }
             }
             config[X86Library.DRIVES, X86Library.DRIVE_KEYS[slot]] = name
         }
-        files[0] = "86box.cfg" to { output -> output.write(config.toString().toByteArray()) }
+        files[0] = BlankDisk.File("86box.cfg") { output -> output.write(config.toString().toByteArray()) }
         return BlankDisk.Folder(kind, UiText.res(if (preset != null) preset.label else R.string.preset_custom), files)
     }
 

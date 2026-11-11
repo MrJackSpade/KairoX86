@@ -142,6 +142,8 @@ extern uint64_t VGACONST2;
 extern uint64_t RTCCONST;
 
 extern int refresh_at_enable;
+/* KairoX86#410: the fast PIT's skipped refresh expiries applied up to now (pit_fast.c) */
+extern void pit_refresh_sync(void);
 
 extern void pit_device_reset(pit_t *dev);
 

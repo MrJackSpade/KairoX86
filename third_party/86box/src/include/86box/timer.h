@@ -53,6 +53,8 @@ extern "C" {
 /*Timestamp of nearest enabled timer. CPU emulation must call timer_process()
   when TSC matches or exceeds this.*/
 extern uint64_t timer_target;
+/* KairoX86#410: called by timer_set_new_tsc before it moves the timers (the fast PIT ends its refresh skip) */
+extern void (*timer_before_tsc_set)(void);
 
 /*Enable timer, without updating timestamp*/
 extern void timer_enable(pc_timer_t *timer);

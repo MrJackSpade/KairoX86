@@ -57,6 +57,7 @@
 #ifdef K9X_DIAG
 uint64_t k9x_c_dispatch;   /* compiled blocks entered from the C loop */
 uint64_t k9x_c_interp;     /* blocks interpreted by the C loop */
+uint64_t k9x_cnt_ins_c;    /* KairoX86#419: guest instructions the C loops ran (translated code's are k9x_cnt_ins) */
 uint64_t k9x_link_patches; /* link slots filled */
 uint64_t k9x_patch_first, k9x_patch_same, k9x_patch_retarget;
 uint64_t k9x_c_dispatch_nofrom; /* compiled blocks entered from the C loop not after a block exit */
@@ -542,6 +543,9 @@ exec386_dynarec_int_common(const int dbg)
             cpu_state.pc++;
             if (dbg)
                 cpu_state.eflags &= ~(RF_FLAG);
+#ifdef K9X_DIAG
+            k9x_cnt_ins_c++; /* KairoX86#419 */
+#endif
             x86_opcodes[(opcode | cpu_state.op32) & 0x3ff](fetchdat);
         }
 
@@ -687,6 +691,7 @@ exec386_dynarec_dyn(void)
            also catch any page faults at this stage */
         valid_block = (block->pc == cs + cpu_state.pc) && (block->_cs == cs) && (block->phys == phys_addr) && !((block->status ^ cpu_cur_status) & CPU_STATUS_FLAGS) && ((block->status & cpu_cur_status & CPU_STATUS_MASK) == (cpu_cur_status & CPU_STATUS_MASK));
         if (!valid_block) {
+            mem_pages_fill_range(phys_addr >> 12, (phys_addr >> 12) + 1); /* KairoX86#408: code may be compiled here */
             uint64_t mask = (uint64_t) 1 << ((phys_addr >> PAGE_MASK_SHIFT) & PAGE_MASK_MASK);
             int      byte_offset = (phys_addr >> PAGE_BYTE_MASK_SHIFT) & PAGE_BYTE_MASK_OFFSET_MASK;
             uint64_t byte_mask   = 1ULL << (phys_addr & PAGE_BYTE_MASK_MASK);
@@ -910,6 +915,9 @@ exec386_dynarec_dyn(void)
                 codegen_generate_call(opcode, x86_opcodes[(opcode | cpu_state.op32) & 0x3ff], fetchdat, cpu_state.pc, cpu_state.pc - 1);
                 codegen_block_version_check_ins(cs + cpu_state.oldpc);
 
+#ifdef K9X_DIAG
+                k9x_cnt_ins_c++; /* KairoX86#419 */
+#endif
                 x86_opcodes[(opcode | cpu_state.op32) & 0x3ff](fetchdat);
 
                 if (x86_was_reset)
@@ -1033,6 +1041,9 @@ exec386_dynarec_dyn(void)
 
                 cpu_state.pc++;
 
+#ifdef K9X_DIAG
+                k9x_cnt_ins_c++; /* KairoX86#419 */
+#endif
                 x86_opcodes[(opcode | cpu_state.op32) & 0x3ff](fetchdat);
 
                 if (x86_was_reset)
@@ -1592,6 +1603,9 @@ exec386_common(int32_t cycs, const int dbg)
                 cpu_state.pc++;
                 if (dbg)
                     cpu_state.eflags &= ~(RF_FLAG);
+#ifdef K9X_DIAG
+                k9x_cnt_ins_c++; /* KairoX86#419 */
+#endif
                 x86_opcodes[(opcode | cpu_state.op32) & 0x3ff](fetchdat);
                 if (x86_was_reset)
                     break;

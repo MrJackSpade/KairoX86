@@ -229,9 +229,12 @@ flush_read_lookup(void)
     }
 }
 
+static void write_walks_flush(void); /* KairoX86#423 */
+
 static void
 flush_write_lookup(void)
 {
+    write_walks_flush(); /* KairoX86#423: the kept page walks go with the write lookups */
     for (int c = 0; c < writel_used; c++) {
         if (writelookup[c] != (int) 0xffffffff) {
             page_lookup[writelookup[c]]  = NULL;
@@ -851,6 +854,46 @@ write_mem_w(uint32_t addr, uint16_t val)
     }
 }
 
+/* KairoX86#423: the write path's page walks kept, per virtual page and CPL 3 or not, until the write lookups are
+   flushed (flush_write_lookup: a CR3 load, INVLPG, a CR0 or CR4 change), as writelookup2 keeps RAM's: a write to a
+   page the lookups do not map (device memory, a card's linear framebuffer) walked the page tables every time. A
+   walk only sets the accessed and dirty bits already set by the walk kept, and one that faults is not kept;
+   cpl_override's walks are not kept or used. */
+#define WRITE_WALKS 1024
+static struct {
+    uint32_t vpage; /* the virtual page, bit 31 set for CPL 3 */
+    uint32_t ppage;
+    uint32_t gen;
+} write_walks[WRITE_WALKS];
+static uint32_t write_walks_gen = 1;
+
+static __inline uint64_t
+mmutranslate_write_kept(uint32_t addr)
+{
+    if (cpl_override)
+        return mmutranslate_write(addr);
+    const uint32_t vpage = (addr >> 12) | ((CPL == 3) ? 0x80000000u : 0);
+    __typeof__(&write_walks[0]) kept = &write_walks[(addr >> 12) & (WRITE_WALKS - 1)];
+    if ((kept->gen == write_walks_gen) && (kept->vpage == vpage))
+        return ((uint64_t) kept->ppage << 12) | (addr & 0xfff);
+    const uint64_t a = mmutranslate_write(addr);
+    if (a <= 0xffffffffULL) {
+        kept->vpage = vpage;
+        kept->ppage = (uint32_t) (a >> 12);
+        kept->gen   = write_walks_gen;
+    }
+    return a;
+}
+
+static void
+write_walks_flush(void)
+{
+    if (++write_walks_gen == 0) { /* 2^32 flushes later, the old entries' generation comes round */
+        memset(write_walks, 0, sizeof(write_walks));
+        write_walks_gen = 1;
+    }
+}
+
 uint8_t
 readmembl(uint32_t addr)
 {
@@ -916,7 +959,7 @@ writemembl(uint32_t addr, uint8_t val)
     }
 
     if (cr0 >> 31) {
-        a      = mmutranslate_write(addr);
+        a      = mmutranslate_write_kept(addr); /* KairoX86#423 */
         addr64 = (uint32_t) a;
 
         if (a > 0xffffffffULL)
@@ -1126,7 +1169,7 @@ writememwl(uint32_t addr, uint16_t val)
     }
 
     if (cr0 >> 31) {
-        a          = mmutranslate_write(addr);
+        a          = mmutranslate_write_kept(addr); /* KairoX86#423 */
         addr64a[0] = (uint32_t) a;
 
         if (a > 0xffffffffULL)
@@ -1422,7 +1465,7 @@ writememll(uint32_t addr, uint32_t val)
     }
 
     if (cr0 >> 31) {
-        a          = mmutranslate_write(addr);
+        a          = mmutranslate_write_kept(addr); /* KairoX86#423 */
         addr64a[0] = (uint32_t) a;
 
         if (a > 0xffffffffULL)
@@ -2246,6 +2289,34 @@ page_remove_from_evict_list(page_t *page)
     purgeable_page_count--;
 }
 
+#ifdef USE_DYNAREC
+/* KairoX86#353: a store about to set [mask] in the page's dirty mask and [bytes0]/[bytes1] in the byte dirty masks at
+   [off0]/[off1] (off1 < 0: none): a bit that is clear now, on code, empties the links to the page's blocks */
+static __inline void
+code_write_unlink(page_t *page, uint64_t mask, int off0, uint64_t bytes0, int off1, uint64_t bytes1)
+{
+    if ((mask & ~page->dirty_mask & page->code_present_mask) ||
+        (bytes0 & ~page->byte_dirty_mask[off0] & page->byte_code_present_mask[off0]) ||
+        ((off1 >= 0) && (bytes1 & ~page->byte_dirty_mask[off1] & page->byte_code_present_mask[off1])))
+        codegen_link_page_written(page);
+}
+
+/* KairoX86#353: the arm64 tracked-store routine set a dirty bit that was clear (its bits are already set): the links,
+   and the evict list as the routine's own path adds the page */
+void
+k9x_store_new_dirty(page_t *page, uint32_t addr, uint32_t bytes)
+{
+    const int chunk = (addr >> 6) & 63;
+    const int off   = addr & 63;
+
+    if (((page->code_present_mask >> chunk) & 1) || ((page->byte_code_present_mask[chunk] >> off) & bytes)) {
+        codegen_link_page_written(page);
+        if (!page_in_evict_list(page))
+            page_add_to_evict_list(page);
+    }
+}
+#endif
+
 void
 mem_write_ramb_page(uint32_t addr, uint8_t val, page_t *page)
 {
@@ -2262,6 +2333,9 @@ mem_write_ramb_page(uint32_t addr, uint8_t val, page_t *page)
         uint64_t byte_mask   = (uint64_t) 1 << (addr & PAGE_BYTE_MASK_MASK);
 
         page->mem[addr & 0xfff] = val;
+#ifdef USE_DYNAREC
+        code_write_unlink(page, mask, byte_offset, byte_mask, -1, 0); /* KairoX86#353 */
+#endif
         page->dirty_mask |= mask;
         if ((page->code_present_mask & mask) && !page_in_evict_list(page))
             page_add_to_evict_list(page);
@@ -2289,6 +2363,12 @@ mem_write_ramw_page(uint32_t addr, uint16_t val, page_t *page)
         if ((addr & PAGE_BYTE_MASK_MASK) == PAGE_BYTE_MASK_MASK)
             mask |= (mask << 1);
         *(uint16_t *) &page->mem[addr & 0xfff] = val;
+#ifdef USE_DYNAREC
+        if ((addr & PAGE_BYTE_MASK_MASK) == PAGE_BYTE_MASK_MASK) /* KairoX86#353 */
+            code_write_unlink(page, mask, byte_offset, byte_mask, byte_offset + 1, 1);
+        else
+            code_write_unlink(page, mask, byte_offset, byte_mask | (byte_mask << 1), -1, 0);
+#endif
         page->dirty_mask |= mask;
         if ((page->code_present_mask & mask) && !page_in_evict_list(page))
             page_add_to_evict_list(page);
@@ -2324,6 +2404,12 @@ mem_write_raml_page(uint32_t addr, uint32_t val, page_t *page)
         if ((addr & PAGE_BYTE_MASK_MASK) > (PAGE_BYTE_MASK_MASK - 3))
             mask |= (mask << 1);
         *(uint32_t *) &page->mem[addr & 0xfff] = val;
+#ifdef USE_DYNAREC
+        if ((addr & PAGE_BYTE_MASK_MASK) > (PAGE_BYTE_MASK_MASK - 3)) /* KairoX86#353 */
+            code_write_unlink(page, mask, byte_offset, byte_mask, byte_offset + 1, 0xf >> (4 - (addr & 3)));
+        else
+            code_write_unlink(page, mask, byte_offset, byte_mask, -1, 0);
+#endif
         page->dirty_mask |= mask;
         page->byte_dirty_mask[byte_offset] |= byte_mask;
         if (!page_in_evict_list(page) && ((page->code_present_mask & mask) || (page->byte_code_present_mask[byte_offset] & byte_mask)))
@@ -2365,6 +2451,9 @@ mem_phys_written(uint32_t addr, uint32_t len)
                     uint64_t bytes = (UINT64_MAX >> (PAGE_BYTE_MASK_MASK - hi)) & (UINT64_MAX << lo);
                     uint64_t mask  = (uint64_t) 1 << c;
 
+#ifdef USE_DYNAREC
+                    code_write_unlink(page, mask, c, bytes, -1, 0); /* KairoX86#353 */
+#endif
                     page->dirty_mask |= mask;
                     page->byte_dirty_mask[c] |= bytes;
                     if ((page->code_present_mask & mask) || (page->byte_code_present_mask[c] & bytes))
@@ -2555,6 +2644,8 @@ mem_invalidate_range(uint32_t start_addr, uint32_t end_addr)
 {
     start_addr &= 0xfffff000;
     end_addr &= 0xfffff000;
+    if (end_addr >= start_addr)
+        mem_pages_fill_range(start_addr >> 12, (end_addr >> 12) + 1); /* KairoX86#408 */
 
     page_t *page;
 
@@ -2640,8 +2731,11 @@ mem_mapping_apply_granule(mem_mapping_t *map, uint64_t c, int n)
 {
     uint8_t wp = _mem_wp[c >> MEM_GRANULARITY_BITS];
 
-    if (map->exec && mem_mapping_access_allowed(map->flags, _mem_state[c >> MEM_GRANULARITY_BITS].states[n].x))
+    if (map->exec && mem_mapping_access_allowed(map->flags, _mem_state[c >> MEM_GRANULARITY_BITS].states[n].x)) {
         _mem_exec[c >> MEM_GRANULARITY_BITS] = mem_mapping_exec_granule(map, c);
+        if (_mem_exec[c >> MEM_GRANULARITY_BITS] != NULL) /* KairoX86#408 */
+            mem_pages_fill_range(c >> 12, (c >> 12) + 1);
+    }
     if (!wp && (map->write_b || map->write_w || map->write_l) && mem_mapping_access_allowed(map->flags, _mem_state[c >> MEM_GRANULARITY_BITS].states[n].w))
         write_mapping[c >> MEM_GRANULARITY_BITS] = map;
     if ((map->read_b || map->read_w || map->read_l) && mem_mapping_access_allowed(map->flags, _mem_state[c >> MEM_GRANULARITY_BITS].states[n].r))
@@ -2750,8 +2844,11 @@ mem_mapping_recalc(uint64_t base, uint64_t size, uint32_t base_ignore)
                     wp = _mem_wp[c >> MEM_GRANULARITY_BITS];
 
                     if (map->exec && mem_mapping_access_allowed(map->flags,
-                                     _mem_state[c >> MEM_GRANULARITY_BITS].states[n].x))
+                                     _mem_state[c >> MEM_GRANULARITY_BITS].states[n].x)) {
                         _mem_exec[c >> MEM_GRANULARITY_BITS] = mem_mapping_exec_granule(map, c);
+                        if (_mem_exec[c >> MEM_GRANULARITY_BITS] != NULL) /* KairoX86#408 */
+                            mem_pages_fill_range(c >> 12, (c >> 12) + 1);
+                    }
                     if (!wp && (map->write_b || map->write_w || map->write_l) &&
                         mem_mapping_access_allowed(map->flags,
                                                    _mem_state[c >> MEM_GRANULARITY_BITS].states[n].w))
@@ -2781,8 +2878,11 @@ mem_mapping_recalc(uint64_t base, uint64_t size, uint32_t base_ignore)
                     wp = _mem_wp[c >> MEM_GRANULARITY_BITS];
 
                     if (map->exec && mem_mapping_access_allowed(map->flags,
-                                                                _mem_state[c >> MEM_GRANULARITY_BITS].states[n].x))
+                                                                _mem_state[c >> MEM_GRANULARITY_BITS].states[n].x)) {
                         _mem_exec[c >> MEM_GRANULARITY_BITS] = mem_mapping_exec_granule(map, c);
+                        if (_mem_exec[c >> MEM_GRANULARITY_BITS] != NULL) /* KairoX86#408 */
+                            mem_pages_fill_range(c >> 12, (c >> 12) + 1);
+                    }
                     if (!wp && (map->write_b || map->write_w || map->write_l) &&
                         mem_mapping_access_allowed(map->flags,
                                                    _mem_state[c >> MEM_GRANULARITY_BITS].states[n].w))
@@ -3245,6 +3345,66 @@ mem_zero(void)
 }
 
 /* Reset the memory state. */
+
+/* KairoX86#408: a 386's table covers the 4 GB space (1,048,576 entries of ~104 bytes), but the guest reaches only the
+   entries of its RAM, of pages it can run code from and of the few ranges a chipset remaps. Those are written; the rest
+   stay calloc's zero pages, never faulted in, ~100 MB of the process's resident set. An entry not yet written holds, in
+   effect, what the last full-table loop gave every entry (pages_tmpl_*: mem_reset's or mem_reset_page_blocks' RAM
+   handlers, row.c's none), and mem_pages_fill_range writes exactly that, with its index's two mask pointers, before
+   anything uses it: the partial writers below, a page given an exec pointer (code compiled there) and
+   mem_invalidate_range. A smaller table is written whole, as before. */
+static uint8_t *pages_filled;   /* a bit per entry: written */
+static void (*pages_tmpl_write_b)(uint32_t addr, uint8_t val, page_t *page);
+static void (*pages_tmpl_write_w)(uint32_t addr, uint16_t val, page_t *page);
+static void (*pages_tmpl_write_l)(uint32_t addr, uint32_t val, page_t *page);
+
+void
+mem_pages_fill_range(uint32_t first, uint32_t end)
+{
+    if ((pages == NULL) || (pages_filled == NULL))
+        return;
+    if (end > pages_sz)
+        end = pages_sz;
+    for (uint32_t c = first; c < end; c++) {
+        if (pages_filled[c >> 3] & (1 << (c & 7)))
+            continue;
+        pages[c].mem                    = page_ff;
+        pages[c].write_b                = pages_tmpl_write_b;
+        pages[c].write_w                = pages_tmpl_write_w;
+        pages[c].write_l                = pages_tmpl_write_l;
+        pages[c].evict_prev             = EVICT_NOT_IN_LIST;
+        pages[c].byte_dirty_mask        = &byte_dirty_mask[c * 64];
+        pages[c].byte_code_present_mask = &byte_code_present_mask[c * 64];
+        pages_filled[c >> 3] |= (uint8_t) (1 << (c & 7));
+    }
+}
+
+static inline int
+mem_page_filled(uint32_t c)
+{
+    return (pages_filled == NULL) || (pages_filled[c >> 3] & (1 << (c & 7)));
+}
+
+/* row.c's whole-table loop: every entry unmapped, no write handlers */
+void
+mem_pages_reset_unmapped(void)
+{
+    pages_tmpl_write_b = NULL;
+    pages_tmpl_write_w = NULL;
+    pages_tmpl_write_l = NULL;
+    for (uint32_t c = 0; c < pages_sz; c++) {
+        if (!mem_page_filled(c))
+            continue;
+        pages[c].mem                    = page_ff;
+        pages[c].write_b                = NULL;
+        pages[c].write_w                = NULL;
+        pages[c].write_l                = NULL;
+        pages[c].evict_prev             = EVICT_NOT_IN_LIST;
+        pages[c].byte_dirty_mask        = &byte_dirty_mask[c * 64];
+        pages[c].byte_code_present_mask = &byte_code_present_mask[c * 64];
+    }
+}
+
 void
 mem_reset(void)
 {
@@ -3268,6 +3428,8 @@ mem_reset(void)
         free(pages);
         pages = NULL;
     }
+    free(pages_filled); /* KairoX86#408 */
+    pages_filled = NULL;
 
     mem_release_ram();
 
@@ -3283,6 +3445,9 @@ mem_reset(void)
         ram = (uint8_t *) kairo_gpu_alloc(ram_size + 16 + 0x400000);
     else
         ram = (uint8_t *) plat_mmap(ram_size + 16, 0, &large_mem); /* allocate and clear the RAM block */
+        /* KairoX86#373: the BIOS writes all of it in the boot's first seconds; a helper thread takes those faults */
+        if (ram != NULL)
+            kairo_prefault(ram, ram_size + 16);
     if (ram == NULL) {
         fatal("Failed to allocate RAM block. Make sure you have enough RAM available.\n");
         return;
@@ -3326,7 +3491,20 @@ mem_reset(void)
 
     byte_code_present_mask = calloc(1, ((size_t) mem_size * 1024) / 8);
 
+    /* KairoX86#408: a 4 GB table is written for the first 1 MB, RAM and the top 16 MB; the rest when reached */
+    pages_tmpl_write_b = mem_write_ramb_page;
+    pages_tmpl_write_w = mem_write_ramw_page;
+    pages_tmpl_write_l = mem_write_raml_page;
+    if (m == 1048576) {
+        pages_filled = calloc(m / 8, 1);
+        if (pages_filled == NULL)
+            fatal("mem_reset(): no memory for the page table's map\n");
+    }
     for (uint32_t c = 0; c < pages_sz; c++) {
+        if ((pages_filled != NULL) && (c >= 256) && (((uint64_t) c << 12) >= ((uint64_t) mem_size << 10)) && (c < (pages_sz - 4096)))
+            continue;
+        if (pages_filled != NULL)
+            pages_filled[c >> 3] |= (uint8_t) (1 << (c & 7));
         if (((uint64_t) c << 12) >= ((uint64_t) mem_size << 10))
             pages[c].mem = page_ff;
         else {
@@ -3462,6 +3640,7 @@ mem_remap_top_ex_common(int kb, uint32_t start, int mid)
     remap_start_addr2 = (start << 10) + 0x00020000;
 
     mem_pages_as_reset = 0; /* KairoX86#200 */
+    mem_pages_fill_range((start * 1024) >> 12, ((start + size) * 1024) >> 12); /* KairoX86#408 */
     for (c = ((start * 1024) >> 12); c < (((start + size) * 1024) >> 12); c++) {
         offset = c - ((start * 1024) >> 12);
         /* Use A0000-BFFFF, D0000-EFFFF instead of C0000-DFFFF, E0000-FFFFF. */
@@ -3578,7 +3757,12 @@ mem_reset_page_blocks(void)
     if (mem_pages_as_reset)
         return;
 
+    pages_tmpl_write_b = mem_write_ramb_page; /* KairoX86#408: what an entry not yet written now holds */
+    pages_tmpl_write_w = mem_write_ramw_page;
+    pages_tmpl_write_l = mem_write_raml_page;
     for (uint32_t c = 0; c < pages_sz; c++) {
+        if (!mem_page_filled(c))
+            continue;
         pages[c].write_b = mem_write_ramb_page;
         pages[c].write_w = mem_write_ramw_page;
         pages[c].write_l = mem_write_raml_page;
