@@ -1363,6 +1363,12 @@ build_link_routine(codeblock_t *block)
     /*KairoX86#414: the target accepts the status the exit's block left with (slot status_known): no compare*/
     host_arm64_LDRB_IMM_W(block, REG_W4, REG_X1, LINK_SLOT(status_known));
     status_known = host_arm64_CBNZ_SHORT_(block, REG_W4);
+    /*KairoX86#356: paging and cache-disable bits as when the slot was filled (W13 = CR0); a status_known way's block
+      runs none of CR0's writers, so it skips this too*/
+    host_arm64_LDR_IMM_W(block, REG_W9, REG_X1, LINK_SLOT(cr0_bits));
+    host_arm64_AND_IMM(block, REG_W10, REG_W13, 0xc0000000);
+    host_arm64_CMP_REG(block, REG_W10, REG_W9);
+    miss[nr_miss++] = host_arm64_BNE_SHORT_(block);
 
     /*Status and FPU rounding as when the slot was filled, compared as one
       word against W6. Only the C loop refreshes the PC24 and RC_NZ status
@@ -1446,10 +1452,7 @@ build_link_routine(codeblock_t *block)
 
     /*Paging and cache-disable bits as when the slot was filled. W9 = them,
       W12 = phys_page*/
-    host_arm64_LDP_IMM_W(block, REG_W9, REG_W12, REG_X1, LINK_SLOT(cr0_bits));
-    host_arm64_AND_IMM(block, REG_W10, REG_W13, 0xc0000000);
-    host_arm64_CMP_REG(block, REG_W10, REG_W9);
-    miss[nr_miss++] = host_arm64_BNE_SHORT_(block);
+    host_arm64_LDP_IMM_W(block, REG_W9, REG_W12, REG_X1, LINK_SLOT(cr0_bits)); /* KairoX86#356: compared above */
 
     /*get_phys(cs + pc) gives phys_page. W8 = nonzero if get_phys() would
       miss its cache*/
@@ -1600,8 +1603,9 @@ build_link_routine(codeblock_t *block)
       get_phys_virt, and translate through readlookup2[] with paging on or
       through rammask with paging off*/
     host_arm64_short_branch_set_offset(uncached, &block_write_data[block_pos]);
-    no_paging = host_arm64_TBZ_SHORT_(block, REG_W9, 31);
+    no_paging = host_arm64_TBZ_SHORT_(block, REG_W13, 31); /* KairoX86#356: paging as it is now, as get_phys() decides */
     host_arm64_LDP_IMM_X(block, REG_X10, REG_X13, REG_X1, LINK_SLOT(xlat));
+    miss[nr_miss++] = host_arm64_CBZ_SHORT_(block, REG_X10); /* KairoX86#356: filled with paging off */
     host_arm64_LDR_IMM_X(block, REG_X10, REG_X10, 0);
     host_arm64_CMPX_REG(block, REG_X10, REG_X13);
     xlat_same = host_arm64_BEQ_SHORT_(block);

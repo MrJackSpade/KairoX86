@@ -6430,6 +6430,18 @@ KAIROX86_LINK_STATUS_KNOWN = [
      '    host_arm64_TST_IMM(block, REG_W4, ~(uint32_t) (CPU_STATUS_FPU_PC24 | CPU_STATUS_FPU_RC_NZ));\n    miss[nr_miss++] = host_arm64_BNE_SHORT_(block);\n    host_arm64_short_branch_set_offset(status_known, &block_write_data[block_pos]); /* KairoX86#414 */\n'),
 ]
 
+
+# KairoX86#356: the link routine's CR0 compare moves into the section a status_known way skips (#414): its block runs
+# none of CR0's writers; the phys check decides paging from the current CR0, and a way filled without paging is a miss.
+KAIROX86_LINK_CR0_KNOWN = [
+    ('86box/src/codegen/codegen_backend_arm64.c', '    host_arm64_LDRB_IMM_W(block, REG_W4, REG_X1, LINK_SLOT(status_known));\n    status_known = host_arm64_CBNZ_SHORT_(block, REG_W4);\n',
+     "    host_arm64_LDRB_IMM_W(block, REG_W4, REG_X1, LINK_SLOT(status_known));\n    status_known = host_arm64_CBNZ_SHORT_(block, REG_W4);\n    /*KairoX86#356: paging and cache-disable bits as when the slot was filled (W13 = CR0); a status_known way's block\n      runs none of CR0's writers, so it skips this too*/\n    host_arm64_LDR_IMM_W(block, REG_W9, REG_X1, LINK_SLOT(cr0_bits));\n    host_arm64_AND_IMM(block, REG_W10, REG_W13, 0xc0000000);\n    host_arm64_CMP_REG(block, REG_W10, REG_W9);\n    miss[nr_miss++] = host_arm64_BNE_SHORT_(block);\n"),
+    ('86box/src/codegen/codegen_backend_arm64.c', '    host_arm64_LDP_IMM_W(block, REG_W9, REG_W12, REG_X1, LINK_SLOT(cr0_bits));\n    host_arm64_AND_IMM(block, REG_W10, REG_W13, 0xc0000000);\n    host_arm64_CMP_REG(block, REG_W10, REG_W9);\n    miss[nr_miss++] = host_arm64_BNE_SHORT_(block);\n',
+     '    host_arm64_LDP_IMM_W(block, REG_W9, REG_W12, REG_X1, LINK_SLOT(cr0_bits)); /* KairoX86#356: compared above */\n'),
+    ('86box/src/codegen/codegen_backend_arm64.c', '    no_paging = host_arm64_TBZ_SHORT_(block, REG_W9, 31);\n    host_arm64_LDP_IMM_X(block, REG_X10, REG_X13, REG_X1, LINK_SLOT(xlat));\n',
+     '    no_paging = host_arm64_TBZ_SHORT_(block, REG_W13, 31); /* KairoX86#356: paging as it is now, as get_phys() decides */\n    host_arm64_LDP_IMM_X(block, REG_X10, REG_X13, REG_X1, LINK_SLOT(xlat));\n    miss[nr_miss++] = host_arm64_CBZ_SHORT_(block, REG_X10); /* KairoX86#356: filled with paging off */\n'),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -6580,6 +6592,7 @@ PATCHES = {
     'kairox86-cf-known': KAIROX86_CF_KNOWN,
     'kairox86-stub-lines': KAIROX86_STUB_LINES,
     'kairox86-link-status-known': KAIROX86_LINK_STATUS_KNOWN,
+    'kairox86-link-cr0-known': KAIROX86_LINK_CR0_KNOWN,
 }
 
 ADDED = [
