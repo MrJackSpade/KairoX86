@@ -250,6 +250,9 @@ page_in_evict_list(page_t *page)
 }
 void page_remove_from_evict_list(page_t *page);
 void page_add_to_evict_list(page_t *page);
+#ifdef USE_DYNAREC
+extern void codegen_link_page_written(page_t *page); /* KairoX86#353 (codegen_block.c) */
+#endif
 
 extern uint8_t *ram;
 extern uint32_t rammask;

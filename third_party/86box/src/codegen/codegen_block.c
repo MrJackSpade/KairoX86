@@ -383,6 +383,14 @@ link_page_blocks_changed(page_t *page)
         codegen_link_block_changed(&codeblock[block_nr]);
 }
 
+/* KairoX86#353: a store set a dirty bit that was clear, on code of [page]: no link may enter its blocks before the C
+   loop has made its dirty check for them (the link routine does not test the first page's dirty mask) */
+void
+codegen_link_page_written(page_t *page)
+{
+    link_page_blocks_changed(page);
+}
+
 void
 codegen_link_patch(codegen_link_slot_t *from, codeblock_t *block, uint32_t phys)
 {

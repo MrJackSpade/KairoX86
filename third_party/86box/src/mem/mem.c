@@ -2289,6 +2289,34 @@ page_remove_from_evict_list(page_t *page)
     purgeable_page_count--;
 }
 
+#ifdef USE_DYNAREC
+/* KairoX86#353: a store about to set [mask] in the page's dirty mask and [bytes0]/[bytes1] in the byte dirty masks at
+   [off0]/[off1] (off1 < 0: none): a bit that is clear now, on code, empties the links to the page's blocks */
+static __inline void
+code_write_unlink(page_t *page, uint64_t mask, int off0, uint64_t bytes0, int off1, uint64_t bytes1)
+{
+    if ((mask & ~page->dirty_mask & page->code_present_mask) ||
+        (bytes0 & ~page->byte_dirty_mask[off0] & page->byte_code_present_mask[off0]) ||
+        ((off1 >= 0) && (bytes1 & ~page->byte_dirty_mask[off1] & page->byte_code_present_mask[off1])))
+        codegen_link_page_written(page);
+}
+
+/* KairoX86#353: the arm64 tracked-store routine set a dirty bit that was clear (its bits are already set): the links,
+   and the evict list as the routine's own path adds the page */
+void
+k9x_store_new_dirty(page_t *page, uint32_t addr, uint32_t bytes)
+{
+    const int chunk = (addr >> 6) & 63;
+    const int off   = addr & 63;
+
+    if (((page->code_present_mask >> chunk) & 1) || ((page->byte_code_present_mask[chunk] >> off) & bytes)) {
+        codegen_link_page_written(page);
+        if (!page_in_evict_list(page))
+            page_add_to_evict_list(page);
+    }
+}
+#endif
+
 void
 mem_write_ramb_page(uint32_t addr, uint8_t val, page_t *page)
 {
@@ -2305,6 +2333,9 @@ mem_write_ramb_page(uint32_t addr, uint8_t val, page_t *page)
         uint64_t byte_mask   = (uint64_t) 1 << (addr & PAGE_BYTE_MASK_MASK);
 
         page->mem[addr & 0xfff] = val;
+#ifdef USE_DYNAREC
+        code_write_unlink(page, mask, byte_offset, byte_mask, -1, 0); /* KairoX86#353 */
+#endif
         page->dirty_mask |= mask;
         if ((page->code_present_mask & mask) && !page_in_evict_list(page))
             page_add_to_evict_list(page);
@@ -2332,6 +2363,12 @@ mem_write_ramw_page(uint32_t addr, uint16_t val, page_t *page)
         if ((addr & PAGE_BYTE_MASK_MASK) == PAGE_BYTE_MASK_MASK)
             mask |= (mask << 1);
         *(uint16_t *) &page->mem[addr & 0xfff] = val;
+#ifdef USE_DYNAREC
+        if ((addr & PAGE_BYTE_MASK_MASK) == PAGE_BYTE_MASK_MASK) /* KairoX86#353 */
+            code_write_unlink(page, mask, byte_offset, byte_mask, byte_offset + 1, 1);
+        else
+            code_write_unlink(page, mask, byte_offset, byte_mask | (byte_mask << 1), -1, 0);
+#endif
         page->dirty_mask |= mask;
         if ((page->code_present_mask & mask) && !page_in_evict_list(page))
             page_add_to_evict_list(page);
@@ -2367,6 +2404,12 @@ mem_write_raml_page(uint32_t addr, uint32_t val, page_t *page)
         if ((addr & PAGE_BYTE_MASK_MASK) > (PAGE_BYTE_MASK_MASK - 3))
             mask |= (mask << 1);
         *(uint32_t *) &page->mem[addr & 0xfff] = val;
+#ifdef USE_DYNAREC
+        if ((addr & PAGE_BYTE_MASK_MASK) > (PAGE_BYTE_MASK_MASK - 3)) /* KairoX86#353 */
+            code_write_unlink(page, mask, byte_offset, byte_mask, byte_offset + 1, 0xf >> (4 - (addr & 3)));
+        else
+            code_write_unlink(page, mask, byte_offset, byte_mask, -1, 0);
+#endif
         page->dirty_mask |= mask;
         page->byte_dirty_mask[byte_offset] |= byte_mask;
         if (!page_in_evict_list(page) && ((page->code_present_mask & mask) || (page->byte_code_present_mask[byte_offset] & byte_mask)))
@@ -2408,6 +2451,9 @@ mem_phys_written(uint32_t addr, uint32_t len)
                     uint64_t bytes = (UINT64_MAX >> (PAGE_BYTE_MASK_MASK - hi)) & (UINT64_MAX << lo);
                     uint64_t mask  = (uint64_t) 1 << c;
 
+#ifdef USE_DYNAREC
+                    code_write_unlink(page, mask, c, bytes, -1, 0); /* KairoX86#353 */
+#endif
                     page->dirty_mask |= mask;
                     page->byte_dirty_mask[c] |= bytes;
                     if ((page->code_present_mask & mask) || (page->byte_code_present_mask[c] & bytes))

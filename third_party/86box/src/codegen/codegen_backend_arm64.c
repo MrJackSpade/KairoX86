@@ -331,12 +331,14 @@ build_load_routine(codeblock_t *block, int size, int is_float, int ea_rule)
   user fills it before reading it. Anything else returns through to_c[] to
   the C path.
   In - W0 = address, W1 = data. Returns the number of to_c[] branches.*/
+extern void k9x_store_new_dirty(page_t *page, uint32_t addr, uint32_t bytes); /* KairoX86#353 (mem.c) */
 static int
 build_store_tracked(codeblock_t *block, int size, uint32_t **to_c)
 {
     const uint32_t bytes = (1 << size) - 1; /*the store's bytes in the byte mask*/
     uint32_t *done[3];
     uint32_t *add_evict;
+    uint32_t *new_dirty; /* KairoX86#353 */
     int       nr_to_c = 0;
 
     host_arm64_MOVX_IMM(block, REG_X3, (uint64_t) &codegen_in_recompile);
@@ -406,8 +408,9 @@ build_store_tracked(codeblock_t *block, int size, uint32_t **to_c)
     host_arm64_MOVZ_IMM(block, REG_X7, 1);
     host_arm64_LSLX(block, REG_X7, REG_X7, REG_X6);
     host_arm64_LDR_IMM_X(block, REG_X8, REG_X4, offsetof(page_t, dirty_mask));
-    host_arm64_ORRX_REG(block, REG_X8, REG_X8, REG_X7, 0);
-    host_arm64_STR_IMM_Q(block, REG_X8, REG_X4, offsetof(page_t, dirty_mask));
+    host_arm64_ORRX_REG(block, REG_X14, REG_X8, REG_X7, 0);
+    host_arm64_STR_IMM_Q(block, REG_X14, REG_X4, offsetof(page_t, dirty_mask));
+    host_arm64_SUBX_REG(block, REG_X14, REG_X14, REG_X8); /* KairoX86#353: nonzero if the bit was clear */
 
     /*W9 = byte in chunk, X10 = byte_mask, W13 = chunk word offset*/
     host_arm64_AND_IMM(block, REG_W9, REG_W0, 63);
@@ -417,8 +420,12 @@ build_store_tracked(codeblock_t *block, int size, uint32_t **to_c)
     host_arm64_LDR_IMM_X(block, REG_X11, REG_X4, offsetof(page_t, byte_dirty_mask));
     host_arm64_ADDX_REG_UXTW(block, REG_X11, REG_X11, REG_W13);
     host_arm64_LDR_IMM_X(block, REG_X12, REG_X11, 0);
-    host_arm64_ORRX_REG(block, REG_X12, REG_X12, REG_X10, 0);
-    host_arm64_STR_IMM_Q(block, REG_X12, REG_X11, 0);
+    host_arm64_ORRX_REG(block, REG_X15, REG_X12, REG_X10, 0);
+    host_arm64_STR_IMM_Q(block, REG_X15, REG_X11, 0);
+    host_arm64_SUBX_REG(block, REG_X15, REG_X15, REG_X12); /* KairoX86#353: nonzero if a byte's bit was clear */
+    host_arm64_ORRX_REG(block, REG_X14, REG_X14, REG_X15, 0);
+    host_arm64_CMPX_IMM(block, REG_X14, 0);
+    new_dirty = host_arm64_BNE_(block);
 
     /*A page not yet on the evict list goes on it when the store hits code*/
     host_arm64_LDR_IMM_W(block, REG_W12, REG_X4, offsetof(page_t, evict_prev));
@@ -441,6 +448,17 @@ build_store_tracked(codeblock_t *block, int size, uint32_t **to_c)
 
     for (int c = 0; c < 3; c++)
         host_arm64_branch_set_offset(done[c], &block_write_data[block_pos]);
+    host_arm64_MOVZ_IMM(block, REG_X1, 0);
+    host_arm64_RET(block, REG_X30);
+
+    /*KairoX86#353: a dirty bit that was clear: the links to the page's blocks go, and the evict list as above, in C*/
+    host_arm64_branch_set_offset(new_dirty, &block_write_data[block_pos]);
+    host_arm64_STP_PREIDX_X(block, REG_X29, REG_X30, REG_XSP, -16);
+    host_arm64_MOV_REG(block, REG_W1, REG_W0, 0);
+    host_arm64_MOVX_REG(block, REG_X0, REG_X4, 0);
+    host_arm64_MOVZ_IMM(block, REG_W2, bytes);
+    host_arm64_call(block, (void *) k9x_store_new_dirty);
+    host_arm64_LDP_POSTIDX_X(block, REG_X29, REG_X30, REG_XSP, 16);
     host_arm64_MOVZ_IMM(block, REG_X1, 0);
     host_arm64_RET(block, REG_X30);
 
@@ -1286,11 +1304,7 @@ build_link_routine(codeblock_t *block)
     host_arm64_LDR_IMM_W(block, REG_W2, REG_CPUSTATE, rep_state_offset(&cpu_state.pc));
     host_arm64_LDR_IMM_W(block, REG_W3, REG_CPUSTATE, rep_state_offset(&cpu_state.seg_cs.base));
     host_arm64_LDP_IMM_X(block, REG_X5, REG_X15, REG_X0, LINK_SLOT(exit_pc));
-    /*Start the cache miss a check below waits on: the target's page's dirty
-      mask. PRFM never faults, so an empty slot's NULL pointer is harmless;
-      X12 is reloaded before it is used again.*/
-    host_arm64_LDR_IMM_X(block, REG_X12, REG_X0, LINK_SLOT(dirty_mask));
-    host_arm64_PRFM_IMM(block, REG_X12, 0);
+    /* KairoX86#353: no dirty-mask test on the hit path, so no prefetch for it (codegen_link_page_written()) */
     host_arm64_ORRX_REG(block, REG_X4, REG_X2, REG_X3, 32);
     host_arm64_ADD_REG(block, REG_W2, REG_W2, REG_W3, 0);
     host_arm64_MOVX_REG(block, REG_X1, REG_X0, 0);
@@ -1475,10 +1489,7 @@ build_link_routine(codeblock_t *block)
     /*The block lookup and the checks made before running it. X9 =
       block_nr | top_mask << 16 | top << 24 | two_page << 32*/
     host_arm64_LDR_IMM_X(block, REG_X9, REG_X1, LINK_SLOT(block_nr));
-    host_arm64_LDP_IMM_X(block, REG_X10, REG_X13, REG_X1, LINK_SLOT(page_mask));
-    host_arm64_LDR_IMM_X(block, REG_X13, REG_X13, 0);
-    host_arm64_TSTX_REG(block, REG_X13, REG_X10);
-    miss[nr_miss++] = host_arm64_BNE_SHORT_(block);
+    /* KairoX86#353: the first page's dirty mask is not tested: a store into a linked block's code empties its links */
     host_arm64_LDR_IMM_W(block, REG_W10, REG_CPUSTATE, rep_state_offset(&cpu_state.TOP));
     host_arm64_UBFX(block, REG_W13, REG_W9, 16, 8);
     host_arm64_AND_REG(block, REG_W10, REG_W10, REG_W13, 0);
