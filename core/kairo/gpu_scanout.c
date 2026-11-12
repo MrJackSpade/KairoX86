@@ -7,7 +7,6 @@
  *
  * Copyright 2026 MrJackSpade. GPL-2.0-or-later.
  */
-#include <pthread.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -44,8 +43,8 @@ static kairo_gpu_buffer_t *queued_bitmap_gpu;
 static uint32_t            queued_out;    /* the last queued line's first pixel */
 static uint32_t            queued_end;    /* the end of the queued pixels furthest on (they come in order) */
 static unsigned long long  lines_drawn;   /* every line the GPU drew this machine, reported at its end */
-/* Held from kairo_gpu_scan to kairo_gpu_scan_commit, and by a drain */
-static pthread_mutex_t queue_lock = PTHREAD_MUTEX_INITIALIZER;
+/* KairoX86#384: no lock. Every user of the queue runs on the emulation thread (the cards' scanlines and frame
+   hand-overs, the SVGA drain points, a bitmap's end), and a drain waits for its kernel before the queue refills */
 
 void
 kairo_gpu_scan_tables(const uint32_t *t15, const uint32_t *t16)
@@ -80,26 +79,21 @@ drain_locked(void)
 void
 kairo_gpu_scan_drain(void)
 {
-    pthread_mutex_lock(&queue_lock);
     drain_locked();
-    pthread_mutex_unlock(&queue_lock);
 }
 
 void
 kairo_gpu_scan_forget(const void *bitmap)
 {
-    pthread_mutex_lock(&queue_lock);
     if ((line_count != 0) && (queued_bitmap == bitmap))
         drain_locked();
     if (queued_bitmap == bitmap)
         queued_bitmap = NULL;
-    pthread_mutex_unlock(&queue_lock);
 }
 
 void
 kairo_gpu_scan_touch(const void *bitmap, uint32_t start, uint32_t count)
 {
-    pthread_mutex_lock(&queue_lock);
     /* The lines come in order: pixels past the last queued one's end touch none (the usual case, the
        CPU drawing the line about to be queued) */
     if ((line_count != 0) && (queued_bitmap == bitmap) && (start < queued_end)) {
@@ -110,13 +104,11 @@ kairo_gpu_scan_touch(const void *bitmap, uint32_t start, uint32_t count)
                 break;
             }
     }
-    pthread_mutex_unlock(&queue_lock);
 }
 
 void
 kairo_gpu_scan_cut(const void *bitmap, uint32_t start, uint32_t count)
 {
-    pthread_mutex_lock(&queue_lock);
     /* KairoX86#384: as kairo_gpu_scan_touch, pixels at or past queued_end (no queued line ends after it: it only
        grows) cut none, and the usual cut, the overscan beside the line being drawn, is there; the queue isn't walked */
     if ((line_count != 0) && (queued_bitmap == bitmap) && (start < queued_end)) {
@@ -144,7 +136,6 @@ kairo_gpu_scan_cut(const void *bitmap, uint32_t start, uint32_t count)
             }
         }
     }
-    pthread_mutex_unlock(&queue_lock);
 }
 
 void
@@ -152,7 +143,6 @@ kairo_gpu_scan_patch(const void *bitmap, uint32_t start, uint32_t count, const u
                      uint32_t *from, uint32_t *to)
 {
     *from = *to = start;
-    pthread_mutex_lock(&queue_lock);
     if ((line_count != 0) && (queued_bitmap == bitmap)) {
         kairo_gpu_scan_t *queued = lines->data;
         /* The last queued line over these pixels: the one drawn last */
@@ -178,13 +168,6 @@ kairo_gpu_scan_patch(const void *bitmap, uint32_t start, uint32_t count, const u
             break;
         }
     }
-    pthread_mutex_unlock(&queue_lock);
-}
-
-void
-kairo_gpu_scan_commit(void)
-{
-    pthread_mutex_unlock(&queue_lock);
 }
 
 uint32_t *
@@ -196,7 +179,6 @@ kairo_gpu_scan(const void *bitmap, kairo_gpu_buffer_t *bitmap_gpu, uint32_t out,
         fatal("GPU scanout: a line for a bitmap the GPU does not share\n");
     if ((word_count > WORDS) || (palette_count > 256))
         fatal("GPU scanout: a line of %u dwords and %u colours\n", (unsigned) word_count, (unsigned) palette_count);
-    pthread_mutex_lock(&queue_lock);
     if (lines == NULL) {
         lines    = kairo_gpu_buffer(sizeof(kairo_gpu_scan_t) * LINES);
         words    = kairo_gpu_buffer(WORDS * 4);

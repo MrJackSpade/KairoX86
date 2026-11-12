@@ -210,14 +210,16 @@ enum {
    pixel out, drawing count pixels, the first b of them not (a line clipped at its start); returns where its words
    dwords go. palette (palette_count colours,
    at most 256) is kept with it, or none when NULL. A line out of the queue's order (a new frame,
-   another bitmap) drains the queue first, as does a full one. The queue stays locked until
-   kairo_gpu_scan_commit, after the caller wrote the dwords: a drain on another thread (a card handing
-   its frame over from its own) waits for it. */
+   another bitmap) drains the queue first, as does a full one. The queue is the emulation thread's alone
+   (KairoX86#384): every call here and every drain comes from it. */
 uint32_t *kairo_gpu_scan(const void *bitmap, kairo_gpu_buffer_t *bitmap_gpu, uint32_t out, uint32_t kind,
                          uint32_t count, uint32_t words, const uint32_t *palette, uint32_t palette_count, uint32_t a,
                          uint32_t b, uint32_t flags);
-/* The line kairo_gpu_scan gave is written: the queue unlocks. */
-void kairo_gpu_scan_commit(void);
+/* The line kairo_gpu_scan gave is written. Nothing to do: the queue has no lock (KairoX86#384) */
+static inline void
+kairo_gpu_scan_commit(void)
+{
+}
 /* Pixels start to start + count - 1 of bitmap, of the line queued last for them, take the patch when it is drawn
    (hardware cursors and overlays over it: KairoX86#233): pixel k's dwords ax[4k] to ax[4k + 3] (A, X, K, V), with
    the line's key and key_mask (kairo_gpu_scan_t). Returns the pixels the patch took ([*from, *to); none when no

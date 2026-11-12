@@ -6604,6 +6604,16 @@ KAIROX86_LAPIC_ONE_CPU = [
      '    /* KairoX86#434: one active LAPIC is the target whatever CPU the callback names (lapic_current_index gives 0 for\n       every index when the count is 1) */\n    if (dev->active_count == 1)\n        lapic = &dev->lapics[0];\n    else\n        lapic = lapic_current(dev->lapics, dev->active_count,\n                              dev->current_index, dev->current_index_priv);\n    if (lapic == NULL)\n        return NULL;'),
 ]
 
+
+# KairoX86#384: the GPU scan queue is the emulation thread's alone, so it has no lock and kairo_gpu_scan_commit is an
+# inline no-op (core/kairo/gpu_scanout.c).
+KAIROX86_GPU_SCAN_ONE_THREAD = [
+    ('86box/src/include/86box/kairo_gpu.h', 'another bitmap) drains the queue first, as does a full one. The queue stays locked until\n   kairo_gpu_scan_commit, after the caller wrote the dwords: a drain on another thread (a card handing\n   its frame over from its own) waits for it. */',
+     "another bitmap) drains the queue first, as does a full one. The queue is the emulation thread's alone\n   (KairoX86#384): every call here and every drain comes from it. */"),
+    ('86box/src/include/86box/kairo_gpu.h', '/* The line kairo_gpu_scan gave is written: the queue unlocks. */\nvoid kairo_gpu_scan_commit(void);',
+     '/* The line kairo_gpu_scan gave is written. Nothing to do: the queue has no lock (KairoX86#384) */\nstatic inline void\nkairo_gpu_scan_commit(void)\n{\n}'),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -6766,6 +6776,7 @@ PATCHES = {
     'kairox86-sf-exception-none': KAIROX86_SF_EXCEPTION_NONE,
     'kairox86-emu8k-thread': KAIROX86_EMU8K_THREAD,
     'kairox86-lapic-one-cpu': KAIROX86_LAPIC_ONE_CPU,
+    'kairox86-gpu-scan-one-thread': KAIROX86_GPU_SCAN_ONE_THREAD,
 }
 
 ADDED = [
