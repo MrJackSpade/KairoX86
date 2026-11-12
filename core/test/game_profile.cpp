@@ -40,6 +40,8 @@
 //   --until-halt <cs:ip>  a machine that stops halted with interrupts off at cs:ip (as the stop
 //                   reports it, "0000:8003") has run to its end: the run ends there as if its frames
 //                   were done, its hashes and state kept. Prints "halted <frame>".
+//   --states <n>    every n frames, a line "states <frame> <state hash>": the guest's state mid-run (as the
+//                   end's state line), to bisect two runs that diverge to the first frame whose state differs.
 //   --gpu-frames 1  the frames handed over on the GPU, as the app's presenter takes them (KairoX86#384): the four
 //                   slots named in turn, one before each frame. The frames then give no pixels (hashed as 0).
 //                   Fails unless the machine hands its frames over so (Hardware acceleration on, Android).
@@ -358,6 +360,7 @@ int main(int argc, char **argv) {
     std::string commands;
     std::string until_halt;
     bool gpu_frames = false;
+    long states = 0;
     bool slot_hashes = false;
     for (int i = 6; i < argc; ++i) {
         const std::string option = argv[i];
@@ -372,6 +375,7 @@ int main(int argc, char **argv) {
         else if (option == "--runs") runs = std::atol(value.c_str());
         else if (option == "--until-halt") until_halt = value;
         else if (option == "--gpu-frames") gpu_frames = value == "1";
+        else if (option == "--states") states = std::atol(value.c_str());
         else if (option == "--slot-hashes") slot_hashes = value == "1";
         else if (option == "--media") {
             const size_t first = value.find(':'), second = first == std::string::npos ? first : value.find(':', first + 1);
@@ -508,6 +512,8 @@ int main(int argc, char **argv) {
                 if (audio_out && std::fwrite(audio.data(), 4, got, audio_out) != got) return fail("cannot write " + audio_path);
                 sound = hash(reinterpret_cast<const uint8_t *>(audio.data()), size_t(got) * 4, sound);
             }
+            if (states > 0 && frame % states == 0)
+                std::printf("states %ld %016llx\n", frame, (unsigned long long) machine->state());
             uint32_t width = 0, height = 0;
             const uint8_t *pixels = machine->frame(width, height);
             if (slot_hashes) {
