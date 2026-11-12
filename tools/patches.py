@@ -6596,6 +6596,14 @@ KAIROX86_EMU8K_THREAD = [
      '    emu8k->hwcf1 = 0x59;\n    emu8k->hwcf2 = 0x20;\n    /* Initial state is muted. 0x04 is unmuted. */\n    emu8k->hwcf3 = 0x00;\n    emu8k_synth_start(emu8k); /* KairoX86#398 */\n}'),
 ]
 
+
+# KairoX86#434: with one active local APIC, the register handlers' target is lapics[0], not looked up through the
+# selected-CPU callback per access (which gives it for every index when the count is 1).
+KAIROX86_LAPIC_ONE_CPU = [
+    ('86box/src/lapic_mmio.c', '    lapic = lapic_current(dev->lapics, dev->active_count,\n                          dev->current_index, dev->current_index_priv);\n    if (lapic == NULL)\n        return NULL;',
+     '    /* KairoX86#434: one active LAPIC is the target whatever CPU the callback names (lapic_current_index gives 0 for\n       every index when the count is 1) */\n    if (dev->active_count == 1)\n        lapic = &dev->lapics[0];\n    else\n        lapic = lapic_current(dev->lapics, dev->active_count,\n                              dev->current_index, dev->current_index_priv);\n    if (lapic == NULL)\n        return NULL;'),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -6757,6 +6765,7 @@ PATCHES = {
     'kairox86-lapic-highest-clz': KAIROX86_LAPIC_HIGHEST_CLZ,
     'kairox86-sf-exception-none': KAIROX86_SF_EXCEPTION_NONE,
     'kairox86-emu8k-thread': KAIROX86_EMU8K_THREAD,
+    'kairox86-lapic-one-cpu': KAIROX86_LAPIC_ONE_CPU,
 }
 
 ADDED = [

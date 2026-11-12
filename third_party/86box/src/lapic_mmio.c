@@ -245,8 +245,13 @@ lapic_mmio_current_target(lapic_mmio_device_t *dev, uint32_t addr, uint32_t *reg
     if ((dev == NULL) || (dev->lapics == NULL))
         return NULL;
 
-    lapic = lapic_current(dev->lapics, dev->active_count,
-                          dev->current_index, dev->current_index_priv);
+    /* KairoX86#434: one active LAPIC is the target whatever CPU the callback names (lapic_current_index gives 0 for
+       every index when the count is 1) */
+    if (dev->active_count == 1)
+        lapic = &dev->lapics[0];
+    else
+        lapic = lapic_current(dev->lapics, dev->active_count,
+                              dev->current_index, dev->current_index_priv);
     if (lapic == NULL)
         return NULL;
 
