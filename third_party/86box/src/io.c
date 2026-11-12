@@ -59,6 +59,8 @@ typedef struct io_trap_s {
 
 uint8_t initialized = 0;
 io_t   *io[NPORTS];
+/* KairoX86#432: the machine charges io_delay on every port read (the IBM 5550 and 5535), worked out by io_init */
+static int io_delay_every_read;
 io_t   *io_last[NPORTS];
 
 /* KairoX86#380: by port, the one handler that takes a byte read (inb) or write (outb), with its priv: nr 0 for none, 1
@@ -152,6 +154,7 @@ io_init(void)
     }
 
     memset(io_turbo_map, 0, sizeof(io_turbo_map));
+    io_delay_every_read = (machines[machine].init == machine_xt_ibm5550_init) || (machines[machine].init == machine_xt_ibm5535_init); /* KairoX86#432 */
 
     for (uint32_t c = 0; c < NPORTS; c++) {
         if (io_last[c]) {
@@ -516,7 +519,7 @@ inb(uint16_t port)
             amstrad_latch = AMSTRAD_SW9 | 0x80000000;
     }
 
-    if (!found || (machines[machine].init == machine_xt_ibm5550_init) || (machines[machine].init == machine_xt_ibm5535_init))
+    if (!found || io_delay_every_read /* KairoX86#432 */)
         cycles -= io_delay;
 
     /* TriGem 486-BIOS MHz output. */
@@ -686,7 +689,7 @@ inw(uint16_t port)
             amstrad_latch = AMSTRAD_SW9 | 0x80000000;
     }
 
-    if (!found || (machines[machine].init == machine_xt_ibm5550_init) || (machines[machine].init == machine_xt_ibm5535_init))
+    if (!found || io_delay_every_read /* KairoX86#432 */)
         cycles -= io_delay;
 
     io_cycle = 0;
@@ -890,7 +893,7 @@ inl(uint16_t port)
             amstrad_latch = AMSTRAD_SW9 | 0x80000000;
     }
 
-    if (!found || (machines[machine].init == machine_xt_ibm5550_init) || (machines[machine].init == machine_xt_ibm5535_init))
+    if (!found || io_delay_every_read /* KairoX86#432 */)
         cycles -= io_delay;
 
     io_cycle = 0;

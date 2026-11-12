@@ -6537,6 +6537,22 @@ KAIROX86_WALK_AD_CHANGED = [
      '    /* KairoX86#368: each bit only when it is not set already (temp2 the PDE, temp the PTE, as read) */\n    if (!(temp2 & 0x20))\n        rammap(addr2) |= 0x20;\n    if ((temp & (rw ? 0x60 : 0x20)) != (rw ? 0x60 : 0x20))\n        rammap((temp2 & ~0xfff) + ((addr >> 10) & 0xffc)) |= (rw ? 0x60 : 0x20);\n\n    return (uint64_t) ((temp & ~0xfff) + (addr & 0xfff));'),
 ]
 
+
+# KairoX86#432: inb/inw/inl read io_delay_every_read, worked out by io_init, instead of comparing the machine's init
+# function against the IBM 5550's and 5535's on every access.
+KAIROX86_IO_DELAY_MACHINE = [
+    ('86box/src/io.c', '        }\n    }\n\n    if (amstrad_latch & 0x80000000) {\n        if (port & 0x80)\n            amstrad_latch = AMSTRAD_NOLATCH | 0x80000000;\n        else if (port & 0x4000)\n            amstrad_latch = AMSTRAD_SW10 | 0x80000000;\n        else\n            amstrad_latch = AMSTRAD_SW9 | 0x80000000;\n    }\n\n    if (!found || (machines[machine].init == machine_xt_ibm5550_init) || (machines[machine].init == machine_xt_ibm5535_init))',
+     '        }\n    }\n\n    if (amstrad_latch & 0x80000000) {\n        if (port & 0x80)\n            amstrad_latch = AMSTRAD_NOLATCH | 0x80000000;\n        else if (port & 0x4000)\n            amstrad_latch = AMSTRAD_SW10 | 0x80000000;\n        else\n            amstrad_latch = AMSTRAD_SW9 | 0x80000000;\n    }\n\n    if (!found || io_delay_every_read /* KairoX86#432 */)'),
+    ('86box/src/io.c', '        ret = (ret8[1] << 8) | ret8[0];\n    }\n\n    if (amstrad_latch & 0x80000000) {\n        if (port & 0x80)\n            amstrad_latch = AMSTRAD_NOLATCH | 0x80000000;\n        else if (port & 0x4000)\n            amstrad_latch = AMSTRAD_SW10 | 0x80000000;\n        else\n            amstrad_latch = AMSTRAD_SW9 | 0x80000000;\n    }\n\n    if (!found || (machines[machine].init == machine_xt_ibm5550_init) || (machines[machine].init == machine_xt_ibm5535_init))',
+     '        ret = (ret8[1] << 8) | ret8[0];\n    }\n\n    if (amstrad_latch & 0x80000000) {\n        if (port & 0x80)\n            amstrad_latch = AMSTRAD_NOLATCH | 0x80000000;\n        else if (port & 0x4000)\n            amstrad_latch = AMSTRAD_SW10 | 0x80000000;\n        else\n            amstrad_latch = AMSTRAD_SW9 | 0x80000000;\n    }\n\n    if (!found || io_delay_every_read /* KairoX86#432 */)'),
+    ('86box/src/io.c', '        ret = (ret8[3] << 24) | (ret8[2] << 16) | (ret8[1] << 8) | ret8[0];\n    }\n\n    if (amstrad_latch & 0x80000000) {\n        if (port & 0x80)\n            amstrad_latch = AMSTRAD_NOLATCH | 0x80000000;\n        else if (port & 0x4000)\n            amstrad_latch = AMSTRAD_SW10 | 0x80000000;\n        else\n            amstrad_latch = AMSTRAD_SW9 | 0x80000000;\n    }\n\n    if (!found || (machines[machine].init == machine_xt_ibm5550_init) || (machines[machine].init == machine_xt_ibm5535_init))',
+     '        ret = (ret8[3] << 24) | (ret8[2] << 16) | (ret8[1] << 8) | ret8[0];\n    }\n\n    if (amstrad_latch & 0x80000000) {\n        if (port & 0x80)\n            amstrad_latch = AMSTRAD_NOLATCH | 0x80000000;\n        else if (port & 0x4000)\n            amstrad_latch = AMSTRAD_SW10 | 0x80000000;\n        else\n            amstrad_latch = AMSTRAD_SW9 | 0x80000000;\n    }\n\n    if (!found || io_delay_every_read /* KairoX86#432 */)'),
+    ('86box/src/io.c', 'uint8_t initialized = 0;\nio_t   *io[NPORTS];\n',
+     'uint8_t initialized = 0;\nio_t   *io[NPORTS];\n/* KairoX86#432: the machine charges io_delay on every port read (the IBM 5550 and 5535), worked out by io_init */\nstatic int io_delay_every_read;\n'),
+    ('86box/src/io.c', '    memset(io_turbo_map, 0, sizeof(io_turbo_map));\n',
+     '    memset(io_turbo_map, 0, sizeof(io_turbo_map));\n    io_delay_every_read = (machines[machine].init == machine_xt_ibm5550_init) || (machines[machine].init == machine_xt_ibm5535_init); /* KairoX86#432 */\n'),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -6694,6 +6710,7 @@ PATCHES = {
     'kairox86-compiled-fldcw': KAIROX86_COMPILED_FLDCW,
     'kairox86-io-direct': KAIROX86_IO_DIRECT,
     'kairox86-walk-ad-changed': KAIROX86_WALK_AD_CHANGED,
+    'kairox86-io-delay-machine': KAIROX86_IO_DELAY_MACHINE,
 }
 
 ADDED = [
