@@ -6637,6 +6637,14 @@ KAIROX86_VOODOO_STATUS_SETTLE = [
      "        switch (addr & 0x3fc) {\n            case SST_status:\n                {\n                    /* KairoX86#436: the threads' progress is not the guest's to see */\n                    voodoo_settle(voodoo);\n                    if (SLI_ENABLED && (voodoo->type != VOODOO_2))\n                        voodoo_settle((voodoo == voodoo->set->voodoos[0]) ? voodoo->set->voodoos[1] : voodoo->set->voodoos[0]);\n                    int fifo_entries = FIFO_ENTRIES;"),
 ]
 
+
+# KairoX86#436's class: the Banshee/Voodoo3's command FIFO read pointers, depths and status settle the FIFO and render
+# threads before they are read.
+KAIROX86_VOODOO_CMDFIFO_SETTLE = [
+    ('86box/src/video/vid_voodoo_banshee.c', 'banshee_cmd_read(banshee_t *banshee, uint32_t addr)\n{\n    const voodoo_t *voodoo = banshee->voodoo;\n    uint32_t        ret    = 0xffffffff;\n\n    switch (addr & 0x1fc) {',
+     "banshee_cmd_read(banshee_t *banshee, uint32_t addr)\n{\n    const voodoo_t *voodoo = banshee->voodoo;\n    uint32_t        ret    = 0xffffffff;\n\n    /* The command FIFOs' read pointers, depths and status are moved by the FIFO thread: settled first, so the guest\n       never sees how far it had got (KairoX86#436) */\n    switch (addr & 0x1fc) {\n        case cmdRdPtrL0:\n        case cmdFifoDepth0:\n        case cmdStatus0:\n        case cmdRdPtrL1:\n        case cmdFifoDepth1:\n        case cmdStatus1:\n            voodoo_settle(banshee->voodoo);\n            break;\n        default:\n            break;\n    }\n\n    switch (addr & 0x1fc) {"),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -6802,6 +6810,7 @@ PATCHES = {
     'kairox86-gpu-scan-one-thread': KAIROX86_GPU_SCAN_ONE_THREAD,
     'kairox86-gpu-cursor-probe-span': KAIROX86_GPU_CURSOR_PROBE_SPAN,
     'kairox86-voodoo-status-settle': KAIROX86_VOODOO_STATUS_SETTLE,
+    'kairox86-voodoo-cmdfifo-settle': KAIROX86_VOODOO_CMDFIFO_SETTLE,
 }
 
 ADDED = [

@@ -1354,6 +1354,21 @@ banshee_cmd_read(banshee_t *banshee, uint32_t addr)
     const voodoo_t *voodoo = banshee->voodoo;
     uint32_t        ret    = 0xffffffff;
 
+    /* The command FIFOs' read pointers, depths and status are moved by the FIFO thread: settled first, so the guest
+       never sees how far it had got (KairoX86#436) */
+    switch (addr & 0x1fc) {
+        case cmdRdPtrL0:
+        case cmdFifoDepth0:
+        case cmdStatus0:
+        case cmdRdPtrL1:
+        case cmdFifoDepth1:
+        case cmdStatus1:
+            voodoo_settle(banshee->voodoo);
+            break;
+        default:
+            break;
+    }
+
     switch (addr & 0x1fc) {
         case Agp_agpHostAddressLow:
             ret = banshee->agpHostAddressLow;
