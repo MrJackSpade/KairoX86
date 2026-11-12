@@ -462,6 +462,10 @@ voodoo_readl(uint32_t addr, void *priv)
         switch (addr & 0x3fc) {
             case SST_status:
                 {
+                    /* KairoX86#436: the threads' progress is not the guest's to see */
+                    voodoo_settle(voodoo);
+                    if (SLI_ENABLED && (voodoo->type != VOODOO_2))
+                        voodoo_settle((voodoo == voodoo->set->voodoos[0]) ? voodoo->set->voodoos[1] : voodoo->set->voodoos[0]);
                     int fifo_entries = FIFO_ENTRIES;
                     int swap_count   = voodoo->swap_count;
                     int written      = voodoo->cmd_written + voodoo->cmd_written_fifo + voodoo->cmd_written_fifo_2;

@@ -6624,6 +6624,19 @@ KAIROX86_GPU_CURSOR_PROBE_SPAN = [
      "    const hwcursor_t hw       = svga->hwcursor_latch;\n    const hwcursor_t dac      = svga->dac_hwcursor_latch;\n    uint32_t *const  real_row = bitmap->line[row & 2047];\n    if (!kairo_cursor_filled) {\n        for (int x = 0; x < KAIRO_CURSOR_N; x++) {\n            kairo_cursor_pattern[x] = 0x5a3cc3a5u ^ ((uint32_t) x * 0x9e3779b1u);\n            for (int k = 0; k < 3; k++)\n                kairo_cursor_rows[k][x] = kairo_cursor_fill(k, x);\n        }\n        kairo_cursor_filled = 1;\n    }\n    for (int k = 0; k < 3; k++) {\n        svga->hwcursor_latch     = hw;\n        svga->dac_hwcursor_latch = dac;\n        bitmap->line[row & 2047] = kairo_cursor_rows[k];\n        svga_cursor_draw_all(svga, row & 2047);\n        bitmap->line[row & 2047] = real_row;\n    }\n    /* Pixels outside the span the drawings changed are as filled in all three rows (X 0, A all ones): they pass the\n       check and the patch leaves them */\n    int first[3], last[3];\n    int lo = KAIRO_CURSOR_N, hi = -1;\n    for (int k = 0; k < 3; k++) {\n        kairo_cursor_changed(k, &first[k], &last[k]);\n        if (first[k] < lo)\n            lo = first[k];\n        if (last[k] > hi)\n            hi = last[k];\n    }\n    int patched = 1;\n    kairo_cursor_lo = w;\n    kairo_cursor_hi = 0;\n    for (int x = lo; x < ((hi < w) ? (hi + 1) : w); x++) {\n        const uint32_t xr = kairo_cursor_rows[0][x];\n        const uint32_t a  = kairo_cursor_rows[1][x] ^ xr;\n        if (kairo_cursor_rows[2][x] != ((kairo_cursor_pattern[x] & a) ^ xr)) {\n            /* A cursor drawing of another kind (it blends): the line and its cursors stay the CPU's */\n            patched = 0;\n            break;\n        }\n        kairo_cursor_ax[2 * x]     = a;\n        kairo_cursor_ax[2 * x + 1] = xr;\n        if ((a != 0xffffffffu) || (xr != 0)) {\n            if (x < kairo_cursor_lo)\n                kairo_cursor_lo = x;\n            kairo_cursor_hi = x + 1;\n        }\n    }\n    /* Past the row: a cursor drawn beyond the bitmap's width writes into the next row, which a patch cannot follow */\n    if ((last[0] >= w) || (last[1] >= w))\n        patched = 0;\n    /* The rows filled again for the next probe */\n    for (int k = 0; k < 3; k++)\n        for (int x = first[k]; x <= last[k]; x++)\n            kairo_cursor_rows[k][x] = kairo_cursor_fill(k, x);\n    if (!patched) {\n        svga->hwcursor_latch     = hw;\n        svga->dac_hwcursor_latch = dac;\n    }\n    return patched;\n}"),
 ]
 
+
+# KairoX86#436: the 3dfx status reads that did not flush (the Banshee/Voodoo3's I/O Init_status and 3D window, the
+# Voodoo Graphics and Voodoo2's SST_status) settle the FIFO and render threads first, so the guest never sees how far
+# they had got.
+KAIROX86_VOODOO_STATUS_SETTLE = [
+    ('86box/src/video/vid_voodoo_banshee.c', '    switch (addr & 0xff) {\n        case Init_status:\n            ret = banshee_status(banshee);',
+     "    switch (addr & 0xff) {\n        case Init_status:\n            voodoo_settle(banshee->voodoo); /* KairoX86#436: the threads' progress is not the guest's to see */\n            ret = banshee_status(banshee);"),
+    ('86box/src/video/vid_voodoo_banshee.c', '        case 0x0500000: /*3D registers*/\n            switch (addr & 0x3fc) {\n                case SST_status:\n                    ret = banshee_status(banshee);',
+     "        case 0x0500000: /*3D registers*/\n            switch (addr & 0x3fc) {\n                case SST_status:\n                    voodoo_settle(voodoo); /* KairoX86#436: the threads' progress is not the guest's to see */\n                    ret = banshee_status(banshee);"),
+    ('86box/src/video/vid_voodoo.c', '        switch (addr & 0x3fc) {\n            case SST_status:\n                {\n                    int fifo_entries = FIFO_ENTRIES;',
+     "        switch (addr & 0x3fc) {\n            case SST_status:\n                {\n                    /* KairoX86#436: the threads' progress is not the guest's to see */\n                    voodoo_settle(voodoo);\n                    if (SLI_ENABLED && (voodoo->type != VOODOO_2))\n                        voodoo_settle((voodoo == voodoo->set->voodoos[0]) ? voodoo->set->voodoos[1] : voodoo->set->voodoos[0]);\n                    int fifo_entries = FIFO_ENTRIES;"),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -6788,6 +6801,7 @@ PATCHES = {
     'kairox86-lapic-one-cpu': KAIROX86_LAPIC_ONE_CPU,
     'kairox86-gpu-scan-one-thread': KAIROX86_GPU_SCAN_ONE_THREAD,
     'kairox86-gpu-cursor-probe-span': KAIROX86_GPU_CURSOR_PROBE_SPAN,
+    'kairox86-voodoo-status-settle': KAIROX86_VOODOO_STATUS_SETTLE,
 }
 
 ADDED = [

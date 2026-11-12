@@ -1172,6 +1172,7 @@ banshee_ext_inl(uint16_t addr, void *priv)
 
     switch (addr & 0xff) {
         case Init_status:
+            voodoo_settle(banshee->voodoo); /* KairoX86#436: the threads' progress is not the guest's to see */
             ret = banshee_status(banshee);
 #if 0
             banshee_log("Read status reg! %04x(%08x):%08x\n", CS, cs, cpu_state.pc);
@@ -1529,6 +1530,7 @@ banshee_reg_readl(uint32_t addr, void *priv)
         case 0x0500000: /*3D registers*/
             switch (addr & 0x3fc) {
                 case SST_status:
+                    voodoo_settle(voodoo); /* KairoX86#436: the threads' progress is not the guest's to see */
                     ret = banshee_status(banshee);
                     break;
 
