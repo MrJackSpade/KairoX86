@@ -1,4 +1,5 @@
 #include <inttypes.h>
+#include <stdatomic.h> /* KairoX86#398 */
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -17,6 +18,7 @@
 #include <86box/sound.h>
 #include <86box/snd_emu8k.h>
 #include <86box/timer.h>
+#include <86box/thread.h> /* KairoX86#398 */
 #include <86box/plat_unused.h>
 
 #if !defined FILTER_INITIAL && !defined FILTER_MOOG && !defined FILTER_CONSTANT
@@ -395,11 +397,150 @@ EMU8K_WRITE(emu8k_t *emu8k, uint32_t addr, uint16_t val)
     emu8k->ram[addr - EMU8K_RAM_MEM_START] = val;
 }
 
+/* KairoX86#398: the synthesis thread. The emulation thread queues each register write at the sample it happens at,
+   and each buffer's end; the thread generates up to that sample (emu8k_update_to), then applies the write
+   (emu8k_write): the same calls, in the same order and the same chunks, as when emu8k_outw updated first itself. */
+#define EMU8K_SYNTH_OPS 4096 /* a power of 2 */
+
+enum { EMU8K_OP_ADVANCE, EMU8K_OP_WRITE };
+
+typedef struct emu8k_synth_op_t {
+    int      pos;
+    uint16_t kind;
+    uint16_t addr;
+    uint16_t val;
+} emu8k_synth_op_t;
+
+typedef struct emu8k_synth_t {
+    thread_t        *thread;
+    event_t         *wake;
+    event_t         *idle;
+    atomic_uint      head; /* next operation queued, emulation thread */
+    atomic_uint      tail; /* next operation applied, synthesis thread */
+    atomic_int       quit;
+    emu8k_synth_op_t ops[EMU8K_SYNTH_OPS];
+} emu8k_synth_t;
+
+static void emu8k_update_to(emu8k_t *emu8k, int end);
+static void emu8k_write(emu8k_t *emu8k, uint16_t addr, uint16_t val);
+
+static void
+emu8k_synth_thread(void *priv)
+{
+    emu8k_t       *emu8k = (emu8k_t *) priv;
+    emu8k_synth_t *s     = (emu8k_synth_t *) emu8k->k_synth;
+
+    for (;;) {
+        thread_wait_event(s->wake, -1);
+        thread_reset_event(s->wake);
+        for (;;) {
+            const unsigned tail = atomic_load_explicit(&s->tail, memory_order_relaxed);
+
+            if (tail == atomic_load_explicit(&s->head, memory_order_acquire))
+                break;
+            const emu8k_synth_op_t *op = &s->ops[tail & (EMU8K_SYNTH_OPS - 1)];
+            emu8k_update_to(emu8k, op->pos);
+            if (op->kind == EMU8K_OP_WRITE)
+                emu8k_write(emu8k, op->addr, op->val);
+            atomic_store_explicit(&s->tail, tail + 1, memory_order_release);
+        }
+        thread_set_event(s->idle);
+        if (atomic_load_explicit(&s->quit, memory_order_acquire))
+            return;
+    }
+}
+
+/* Waits until the thread has applied everything queued: the chip and the buffer are then as the old catch-ups left
+   them, and the emulation thread may touch them (the thread touches them only while it has work) */
+static void
+emu8k_synth_wait(emu8k_synth_t *s)
+{
+    while (atomic_load_explicit(&s->tail, memory_order_acquire) != atomic_load_explicit(&s->head, memory_order_relaxed)) {
+        thread_reset_event(s->idle);
+        if (atomic_load_explicit(&s->tail, memory_order_acquire) == atomic_load_explicit(&s->head, memory_order_relaxed))
+            break;
+        thread_set_event(s->wake);
+        thread_wait_event(s->idle, -1);
+    }
+}
+
+/* Queues an operation at the present sample, and keeps the emulation thread's copy of what the update and the
+   pointer will be: emu8k_update_to advances pos and WC by the samples to its end, when it is past pos */
+static void
+emu8k_synth_push(emu8k_t *emu8k, uint16_t kind, uint16_t addr, uint16_t val)
+{
+    emu8k_synth_t *s    = (emu8k_synth_t *) emu8k->k_synth;
+    const unsigned head = atomic_load_explicit(&s->head, memory_order_relaxed);
+    const int      pos  = wavetable_pos_global;
+
+    if ((head - atomic_load_explicit(&s->tail, memory_order_acquire)) == EMU8K_SYNTH_OPS)
+        emu8k_synth_wait(s);
+    if (pos > emu8k->k_shadow_pos) {
+        emu8k->k_wc_shadow += pos - emu8k->k_shadow_pos;
+        emu8k->k_shadow_pos = pos;
+    }
+    if ((kind == EMU8K_OP_WRITE) && ((addr & 0xF02) == 0xE02)) {
+        emu8k->k_shadow_voice = (val & 31);
+        emu8k->k_shadow_reg   = ((val >> 5) & 7);
+    }
+    emu8k_synth_op_t *op = &s->ops[head & (EMU8K_SYNTH_OPS - 1)];
+    op->pos  = pos;
+    op->kind = kind;
+    op->addr = addr;
+    op->val  = val;
+    /* A thread still working finds it itself; an idle one is woken */
+    const unsigned waiting = head + 1 - atomic_load_explicit(&s->tail, memory_order_acquire);
+    atomic_store_explicit(&s->head, head + 1, memory_order_release);
+    if (waiting == 1)
+        thread_set_event(s->wake);
+}
+
+static void
+emu8k_synth_start(emu8k_t *emu8k)
+{
+    emu8k_synth_t *s = (emu8k_synth_t *) calloc(1, sizeof(emu8k_synth_t));
+
+    if (s == NULL)
+        fatal("EMU8K: no memory for the synthesis thread\n");
+    s->wake               = thread_create_event();
+    s->idle               = thread_create_event();
+    emu8k->k_synth        = s;
+    emu8k->k_shadow_pos   = emu8k->pos;
+    emu8k->k_wc_shadow    = emu8k->wc;
+    emu8k->k_shadow_reg   = emu8k->cur_reg;
+    emu8k->k_shadow_voice = emu8k->cur_voice;
+    s->thread             = thread_create(emu8k_synth_thread, emu8k);
+}
+
+static void
+emu8k_synth_stop(emu8k_t *emu8k)
+{
+    emu8k_synth_t *s = (emu8k_synth_t *) emu8k->k_synth;
+
+    if (s == NULL)
+        return;
+    emu8k_synth_wait(s);
+    atomic_store_explicit(&s->quit, 1, memory_order_release);
+    thread_set_event(s->wake);
+    thread_wait(s->thread);
+    thread_destroy_event(s->wake);
+    thread_destroy_event(s->idle);
+    free(s);
+    emu8k->k_synth = NULL;
+}
+
 uint16_t
 emu8k_inw(uint16_t addr, void *priv)
 {
     emu8k_t *emu8k = (emu8k_t *) priv;
     uint16_t ret   = 0xffff;
+
+    /* KairoX86#398: WC as the emulation thread keeps it; any other read once the thread has caught up */
+    if (emu8k->k_synth != NULL) {
+        if (((addr & 0xF02) == 0xA02) && (emu8k->k_shadow_reg == 1) && (emu8k->k_shadow_voice == 27))
+            return emu8k->k_wc_shadow;
+        emu8k_synth_wait((emu8k_synth_t *) emu8k->k_synth);
+    }
 
 #ifdef EMU8K_DEBUG_REGISTERS
     if (addr == 0xE22) {
@@ -793,9 +934,19 @@ emu8k_outw(uint16_t addr, uint16_t val, void *priv)
 {
     emu8k_t *emu8k = (emu8k_t *) priv;
 
-    /*TODO: I would like to not call this here, but i found it was needed or else cubic player would not finish opening (take a looot more of time than usual).
-     * Basically, being here means that the audio is generated in the emulation thread, instead of the audio thread.*/
+    /* KairoX86#398: queued for the synthesis thread, which updates first and then applies it */
+    if (emu8k->k_synth != NULL) {
+        emu8k_synth_push(emu8k, EMU8K_OP_WRITE, addr, val);
+        return;
+    }
     emu8k_update(emu8k);
+    emu8k_write(emu8k, addr, val);
+}
+
+/* KairoX86#398: a register write, after the update to its sample (the synthesis thread's, or emu8k_outw's) */
+static void
+emu8k_write(emu8k_t *emu8k, uint16_t addr, uint16_t val)
+{
 
 #ifdef EMU8K_DEBUG_REGISTERS
     if (addr == 0xE22) {
@@ -1755,13 +1906,26 @@ int32_t old_pitch[32] = { 0 };
 int32_t old_cut[32]   = { 0 };
 int32_t old_vol[32]   = { 0 };
 #endif
+/* KairoX86#398: the buffer up to the present: the synthesis thread's work queued and waited for */
 void
 emu8k_update(emu8k_t *emu8k)
 {
-    if (emu8k->pos >= wavetable_pos_global)
+    if (emu8k->k_synth != NULL) {
+        emu8k_synth_push(emu8k, EMU8K_OP_ADVANCE, 0, 0);
+        emu8k_synth_wait((emu8k_synth_t *) emu8k->k_synth);
+        return;
+    }
+    emu8k_update_to(emu8k, wavetable_pos_global);
+}
+
+/* The samples from pos up to end (KairoX86#398: the old emu8k_update, its end a parameter) */
+static void
+emu8k_update_to(emu8k_t *emu8k, const int end)
+{
+    if (emu8k->pos >= end)
         return;
 
-    const int      num_samples = wavetable_pos_global - emu8k->pos;
+    const int      num_samples = end - emu8k->pos;
     int32_t       *buf;
     emu8k_voice_t *emu_voice;
     int            pos;
@@ -1775,7 +1939,7 @@ emu8k_update(emu8k_t *emu8k)
         if (emu_voice->env_engine_on || emu_voice->cvcf_curr_volume)
             num_active++;
 
-        for (pos = emu8k->pos; pos < wavetable_pos_global; pos++) {
+        for (pos = emu8k->pos; pos < end; pos++) {
             int32_t dat;
 
             if (emu_voice->cvcf_curr_volume) {
@@ -2126,12 +2290,16 @@ emu8k_update(emu8k_t *emu8k)
     /* Update EMU clock. */
     emu8k->wc += num_samples;
 
-    emu8k->pos = wavetable_pos_global;
+    emu8k->pos = end;
 }
 
 void
 emu8k_reset_buffer(emu8k_t *emu8k)
 {
+    /* KairoX86#398: with the thread idle; its copy of pos follows */
+    if (emu8k->k_synth != NULL)
+        emu8k_synth_wait((emu8k_synth_t *) emu8k->k_synth);
+    emu8k->k_shadow_pos = 0;
     emu8k->pos = 0;
     memset(emu8k->buffer, 0, sizeof(emu8k->buffer));
     memset(emu8k->chorus_in_buffer, 0, sizeof(emu8k->chorus_in_buffer));
@@ -2377,11 +2545,13 @@ emu8k_init(emu8k_t *emu8k, uint16_t emu_addr, int onboard_ram)
     emu8k->hwcf2 = 0x20;
     /* Initial state is muted. 0x04 is unmuted. */
     emu8k->hwcf3 = 0x00;
+    emu8k_synth_start(emu8k); /* KairoX86#398 */
 }
 
 void
 emu8k_close(emu8k_t *emu8k)
 {
+    emu8k_synth_stop(emu8k); /* KairoX86#398 */
     if (emu8k->rom)
         free(emu8k->rom);
     if (emu8k->ram)

@@ -400,6 +400,14 @@ typedef struct emu8k_t {
     int32_t buffer[WTBUFLEN * 2];
 
     uint16_t addr;
+
+    /* KairoX86#398: the synthesis thread, and what the emulation thread keeps of the state it queues: the sample
+       position and WC as of the last event queued, and the pointer's register and voice */
+    void    *k_synth;
+    int      k_shadow_pos;
+    uint16_t k_wc_shadow;
+    int      k_shadow_reg;
+    int      k_shadow_voice;
 } emu8k_t;
 
 void emu8k_change_addr(emu8k_t *emu8k, uint16_t emu_addr);
