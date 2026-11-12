@@ -1453,10 +1453,57 @@ svga_kairo_touch_cursor(svga_t *svga, uint32_t addr)
    first row's, A the second's XOR X, which the third must agree with. The cursor latches are put back between the
    drawings, so the card's state afterwards is that of one drawing. */
 #define KAIRO_CURSOR_ROW 8192
-static uint32_t kairo_cursor_rows[3][KAIRO_CURSOR_ROW + 256];
+#define KAIRO_CURSOR_N   (KAIRO_CURSOR_ROW + 256)
+static uint32_t kairo_cursor_rows[3][KAIRO_CURSOR_N];
 static uint32_t kairo_cursor_ax[2 * KAIRO_CURSOR_ROW];
 static int      kairo_cursor_lo;
 static int      kairo_cursor_hi;
+/* KairoX86#384: the rows stay filled between probes (row 2 with this pattern), only the span a probe's drawings
+   changed put back */
+static uint32_t kairo_cursor_pattern[KAIRO_CURSOR_N];
+static int      kairo_cursor_filled;
+
+/* A probe row's own value at x: all zero bits, all one bits, or the pattern */
+static inline uint32_t
+kairo_cursor_fill(int k, int x)
+{
+    return (k == 0) ? 0 : (k == 1) ? 0xffffffffu : kairo_cursor_pattern[x];
+}
+
+/* The first and last pixels of probe row k a drawing changed (*first > *last when none), compared 16 at a time */
+static void
+kairo_cursor_changed(int k, int *first, int *last)
+{
+    const uint32_t *probe = kairo_cursor_rows[k];
+    int             x;
+
+    for (x = 0; x < KAIRO_CURSOR_N; x += 16) {
+        uint32_t diff = 0;
+        for (int j = 0; j < 16; j++)
+            diff |= probe[x + j] ^ kairo_cursor_fill(k, x + j);
+        if (diff != 0)
+            break;
+    }
+    if (x == KAIRO_CURSOR_N) {
+        *first = KAIRO_CURSOR_N;
+        *last  = -1;
+        return;
+    }
+    while (probe[x] == kairo_cursor_fill(k, x))
+        x++;
+    *first = x;
+    for (x = KAIRO_CURSOR_N - 16; x >= 0; x -= 16) {
+        uint32_t diff = 0;
+        for (int j = 0; j < 16; j++)
+            diff |= probe[x + j] ^ kairo_cursor_fill(k, x + j);
+        if (diff != 0)
+            break;
+    }
+    x += 15;
+    while (probe[x] == kairo_cursor_fill(k, x))
+        x--;
+    *last = x;
+}
 
 static void
 svga_cursor_draw_all(svga_t *svga, int row)
@@ -1490,26 +1537,42 @@ svga_cursor_probe(svga_t *svga)
     const hwcursor_t hw       = svga->hwcursor_latch;
     const hwcursor_t dac      = svga->dac_hwcursor_latch;
     uint32_t *const  real_row = bitmap->line[row & 2047];
+    if (!kairo_cursor_filled) {
+        for (int x = 0; x < KAIRO_CURSOR_N; x++) {
+            kairo_cursor_pattern[x] = 0x5a3cc3a5u ^ ((uint32_t) x * 0x9e3779b1u);
+            for (int k = 0; k < 3; k++)
+                kairo_cursor_rows[k][x] = kairo_cursor_fill(k, x);
+        }
+        kairo_cursor_filled = 1;
+    }
     for (int k = 0; k < 3; k++) {
-        uint32_t *probe = kairo_cursor_rows[k];
-        for (int x = 0; x < KAIRO_CURSOR_ROW + 256; x++)
-            probe[x] = (k == 0) ? 0 : (k == 1) ? 0xffffffffu : (0x5a3cc3a5u ^ ((uint32_t) x * 0x9e3779b1u));
         svga->hwcursor_latch     = hw;
         svga->dac_hwcursor_latch = dac;
-        bitmap->line[row & 2047] = probe;
+        bitmap->line[row & 2047] = kairo_cursor_rows[k];
         svga_cursor_draw_all(svga, row & 2047);
         bitmap->line[row & 2047] = real_row;
     }
+    /* Pixels outside the span the drawings changed are as filled in all three rows (X 0, A all ones): they pass the
+       check and the patch leaves them */
+    int first[3], last[3];
+    int lo = KAIRO_CURSOR_N, hi = -1;
+    for (int k = 0; k < 3; k++) {
+        kairo_cursor_changed(k, &first[k], &last[k]);
+        if (first[k] < lo)
+            lo = first[k];
+        if (last[k] > hi)
+            hi = last[k];
+    }
+    int patched = 1;
     kairo_cursor_lo = w;
     kairo_cursor_hi = 0;
-    for (int x = 0; x < w; x++) {
+    for (int x = lo; x < ((hi < w) ? (hi + 1) : w); x++) {
         const uint32_t xr = kairo_cursor_rows[0][x];
         const uint32_t a  = kairo_cursor_rows[1][x] ^ xr;
-        if (kairo_cursor_rows[2][x] != (((0x5a3cc3a5u ^ ((uint32_t) x * 0x9e3779b1u)) & a) ^ xr)) {
+        if (kairo_cursor_rows[2][x] != ((kairo_cursor_pattern[x] & a) ^ xr)) {
             /* A cursor drawing of another kind (it blends): the line and its cursors stay the CPU's */
-            svga->hwcursor_latch     = hw;
-            svga->dac_hwcursor_latch = dac;
-            return 0;
+            patched = 0;
+            break;
         }
         kairo_cursor_ax[2 * x]     = a;
         kairo_cursor_ax[2 * x + 1] = xr;
@@ -1520,14 +1583,17 @@ svga_cursor_probe(svga_t *svga)
         }
     }
     /* Past the row: a cursor drawn beyond the bitmap's width writes into the next row, which a patch cannot follow */
-    for (int k = 0; k < 2; k++)
-        for (int x = w; x < KAIRO_CURSOR_ROW + 256; x++)
-            if (kairo_cursor_rows[k][x] != ((k == 0) ? 0 : 0xffffffffu)) {
-                svga->hwcursor_latch     = hw;
-                svga->dac_hwcursor_latch = dac;
-                return 0;
-            }
-    return 1;
+    if ((last[0] >= w) || (last[1] >= w))
+        patched = 0;
+    /* The rows filled again for the next probe */
+    for (int k = 0; k < 3; k++)
+        for (int x = first[k]; x <= last[k]; x++)
+            kairo_cursor_rows[k][x] = kairo_cursor_fill(k, x);
+    if (!patched) {
+        svga->hwcursor_latch     = hw;
+        svga->dac_hwcursor_latch = dac;
+    }
+    return patched;
 }
 
 /* The line's patch (KAIRO_PATCH_WORDS a pixel: A, X, K, V), its overlay's first and its cursors' after, over pixels
