@@ -402,7 +402,9 @@ mmutranslatereal_normal(uint32_t addr, int rw)
             return 0xffffffffffffffffULL;
         }
 
-        rammap(addr2) |= (rw ? 0x60 : 0x20);
+        /* KairoX86#368: only when a bit is not set already (temp is the PDE as read) */
+        if ((temp & (rw ? 0x60 : 0x20)) != (rw ? 0x60 : 0x20))
+            rammap(addr2) |= (rw ? 0x60 : 0x20);
 
         uint64_t page = temp & ~0x3fffff;
         if (cpu_features & CPU_FEATURE_PSE36)
@@ -424,8 +426,11 @@ mmutranslatereal_normal(uint32_t addr, int rw)
         return 0xffffffffffffffffULL;
     }
 
-    rammap(addr2) |= 0x20;
-    rammap((temp2 & ~0xfff) + ((addr >> 10) & 0xffc)) |= (rw ? 0x60 : 0x20);
+    /* KairoX86#368: each bit only when it is not set already (temp2 the PDE, temp the PTE, as read) */
+    if (!(temp2 & 0x20))
+        rammap(addr2) |= 0x20;
+    if ((temp & (rw ? 0x60 : 0x20)) != (rw ? 0x60 : 0x20))
+        rammap((temp2 & ~0xfff) + ((addr >> 10) & 0xffc)) |= (rw ? 0x60 : 0x20);
 
     return (uint64_t) ((temp & ~0xfff) + (addr & 0xfff));
 }

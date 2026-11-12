@@ -6528,6 +6528,15 @@ KAIROX86_IO_DIRECT = [
      '    } else if (io_claim_byte(port, 1, val)) {\n        found = 1;\n    } else if (io_direct_outb[port].nr < 2) {\n        /* KairoX86#380: none, or the one handler */\n        if (io_direct_outb[port].nr) {\n            io_direct_outb[port].fn(port, val, io_direct_outb[port].priv);\n            found = 1;\n#ifdef ENABLE_IO_LOG\n            qfound = 1;\n#endif\n        }\n    } else {\n        p = io[port];\n        while (p) {\n            q = p->next;\n            if (p->outb) {\n                p->outb(port, val, p->priv);'),
 ]
 
+
+# KairoX86#368: the 32-bit page walk stores a PDE's or PTE's accessed/dirty bits only when they are not set already.
+KAIROX86_WALK_AD_CHANGED = [
+    ('86box/src/mem/mem.c', '        rammap(addr2) |= (rw ? 0x60 : 0x20);\n\n        uint64_t page = temp & ~0x3fffff;',
+     '        /* KairoX86#368: only when a bit is not set already (temp is the PDE as read) */\n        if ((temp & (rw ? 0x60 : 0x20)) != (rw ? 0x60 : 0x20))\n            rammap(addr2) |= (rw ? 0x60 : 0x20);\n\n        uint64_t page = temp & ~0x3fffff;'),
+    ('86box/src/mem/mem.c', '    rammap(addr2) |= 0x20;\n    rammap((temp2 & ~0xfff) + ((addr >> 10) & 0xffc)) |= (rw ? 0x60 : 0x20);\n\n    return (uint64_t) ((temp & ~0xfff) + (addr & 0xfff));',
+     '    /* KairoX86#368: each bit only when it is not set already (temp2 the PDE, temp the PTE, as read) */\n    if (!(temp2 & 0x20))\n        rammap(addr2) |= 0x20;\n    if ((temp & (rw ? 0x60 : 0x20)) != (rw ? 0x60 : 0x20))\n        rammap((temp2 & ~0xfff) + ((addr >> 10) & 0xffc)) |= (rw ? 0x60 : 0x20);\n\n    return (uint64_t) ((temp & ~0xfff) + (addr & 0xfff));'),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -6684,6 +6693,7 @@ PATCHES = {
     'kairox86-stub-fast-contiguous': KAIROX86_STUB_FAST_CONTIGUOUS,
     'kairox86-compiled-fldcw': KAIROX86_COMPILED_FLDCW,
     'kairox86-io-direct': KAIROX86_IO_DIRECT,
+    'kairox86-walk-ad-changed': KAIROX86_WALK_AD_CHANGED,
 }
 
 ADDED = [
