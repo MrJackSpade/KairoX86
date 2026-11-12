@@ -85,6 +85,7 @@ bool kairo_gpu_on;
     F(vkDestroyFence)                      \
     F(vkResetFences)                       \
     F(vkWaitForFences)                     \
+    F(vkGetFenceStatus)                       \
     F(vkQueueSubmit)
 
 #define KAIRO_VK_DECLARE(name) static PFN_##name name;
@@ -596,6 +597,11 @@ kairo_gpu_run(kairo_gpu_kernel_t *kernel, kairo_gpu_buffer_t *const *buffers, co
     const VkResult submitted = vkQueueSubmit(gpu.queue, 1, &submit, gpu.done);
     kairo_gpu_queue_unlock();
     vk_check(submitted, kernel->name);
-    vk_check(vkWaitForFences(gpu.device, 1, &gpu.done, VK_TRUE, UINT64_MAX), kernel->name);
+    /* KairoX86#384: polled, not slept on: the run is short next to waking a sleeping thread, and the caller (the
+       emulation thread) has nothing to do until it ends */
+    VkResult status;
+    while ((status = vkGetFenceStatus(gpu.device, gpu.done)) == VK_NOT_READY)
+        ;
+    vk_check(status, kernel->name);
     pthread_mutex_unlock(&run_lock);
 }
