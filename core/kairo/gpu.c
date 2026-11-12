@@ -85,7 +85,7 @@ bool kairo_gpu_on;
     F(vkDestroyFence)                      \
     F(vkResetFences)                       \
     F(vkWaitForFences)                     \
-    F(vkGetFenceStatus)                       \
+    F(vkGetFenceStatus)                    \
     F(vkQueueSubmit)
 
 #define KAIRO_VK_DECLARE(name) static PFN_##name name;
