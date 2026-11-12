@@ -16,8 +16,14 @@ object X86Hardware {
     class Family(val id: String, val name: String, val speeds: List<Speed>)
     /** A choice of a card's option: its value as 86box.cfg keeps it, its name, and whether its firmware is there. */
     class CardChoice(val value: String, val label: String, val available: Boolean)
-    /** One of a card's own 86Box options (KairoX86#201): its key, description, default and choices; [binary] is on or off. */
-    class CardOption(val key: String, val label: String, val default: String, val binary: Boolean, val choices: List<CardChoice>)
+    /**
+     * One of a card's own 86Box options (KairoX86#201): its key, description, default and choices; [binary] is on or
+     * off, and [bios] is the card's firmware choice (KairoX86#438).
+     */
+    class CardOption(val key: String, val label: String, val default: String, val binary: Boolean, val bios: Boolean,
+                     val choices: List<CardChoice>)
+    /** A firmware file a board or card reads (KairoX86#438): its place in the ROM set, and whether the player's set has it. */
+    class RomFile(val path: String, val present: Boolean)
     class Card(val id: String, val name: String, val available: Boolean)
     /** A card's own options, and the section of 86box.cfg 86Box reads them from. */
     class CardOptions(val section: String, val options: List<CardOption>)
@@ -77,9 +83,32 @@ object X86Hardware {
         CardOptions(answer.getString("section"), (0 until list.length()).map { list.getJSONObject(it) }.map { option ->
             val choices = option.getJSONArray("choices")
             CardOption(option.getString("key"), option.getString("label"), option.getString("default"), option.getBoolean("binary"),
-                (0 until choices.length()).map { choices.getJSONObject(it) }
+                option.getBoolean("bios"), (0 until choices.length()).map { choices.getJSONObject(it) }
                     .map { CardChoice(it.getString("value"), it.getString("label"), it.getBoolean("available")) })
         })
+    }
+
+    private val files = HashMap<String, List<RomFile>>()
+
+    /**
+     * The firmware files board ([MACHINE]) or card [id] of [kind] reads (KairoX86#438), with firmware choice [bios]
+     * (its default for null) where it has one; kept until the player's set changes ([firmwareChanged]).
+     */
+    @Synchronized fun files(kind: String, id: String, bios: String?): List<RomFile> =
+        listOfNotNull("files", kind, id, bios).joinToString(" ").let { asked ->
+            files.getOrPut(asked) {
+                JSONArray(query(asked)).let { list ->
+                    (0 until list.length()).map { list.getJSONObject(it) }.map { RomFile(it.getString("path"), it.getBoolean("present")) }
+                }
+            }
+        }
+
+    /** The player's set changed (an import, a file removed): whose firmware is there is asked again. */
+    @Synchronized fun firmwareChanged() {
+        machines = null
+        takes.clear()
+        cardOptions.clear()
+        files.clear()
     }
 
     /** A processor multiplier as one text for each value, whether 86Box wrote "2" or "2.000000". */

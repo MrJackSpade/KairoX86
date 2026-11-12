@@ -63,7 +63,7 @@ It runs a fresh copy of the folder each time (86Box writes the CMOS and `86box.c
 
 ### Hardware queries
 
-`hardware_query <ROM set> <query>` prints the core's answer to a query of the machine settings (Kairo#143, `core/kairo/hardware.h`): `machines` lists every machine 86Box has, with whether the ROM set has its firmware; `machine <id>` lists what that machine takes, from 86Box's own eligibility functions: its processor families and speeds, its memory range, and its video, sound, network, hard disk, SCSI and floppy controllers.
+`hardware_query <ROM set> <query>` prints the core's answer to a query of the machine settings (Kairo#143, `core/kairo/hardware.h`): `machines` lists every machine 86Box has, with whether the ROM set has its firmware; `machine <id>` lists what that machine takes, from 86Box's own eligibility functions: its processor families and speeds, its memory range, and its video, sound, network, hard disk, SCSI and floppy controllers; `files <kind> <id> [<BIOS>]` lists the firmware files a board (`machine`) or card reads, its chosen or default firmware version's where it has a list of them, else each file 86Box's availability check asks about, with whether the ROM set has it (KairoX86#438: New game's firmware page).
 
 ### The mouse test
 

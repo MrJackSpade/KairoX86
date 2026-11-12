@@ -67,6 +67,8 @@ extern int   asset_present(const char *fn);
 extern FILE *rom_fopen(const char *fn, char *mode);
 extern int   rom_getfile(const char *fn, char *s, int size);
 extern int   rom_present(const char *fn);
+/* KairoX86#438: rom_present answers through it while set (mem/rom.c) */
+extern int (*rom_present_probe)(const char *fn, int present);
 
 extern int rom_load_linear_oddeven(const char *fn, uint32_t addr, int sz,
                                    int off, uint8_t *ptr);

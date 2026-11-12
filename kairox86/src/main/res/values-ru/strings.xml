@@ -119,6 +119,24 @@
     <!-- Why a machine or card cannot be picked. -->
     <!-- EN: Its firmware is not among the 86Box firmware you imported -->
     <string name="setting_firmware_missing">Её прошивки нет среди импортированных прошивок 86Box</string>
+    <!-- EN: Firmware needed -->
+    <string name="setting_firmware_needed">Нужна прошивка</string>
+    <!-- EN: %1$s BIOS -->
+    <string name="firmware_need_board">BIOS материнской платы: %1$s</string>
+    <!-- EN: %1$s video BIOS -->
+    <string name="firmware_need_video">Видео-BIOS: %1$s</string>
+    <!-- EN: %1$s firmware -->
+    <string name="firmware_need_card">Прошивка: %1$s</string>
+    <!-- EN: %1$s (file %2$d of %3$d) -->
+    <string name="firmware_need_file_of">%1$s (файл %2$d из %3$d)</string>
+    <!-- EN: The BIOS is the program stored on a chip on the real %1$s motherboard. A PC runs it first when it is turned on: it checks and sets up the hardware, then starts DOS or Windows from a disk. 86Box runs this copy of it, so this PC cannot start without it. -->
+    <string name="firmware_need_board_about">BIOS — это программа, записанная в микросхему настоящей материнской платы %1$s. Компьютер запускает её первой при включении: она проверяет и настраивает оборудование, а затем загружает DOS или Windows с диска. 86Box выполняет эту копию, поэтому без неё этот компьютер не запустится.</string>
+    <!-- EN: The video BIOS is the program stored on a chip on the real %1$s card. It sets up the card\'s display modes and draws the text and pictures that DOS and the BIOS show. 86Box runs this copy of it, so the card shows nothing without it. -->
+    <string name="firmware_need_video_about">Видео-BIOS — это программа, записанная в микросхему настоящей видеокарты %1$s. Она настраивает режимы экрана карты и выводит текст и изображения, которые показывают DOS и BIOS. 86Box выполняет эту копию, поэтому без неё карта ничего не покажет.</string>
+    <!-- EN: This is the program stored on a chip on the real %1$s. 86Box runs this copy of it, so the card cannot work without it. -->
+    <string name="firmware_need_card_about">Это программа, записанная в микросхему настоящей карты %1$s. 86Box выполняет эту копию, поэтому без неё карта не работает.</string>
+    <!-- EN: These are the ROMs of a real %1$s: its control program and its sound samples. Munt, which plays the MIDI music, needs both to sound like it. -->
+    <string name="firmware_need_midi_about">Это ПЗУ настоящего %1$s: его управляющая программа и звуковые сэмплы. Munt, который воспроизводит MIDI-музыку, нуждается в обоих, чтобы звучать как он.</string>
     <!-- The Firmware page's group for 86Box's firmware (BIOS and device firmware) the player imports. -->
     <!-- EN: 86Box firmware -->
     <string name="firmware_rom_set">Прошивки 86Box</string>

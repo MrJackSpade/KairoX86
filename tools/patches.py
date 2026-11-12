@@ -6476,6 +6476,29 @@ KAIROX86_UNLINK_ON_WRITE = [
      "    host_arm64_LDR_IMM_X(block, REG_X9, REG_X1, LINK_SLOT(block_nr));\n    /* KairoX86#353: the first page's dirty mask is not tested: a store into a linked block's code empties its links */\n"),
 ]
 
+# KairoX86#438: rom_present answers through a probe while the hardware query lists the files a machine or card reads
+# (core/kairo/hardware.c's "files"): each file its availability check asks about, and whether it is there.
+KAIROX86_ROM_PROBE = [
+    ('86box/src/mem/rom.c',
+     'int\nrom_present(const char *fn)\n{\n',
+     'static int\nrom_on_disk(const char *fn)\n{\n'),
+    ('86box/src/mem/rom.c',
+     '        return plat_file_check(fn);\n    }\n}\n\nint\nasset_present(const char *fn)\n',
+     '        return plat_file_check(fn);\n    }\n}\n\n'
+     '/* KairoX86#438: set while the hardware query lists the files a machine or card reads: given each file asked\n'
+     '   about and whether it is there, it answers in its place. NULL otherwise. */\n'
+     'int (*rom_present_probe)(const char *fn, int present) = NULL;\n\n'
+     'int\nrom_present(const char *fn)\n{\n'
+     '    const int present = rom_on_disk(fn);\n\n'
+     '    return (rom_present_probe != NULL) ? rom_present_probe(fn, present) : present;\n}\n\n'
+     'int\nasset_present(const char *fn)\n'),
+    ('86box/src/include/86box/rom.h',
+     'extern int   rom_present(const char *fn);\n',
+     'extern int   rom_present(const char *fn);\n'
+     '/* KairoX86#438: rom_present answers through it while set (mem/rom.c) */\n'
+     'extern int (*rom_present_probe)(const char *fn, int present);\n'),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -6628,6 +6651,7 @@ PATCHES = {
     'kairox86-link-status-known': KAIROX86_LINK_STATUS_KNOWN,
     'kairox86-link-cr0-known': KAIROX86_LINK_CR0_KNOWN,
     'kairox86-unlink-on-write': KAIROX86_UNLINK_ON_WRITE,
+    'kairox86-rom-probe': KAIROX86_ROM_PROBE,
 }
 
 ADDED = [

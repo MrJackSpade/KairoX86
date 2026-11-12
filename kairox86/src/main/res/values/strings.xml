@@ -78,6 +78,15 @@
     <string name="setting_card_onboard">Onboard</string>
     <!-- Why a machine or card cannot be picked. -->
     <string name="setting_firmware_missing">Its firmware is not among the 86Box firmware you imported</string>
+    <string name="setting_firmware_needed">Firmware needed</string>
+    <string name="firmware_need_board">%1$s BIOS</string>
+    <string name="firmware_need_video">%1$s video BIOS</string>
+    <string name="firmware_need_card">%1$s firmware</string>
+    <string name="firmware_need_file_of">%1$s (file %2$d of %3$d)</string>
+    <string name="firmware_need_board_about">The BIOS is the program stored on a chip on the real %1$s motherboard. A PC runs it first when it is turned on: it checks and sets up the hardware, then starts DOS or Windows from a disk. 86Box runs this copy of it, so this PC cannot start without it.</string>
+    <string name="firmware_need_video_about">The video BIOS is the program stored on a chip on the real %1$s card. It sets up the card\'s display modes and draws the text and pictures that DOS and the BIOS show. 86Box runs this copy of it, so the card shows nothing without it.</string>
+    <string name="firmware_need_card_about">This is the program stored on a chip on the real %1$s. 86Box runs this copy of it, so the card cannot work without it.</string>
+    <string name="firmware_need_midi_about">These are the ROMs of a real %1$s: its control program and its sound samples. Munt, which plays the MIDI music, needs both to sound like it.</string>
     <!-- The Firmware page's group for 86Box's firmware (BIOS and device firmware) the player imports. -->
     <string name="firmware_rom_set">86Box firmware</string>
     <string name="firmware_rom_description">A firmware file of 86Box\'s</string>

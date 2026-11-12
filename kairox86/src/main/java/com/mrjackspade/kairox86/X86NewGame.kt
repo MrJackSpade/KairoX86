@@ -4,6 +4,8 @@ import android.content.Context
 import com.mrjackspade.kairo.frontend.BlankDisk
 import com.mrjackspade.kairo.frontend.ChoiceOption
 import com.mrjackspade.kairo.frontend.CustomValue
+import com.mrjackspade.kairo.frontend.FirmwareNeed
+import com.mrjackspade.kairo.frontend.FirmwareSet
 import com.mrjackspade.kairo.frontend.GameDisks
 import com.mrjackspade.kairo.frontend.NewGameWorkflow
 import com.mrjackspade.kairo.frontend.UiText
@@ -59,7 +61,8 @@ object X86NewGame {
      * New game's workflow; [images] gives the games folder's disk images, for the Disks page's drives,
      * and [filesOf] the files each is made of (X86Library.imageFiles: a cue sheet's tracks too).
      */
-    fun workflow(context: Context, images: () -> List<X86Entry>, filesOf: (X86Entry) -> List<X86Library.ImageFile>): NewGameWorkflow {
+    fun workflow(context: Context, images: () -> List<X86Entry>, filesOf: (X86Entry) -> List<X86Library.ImageFile>,
+                 firmware: () -> FirmwareSet): NewGameWorkflow {
         val presets = X86Presets.all.associateBy { PRESET + it.id }
         // A preset's 86box.cfg, read once, for its defaults and its folder
         val configs = HashMap<String, IniText>()
@@ -71,9 +74,13 @@ object X86NewGame {
         }
         fun pc(values: Map<String, String>) = values[NewGameWorkflow.KIND].let { it == CUSTOM || it in presets }
 
-        /** A machine setting as a field: its choices as the machine settings narrow them, its default the preset's. */
+        /**
+         * A machine setting as a field: its choices as the machine settings narrow them, its default the preset's.
+         * Hardware whose firmware is missing can be chosen here, marked as needing it: the firmware page then
+         * asks for it (KairoX86#438).
+         */
         fun field(setting: X86Settings.Setting) = WorkflowField.Select(setting.option.id, setting.option.label,
-            { values -> setting.option.choices(values) },
+            { values -> setting.option.choices(values).map { pickable(it, firmwareKind(setting)) } },
             { values -> configOf(values.getValue(NewGameWorkflow.KIND))?.let(setting.read) ?: newDefault(setting, values) },
             custom = { values -> setting.option.custom(values) })
 
@@ -82,7 +89,12 @@ object X86NewGame {
         val customSection = UiText.res(R.string.new_game_custom)
         val floppySection = UiText.res(R.string.new_game_blank_floppies)
         val kinds = WorkflowField.Select(NewGameWorkflow.KIND, UiText.res(FrontendR.string.kairo_new_game_kind), {
-            presets.map { (id, preset) -> ChoiceOption(id, UiText.res(preset.label), null, X86Presets.unavailable(preset), section = presetSection) } +
+            // Marked by the files the preset's own hardware reads, as the firmware page lists them: a card's other
+            // firmware versions make it available to 86Box, but the preset runs the one its 86box.cfg names
+            presets.map { (id, preset) ->
+                val needs = firmwareNeeds(firmware(), configOf(id), preset.machine, preset.cards.toList())
+                ChoiceOption(id, UiText.res(preset.label), FIRMWARE_NEEDED.takeIf { needs.isNotEmpty() }, section = presetSection)
+            } +
                 ChoiceOption(CUSTOM, UiText.res(R.string.preset_custom), section = customSection) +
                 floppies.map { ChoiceOption(it.id, it.label, section = floppySection) }
         }, { PRESET + X86Presets.DOS_486.id })
@@ -116,7 +128,16 @@ object X86NewGame {
             WorkflowPage("cards", UiText.res(R.string.new_game_cards), cards.map(::field), ::pc),
             WorkflowPage("disks", UiText.res(FrontendR.string.kairo_media_disks), listOf(disk) + driveFields, ::pc))
 
-        return NewGameWorkflow(pages) { values ->
+        // The firmware the PC's board and cards read that the player's set lacks, a page of its own (KairoX86#438)
+        val firmwareFor = { values: Map<String, String> ->
+            if (!pc(values)) emptyList() else firmwareNeeds(firmware(), configOf(values.getValue(NewGameWorkflow.KIND)),
+                values.getValue(X86Settings.machine.option.id), cards.mapNotNull { setting ->
+                    // Joysticks have no firmware, and no kind among the cards with options
+                    val kind = X86Settings.cards.firstOrNull { it.first === setting }?.second
+                    values[setting.option.id]?.let { id -> kind?.to(id) }
+                })
+        }
+        return NewGameWorkflow(pages, firmware = firmwareFor) { values ->
             val kind = values.getValue(NewGameWorkflow.KIND)
             floppies.firstOrNull { it.id == kind } ?: machineFolder(context, kind, presets[kind], configOf(kind), hardware + cards, values,
                 drives(values).associateWith { slot -> values[DRIVE_FIELDS[slot]]?.takeIf { it != NO_DISK }?.let { id -> filesOf(images().first { it.id == id }) } })
@@ -170,6 +191,68 @@ object X86NewGame {
             else -> default
         }
     }
+
+    /** How New game marks hardware whose firmware the player has not imported: it can be chosen (KairoX86#438). */
+    private val FIRMWARE_NEEDED = UiText.res(R.string.setting_firmware_needed)
+
+    /**
+     * [option] as New game offers it: hardware the settings refuse for its missing firmware can be chosen,
+     * and board or card [kind] (null for a setting that is no hardware) is marked as needing firmware when a
+     * file its own firmware reads is missing, as the firmware page lists them: a card with other firmware
+     * versions is available to 86Box, but runs the default one.
+     */
+    private fun pickable(option: ChoiceOption, kind: String?): ChoiceOption {
+        val needed = kind != null && X86Hardware.files(kind, option.id, null).any { !it.present }
+        if (!needed && option.disabledReason !== X86Settings.firmwareMissing) return option
+        return ChoiceOption(option.id, option.label, FIRMWARE_NEEDED.takeIf { needed }, null, option.folder, option.section)
+    }
+
+    /** The hardware kind whose firmware [setting] chooses: the board, a card kind, or null (joysticks, a processor). */
+    private fun firmwareKind(setting: X86Settings.Setting): String? =
+        if (setting === X86Settings.machine) X86Hardware.MACHINE else X86Settings.cards.firstOrNull { it.first === setting }?.second
+
+    /**
+     * The firmware files board [machine] and [cards] (each kind with its card) read that [set], the player's,
+     * lacks (KairoX86#438), each as 86Box's own check names it (X86Hardware.files), with its firmware
+     * choice as [config] (the preset's 86box.cfg) gives it, else its default: what it is, and why the
+     * machine needs it.
+     */
+    private fun firmwareNeeds(set: FirmwareSet, config: IniText?, machine: String, cards: List<Pair<String, String>>): List<FirmwareNeed> {
+        val index = indexOf(set)
+        val board = X86Hardware.machines().first { it.id == machine }
+        return (listOf(Triple(X86Hardware.MACHINE, machine, board.name)) + cards.map { (kind, id) ->
+            Triple(kind, id, X86Hardware.takes(machine).cards.getValue(kind).first { it.id == id }.name)
+        }).flatMap { (kind, id, name) ->
+            val files = X86Hardware.files(kind, id, config?.let { firmwareChoice(it, kind, id) })
+            val device = UiText.fixed(name.replace(BUS_PREFIX, ""))
+            val (label, about) = when (kind) {
+                X86Hardware.MACHINE -> R.string.firmware_need_board to R.string.firmware_need_board_about
+                X86Hardware.VIDEO -> R.string.firmware_need_video to R.string.firmware_need_video_about
+                X86Hardware.MIDI -> R.string.firmware_need_card to R.string.firmware_need_midi_about
+                else -> R.string.firmware_need_card to R.string.firmware_need_card_about
+            }
+            files.withIndex().filter { !it.value.present }.map { (i, file) ->
+                val known = index[file.path] ?: error("86Box reads ${file.path}, which the firmware index does not list")
+                val title = UiText.res(label, device)
+                FirmwareNeed(set, FirmwareSet.Part(file.path,
+                    if (files.size == 1) title else UiText.res(R.string.firmware_need_file_of, title, i + 1, files.size),
+                    UiText.res(about, device), emptySet(), required = true, sizes = known.sizes, sha1 = known.sha1))
+            }
+        }
+    }
+
+    /** 86Box's bracketed prefix on a board or card name, its chipset or bus ("[i420EX] ASUS PVI-486AP4"). */
+    private val BUS_PREFIX = Regex("^\\[[^]]*]\\s*")
+
+    /** [set]'s files by their place in it, made once for the set. */
+    private var indexed: Pair<FirmwareSet, Map<String, FirmwareSet.Part>>? = null
+
+    @Synchronized private fun indexOf(set: FirmwareSet): Map<String, FirmwareSet.Part> =
+        indexed?.takeIf { it.first === set }?.second ?: set.parts.associateBy { it.name }.also { indexed = set to it }
+
+    /** The firmware choice [config] makes for board or card [id] of [kind] (its BIOS option's value), or null for its default. */
+    private fun firmwareChoice(config: IniText, kind: String, id: String): String? =
+        X86Hardware.options(kind, id).let { options -> options.options.firstOrNull { it.bios }?.let { config[options.section, it.key] } }
 
     /** What a new machine's network card is for: DOS's packet drivers, or Windows 9x's own drivers. */
     private fun networkSystem(values: Map<String, String>) =

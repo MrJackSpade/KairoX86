@@ -60,7 +60,7 @@ object X86Presets {
 
     /**
      * Why [preset] cannot be made with the player's firmware (its machine's or a card's is missing),
-     * or null when it can.
+     * or null when it can. New game offers it anyway, with a page for the firmware (KairoX86#438).
      */
     fun unavailable(preset: Preset): UiText? {
         val machine = X86Hardware.machines().firstOrNull { it.id == preset.machine }

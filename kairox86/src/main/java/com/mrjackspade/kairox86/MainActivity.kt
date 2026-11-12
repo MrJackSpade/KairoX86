@@ -304,7 +304,9 @@ class MainActivity : MachineActivity<X86Entry>() {
      */
     /** New game (KairoX86#332): a preset or a custom PC through its hardware, or a blank floppy (X86NewGame). */
     override val newGameWorkflow by lazy {
-        X86NewGame.workflow(this, { tree?.let(machines::disks).orEmpty() }) { image -> machines.imageFiles(libraryTree(), image) }
+        X86NewGame.workflow(this, { tree?.let(machines::disks).orEmpty() }, { image -> machines.imageFiles(libraryTree(), image) }) {
+            firmwareSets.single().second
+        }
     }
 
     override val blankDisks: List<BlankDisk> by lazy {
@@ -413,6 +415,9 @@ class MainActivity : MachineActivity<X86Entry>() {
 
     /** The player's 86Box ROM set, imported by content into [firmwareFolder] (KairoX86#67). */
     override val firmwareSets by lazy { listOf(UiText.res(R.string.firmware_rom_set) to X86Firmware.set(this, firmwareFolder)) }
+
+    /** The hardware 86Box offers is asked again: whose firmware is there changed (KairoX86#438). */
+    override fun firmwareFilesChanged() = X86Hardware.firmwareChanged()
 
     override fun startGame(entry: X86Entry, game: CatalogGame, cancelled: AtomicBoolean, progress: (String) -> Unit) =
         start(entry, X86Catalog.startupCommands.value(game, emptyMap()), cancelled, progress)

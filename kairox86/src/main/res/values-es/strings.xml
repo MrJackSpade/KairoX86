@@ -119,6 +119,24 @@
     <!-- Why a machine or card cannot be picked. -->
     <!-- EN: Its firmware is not among the 86Box firmware you imported -->
     <string name="setting_firmware_missing">Su firmware no está entre el firmware de 86Box que importaste</string>
+    <!-- EN: Firmware needed -->
+    <string name="setting_firmware_needed">Necesita firmware</string>
+    <!-- EN: %1$s BIOS -->
+    <string name="firmware_need_board">BIOS de la placa base: %1$s</string>
+    <!-- EN: %1$s video BIOS -->
+    <string name="firmware_need_video">BIOS de vídeo: %1$s</string>
+    <!-- EN: %1$s firmware -->
+    <string name="firmware_need_card">Firmware: %1$s</string>
+    <!-- EN: %1$s (file %2$d of %3$d) -->
+    <string name="firmware_need_file_of">%1$s (archivo %2$d de %3$d)</string>
+    <!-- EN: The BIOS is the program stored on a chip on the real %1$s motherboard. A PC runs it first when it is turned on: it checks and sets up the hardware, then starts DOS or Windows from a disk. 86Box runs this copy of it, so this PC cannot start without it. -->
+    <string name="firmware_need_board_about">La BIOS es el programa guardado en un chip de la placa base %1$s real. Un PC la ejecuta primero al encenderse: comprueba y configura el hardware y luego inicia DOS o Windows desde un disco. 86Box ejecuta esta copia, así que este PC no puede arrancar sin ella.</string>
+    <!-- EN: The video BIOS is the program stored on a chip on the real %1$s card. It sets up the card\'s display modes and draws the text and pictures that DOS and the BIOS show. 86Box runs this copy of it, so the card shows nothing without it. -->
+    <string name="firmware_need_video_about">La BIOS de vídeo es el programa guardado en un chip de la tarjeta %1$s real. Configura los modos de pantalla de la tarjeta y dibuja el texto y las imágenes que muestran DOS y la BIOS. 86Box ejecuta esta copia, así que sin ella la tarjeta no muestra nada.</string>
+    <!-- EN: This is the program stored on a chip on the real %1$s. 86Box runs this copy of it, so the card cannot work without it. -->
+    <string name="firmware_need_card_about">Es el programa guardado en un chip de la tarjeta %1$s real. 86Box ejecuta esta copia, así que la tarjeta no funciona sin ella.</string>
+    <!-- EN: These are the ROMs of a real %1$s: its control program and its sound samples. Munt, which plays the MIDI music, needs both to sound like it. -->
+    <string name="firmware_need_midi_about">Son las ROM de un %1$s real: su programa de control y sus muestras de sonido. Munt, que reproduce la música MIDI, necesita ambas para sonar como él.</string>
     <!-- The Firmware page's group for 86Box's firmware (BIOS and device firmware) the player imports. -->
     <!-- EN: 86Box firmware -->
     <string name="firmware_rom_set">Firmware de 86Box</string>

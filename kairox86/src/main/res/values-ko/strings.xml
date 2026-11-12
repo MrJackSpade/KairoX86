@@ -119,6 +119,24 @@
     <!-- Why a machine or card cannot be picked. -->
     <!-- EN: Its firmware is not among the 86Box firmware you imported -->
     <string name="setting_firmware_missing">해당 펌웨어가 가져온 86Box 펌웨어에 없습니다</string>
+    <!-- EN: Firmware needed -->
+    <string name="setting_firmware_needed">펌웨어 필요</string>
+    <!-- EN: %1$s BIOS -->
+    <string name="firmware_need_board">%1$s 메인보드 BIOS</string>
+    <!-- EN: %1$s video BIOS -->
+    <string name="firmware_need_video">%1$s 비디오 BIOS</string>
+    <!-- EN: %1$s firmware -->
+    <string name="firmware_need_card">%1$s 펌웨어</string>
+    <!-- EN: %1$s (file %2$d of %3$d) -->
+    <string name="firmware_need_file_of">%1$s (파일 %2$d/%3$d)</string>
+    <!-- EN: The BIOS is the program stored on a chip on the real %1$s motherboard. A PC runs it first when it is turned on: it checks and sets up the hardware, then starts DOS or Windows from a disk. 86Box runs this copy of it, so this PC cannot start without it. -->
+    <string name="firmware_need_board_about">BIOS는 실제 %1$s 메인보드의 칩에 저장된 프로그램입니다. PC는 전원을 켜면 가장 먼저 이것을 실행해 하드웨어를 점검하고 설정한 뒤 디스크에서 DOS나 Windows를 시작합니다. 86Box는 이 사본을 실행하므로, 이것이 없으면 이 PC를 시작할 수 없습니다.</string>
+    <!-- EN: The video BIOS is the program stored on a chip on the real %1$s card. It sets up the card\'s display modes and draws the text and pictures that DOS and the BIOS show. 86Box runs this copy of it, so the card shows nothing without it. -->
+    <string name="firmware_need_video_about">비디오 BIOS는 실제 %1$s 카드의 칩에 저장된 프로그램입니다. 카드의 화면 모드를 설정하고 DOS와 BIOS가 보여주는 글자와 그림을 그립니다. 86Box는 이 사본을 실행하므로, 이것이 없으면 카드에 아무것도 표시되지 않습니다.</string>
+    <!-- EN: This is the program stored on a chip on the real %1$s. 86Box runs this copy of it, so the card cannot work without it. -->
+    <string name="firmware_need_card_about">실제 %1$s의 칩에 저장된 프로그램입니다. 86Box는 이 사본을 실행하므로, 이것이 없으면 카드가 작동하지 않습니다.</string>
+    <!-- EN: These are the ROMs of a real %1$s: its control program and its sound samples. Munt, which plays the MIDI music, needs both to sound like it. -->
+    <string name="firmware_need_midi_about">실제 %1$s의 ROM으로, 제어 프로그램과 소리 샘플입니다. MIDI 음악을 재생하는 Munt가 실제와 같은 소리를 내려면 둘 다 필요합니다.</string>
     <!-- The Firmware page's group for 86Box's firmware (BIOS and device firmware) the player imports. -->
     <!-- EN: 86Box firmware -->
     <string name="firmware_rom_set">86Box 펌웨어</string>

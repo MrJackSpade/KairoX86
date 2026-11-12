@@ -119,6 +119,24 @@
     <!-- Why a machine or card cannot be picked. -->
     <!-- EN: Its firmware is not among the 86Box firmware you imported -->
     <string name="setting_firmware_missing">Firmware-nya tidak ada di antara firmware 86Box yang Anda impor</string>
+    <!-- EN: Firmware needed -->
+    <string name="setting_firmware_needed">Perlu firmware</string>
+    <!-- EN: %1$s BIOS -->
+    <string name="firmware_need_board">BIOS motherboard: %1$s</string>
+    <!-- EN: %1$s video BIOS -->
+    <string name="firmware_need_video">BIOS video: %1$s</string>
+    <!-- EN: %1$s firmware -->
+    <string name="firmware_need_card">Firmware: %1$s</string>
+    <!-- EN: %1$s (file %2$d of %3$d) -->
+    <string name="firmware_need_file_of">%1$s (file %2$d dari %3$d)</string>
+    <!-- EN: The BIOS is the program stored on a chip on the real %1$s motherboard. A PC runs it first when it is turned on: it checks and sets up the hardware, then starts DOS or Windows from a disk. 86Box runs this copy of it, so this PC cannot start without it. -->
+    <string name="firmware_need_board_about">BIOS adalah program yang tersimpan di chip pada motherboard %1$s asli. PC menjalankannya pertama kali saat dinyalakan: BIOS memeriksa dan menyiapkan perangkat keras, lalu memulai DOS atau Windows dari disk. 86Box menjalankan salinan ini, jadi PC ini tidak bisa mulai tanpanya.</string>
+    <!-- EN: The video BIOS is the program stored on a chip on the real %1$s card. It sets up the card\'s display modes and draws the text and pictures that DOS and the BIOS show. 86Box runs this copy of it, so the card shows nothing without it. -->
+    <string name="firmware_need_video_about">BIOS video adalah program yang tersimpan di chip pada kartu %1$s asli. BIOS ini menyiapkan mode tampilan kartu dan menggambar teks serta gambar yang ditampilkan DOS dan BIOS. 86Box menjalankan salinan ini, jadi tanpanya kartu tidak menampilkan apa pun.</string>
+    <!-- EN: This is the program stored on a chip on the real %1$s. 86Box runs this copy of it, so the card cannot work without it. -->
+    <string name="firmware_need_card_about">Ini adalah program yang tersimpan di chip pada kartu %1$s asli. 86Box menjalankan salinan ini, jadi kartu tidak bisa bekerja tanpanya.</string>
+    <!-- EN: These are the ROMs of a real %1$s: its control program and its sound samples. Munt, which plays the MIDI music, needs both to sound like it. -->
+    <string name="firmware_need_midi_about">Ini adalah ROM dari %1$s asli: program kendali dan sampel suaranya. Munt, yang memutar musik MIDI, membutuhkan keduanya agar suaranya sama.</string>
     <!-- The Firmware page's group for 86Box's firmware (BIOS and device firmware) the player imports. -->
     <!-- EN: 86Box firmware -->
     <string name="firmware_rom_set">Firmware 86Box</string>
