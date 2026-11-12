@@ -31,7 +31,7 @@
     <!-- %1$s is the game's name in an eXoWin9x collection, %2$s the Windows image it is set up for there (KairoX86#219). -->
     <!-- %1$s is the game's name in an eXoWin9x collection (KairoX86#219). -->
     <!-- EN: %1$s reads its CD from a folder, which KairoX86 can\'t put in a drive yet -->
-    <string name="exo_folder_cd">%1$s reads its CD from a folder, which KairoX86 can\'t put in a drive yet</string>
+    <string name="exo_folder_cd">%1$s은(는) 폴더에서 CD를 읽지만, KairoX86은 아직 폴더를 드라이브에 넣을 수 없습니다</string>
     <!-- EN: Another machine is still running -->
     <string name="machine_still_running">다른 머신이 아직 실행 중입니다</string>
     <!-- EN: The machine\'s working folder could not be prepared -->
@@ -47,9 +47,13 @@
     <!-- %1$s is a file or folder's path in the machine's folder. -->
     <!-- EN: %1$s could not be created -->
     <string name="machine_create_failed">%1$s을(를) 만들지 못했습니다</string>
+    <!-- EN: A file named %1$s is already in the machine\'s folder -->
     <string name="machine_disk_name_taken">%1$s 이름의 파일이 이미 머신 폴더에 있습니다</string>
+    <!-- EN: %1$s, which %2$s needs, is not beside it -->
     <string name="machine_disk_track_missing">%2$s에 필요한 %1$s 파일이 같은 위치에 없습니다</string>
+    <!-- EN: %2$d%% copied: %1$s -->
     <string name="machine_disk_copying">%2$d%% 복사됨: %1$s</string>
+    <!-- EN: %2$d%% unpacked: %1$s -->
     <string name="machine_disk_unpacking">%2$d%% 압축 해제됨: %1$s</string>
     <!-- %1$s is the name of a file in the machine's folder. -->
     <!-- EN: %1$s is not a name a machine\'s file can have -->
@@ -133,8 +137,11 @@
     <string name="new_game_processor_memory">프로세서와 메모리</string>
     <!-- EN: Cards -->
     <string name="new_game_cards">카드</string>
+    <!-- EN: PRESETS -->
     <string name="new_game_presets">프리셋</string>
+    <!-- EN: CUSTOM -->
     <string name="new_game_custom">사용자 지정</string>
+    <!-- EN: BLANK FLOPPIES -->
     <string name="new_game_blank_floppies">빈 플로피</string>
     <!-- A machine setting (86box.cfg time_sync): the clock the guest reads. -->
     <!-- EN: Clock -->

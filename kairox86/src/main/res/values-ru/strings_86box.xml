@@ -163,7 +163,7 @@
     <string name="d86_dither_subtraction_6f6adf">Вычитание дизеринга</string>
     <!-- EN: Dithering -->
     <string name="d86_dithering_67c0f2">Дизеринг</string>
-    <!-- EN: DMA -->
+    <!-- SAME: DMA -->
     <string name="d86_dma_1ba799">DMA</string>
     <!-- EN: Dot spacing -->
     <string name="d86_dot_spacing_23d5da">Шаг точек</string>
@@ -245,7 +245,7 @@
     <string name="d86_initial_ram_size_7018b9">Начальный размер оперативной памяти</string>
     <!-- EN: Interpolation Method -->
     <string name="d86_interpolation_method_e7ec55">Метод интерполяции</string>
-    <!-- EN: IRQ -->
+    <!-- SAME: IRQ -->
     <string name="d86_irq_6dcf08">IRQ</string>
     <!-- EN: Korean (Kasan Hangulmadang-16 VGA) -->
     <string name="d86_korean_kasan_hangulmadang_16_vga_2b3a56">Корейская (Kasan Hangulmadang-16 VGA)</string>
@@ -305,7 +305,7 @@
     <string name="d86_output_gain_56f164">Усиление выхода</string>
     <!-- EN: Parallel Port -->
     <string name="d86_parallel_port_019607">Параллельный порт</string>
-    <!-- EN: Plug and Play -->
+    <!-- SAME: Plug and Play -->
     <string name="d86_plug_and_play_93ffca">Plug and Play</string>
     <!-- EN: RAM Address -->
     <string name="d86_ram_address_036c00">Адрес оперативной памяти</string>

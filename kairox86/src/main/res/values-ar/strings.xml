@@ -31,7 +31,7 @@
     <!-- %1$s is the game's name in an eXoWin9x collection, %2$s the Windows image it is set up for there (KairoX86#219). -->
     <!-- %1$s is the game's name in an eXoWin9x collection (KairoX86#219). -->
     <!-- EN: %1$s reads its CD from a folder, which KairoX86 can\'t put in a drive yet -->
-    <string name="exo_folder_cd">%1$s reads its CD from a folder, which KairoX86 can\'t put in a drive yet</string>
+    <string name="exo_folder_cd">يقرأ %1$s قرصه المضغوط من مجلد، ولا يستطيع KairoX86 بعدُ وضع مجلد في محرك أقراص</string>
     <!-- EN: Another machine is still running -->
     <string name="machine_still_running">لا يزال جهاز آخر قيد التشغيل</string>
     <!-- EN: The machine\'s working folder could not be prepared -->
@@ -47,9 +47,13 @@
     <!-- %1$s is a file or folder's path in the machine's folder. -->
     <!-- EN: %1$s could not be created -->
     <string name="machine_create_failed">تعذّر إنشاء %1$s</string>
+    <!-- EN: A file named %1$s is already in the machine\'s folder -->
     <string name="machine_disk_name_taken">يوجد ملف باسم %1$s في مجلد الجهاز بالفعل</string>
+    <!-- EN: %1$s, which %2$s needs, is not beside it -->
     <string name="machine_disk_track_missing">الملف %1$s الذي يحتاجه %2$s غير موجود بجانبه</string>
+    <!-- EN: %2$d%% copied: %1$s -->
     <string name="machine_disk_copying">تم نسخ %2$d%%: %1$s</string>
+    <!-- EN: %2$d%% unpacked: %1$s -->
     <string name="machine_disk_unpacking">تم فك ضغط %2$d%%: %1$s</string>
     <!-- %1$s is the name of a file in the machine's folder. -->
     <!-- EN: %1$s is not a name a machine\'s file can have -->
@@ -92,7 +96,7 @@
     <!-- EN: MIDI port -->
     <string name="setting_midi_port">منفذ MIDI</string>
     <!-- The sound bank FluidSynth plays General MIDI music with (KairoX86#306). -->
-    <!-- EN: SoundFont -->
+    <!-- SAME: SoundFont -->
     <string name="setting_sound_font">SoundFont</string>
     <!-- The row under the SoundFont choices that imports a SoundFont file and picks it. -->
     <!-- EN: Import a SoundFont… -->
@@ -133,8 +137,11 @@
     <string name="new_game_processor_memory">المعالج والذاكرة</string>
     <!-- EN: Cards -->
     <string name="new_game_cards">البطاقات</string>
+    <!-- EN: PRESETS -->
     <string name="new_game_presets">الإعدادات المسبقة</string>
+    <!-- EN: CUSTOM -->
     <string name="new_game_custom">مخصص</string>
+    <!-- EN: BLANK FLOPPIES -->
     <string name="new_game_blank_floppies">أقراص مرنة فارغة</string>
     <!-- A machine setting (86box.cfg time_sync): the clock the guest reads. -->
     <!-- EN: Clock -->

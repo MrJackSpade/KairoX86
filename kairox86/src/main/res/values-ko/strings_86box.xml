@@ -1,15 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Korean (ko): the translation of values/strings_86box.xml. Each EN comment is the English a string translates; update it with the translation. Check with shared/tools/translations.py check. -->
 <resources>
-    <!-- EN: 128 KB -->
+    <!-- SAME: 128 KB -->
     <string name="d86_128_kb_bb8543">128 KB</string>
-    <!-- EN: 12 MB -->
+    <!-- SAME: 12 MB -->
     <string name="d86_12_mb_6674e6">12 MB</string>
     <!-- EN: 16-bit (bottom pins closed - AT-class 16-bit slots only) -->
     <string name="d86_16_bit_bottom_pins_closed_at_class_16_bi_85eac9">16비트(아래쪽 핀 닫힘, AT 16비트 슬롯 전용)</string>
     <!-- EN: 16-bit -->
     <string name="d86_16_bit_dc4083">16비트</string>
-    <!-- EN: 16 KB -->
+    <!-- SAME: 16 KB -->
     <string name="d86_16_kb_855689">16 KB</string>
     <!-- EN: 16 MB -->
     <string name="d86_16_mb_77a260">16MB</string>
@@ -19,13 +19,13 @@
     <string name="d86_1991_bios_1gb_13dab4">1991년 BIOS(1GB 초과)</string>
     <!-- EN: 1 MB -->
     <string name="d86_1_mb_9b2252">1MB</string>
-    <!-- EN: 2048 MB -->
+    <!-- SAME: 2048 MB -->
     <string name="d86_2048_mb_b361b6">2048 MB</string>
     <!-- EN: 20 MB -->
     <string name="d86_20_mb_132890">20MB</string>
     <!-- EN: 24 MB -->
     <string name="d86_24_mb_233194">24MB</string>
-    <!-- EN: 256 KB -->
+    <!-- SAME: 256 KB -->
     <string name="d86_256_kb_122ab2">256 KB</string>
     <!-- EN: 28 MB -->
     <string name="d86_28_mb_dcf730">28MB</string>
@@ -33,9 +33,9 @@
     <string name="d86_2_mb_63f273">2MB</string>
     <!-- EN: 30 Hz (JMP2 = 1) -->
     <string name="d86_30_hz_jmp2_1_7afe29">30 ㎐ (JMP2 = 1)</string>
-    <!-- EN: 32 KB -->
+    <!-- SAME: 32 KB -->
     <string name="d86_32_kb_895b11">32 KB</string>
-    <!-- EN: 32 MB -->
+    <!-- SAME: 32 MB -->
     <string name="d86_32_mb_eac42f">32 MB</string>
     <!-- EN: 45 Hz (JMP2 not populated) -->
     <string name="d86_45_hz_jmp2_not_populated_73ddb5">45Hz (JMP2 미장착)</string>
@@ -45,13 +45,13 @@
     <string name="d86_4_mb_b6de6b">4MB</string>
     <!-- EN: 4th Order -->
     <string name="d86_4th_order_bbe85c">4차</string>
-    <!-- EN: 512 KB -->
+    <!-- SAME: 512 KB -->
     <string name="d86_512_kb_406c35">512 KB</string>
     <!-- EN: 60 Hz (JMP2 = 2) -->
     <string name="d86_60_hz_jmp2_2_ad41bf">60 ㎐ (JMP2 = 2)</string>
-    <!-- EN: 64 KB -->
+    <!-- SAME: 64 KB -->
     <string name="d86_64_kb_91ab95">64 KB</string>
-    <!-- EN: 64 MB -->
+    <!-- SAME: 64 MB -->
     <string name="d86_64_mb_a2319f">64 MB</string>
     <!-- EN: 6CH variant (6-channel) -->
     <string name="d86_6ch_variant_6_channel_6e13eb">6채널 변형(6채널)</string>
@@ -63,7 +63,7 @@
     <string name="d86_8_bit_a35efa">8비트</string>
     <!-- EN: 8-bit (top pins closed - required for XT-class 8-bit slots) -->
     <string name="d86_8_bit_top_pins_closed_required_for_xt_cl_d879cd">8비트(위쪽 핀 닫힘, XT 8비트 슬롯에 필요)</string>
-    <!-- EN: 8 KB -->
+    <!-- SAME: 8 KB -->
     <string name="d86_8_kb_757334">8 KB</string>
     <!-- EN: 8 MB -->
     <string name="d86_8_mb_decd79">8MB</string>
@@ -163,7 +163,7 @@
     <string name="d86_dither_subtraction_6f6adf">디더링 감산</string>
     <!-- EN: Dithering -->
     <string name="d86_dithering_67c0f2">디더링</string>
-    <!-- EN: DMA -->
+    <!-- SAME: DMA -->
     <string name="d86_dma_1ba799">DMA</string>
     <!-- EN: Dot spacing -->
     <string name="d86_dot_spacing_23d5da">도트 간격</string>
@@ -235,7 +235,7 @@
     <string name="d86_high_dma_e34410">높은 DMA</string>
     <!-- EN: Host ID -->
     <string name="d86_host_id_7e7bac">호스트 ID</string>
-    <!-- EN: Hz -->
+    <!-- SAME: Hz -->
     <string name="d86_hz_97aaf5">Hz</string>
     <!-- EN: IBM Nordic (CP 437-Nordic) -->
     <string name="d86_ibm_nordic_cp_437_nordic_9a7c8a">IBM 북유럽어 (CP 437-Nordic)</string>
@@ -245,7 +245,7 @@
     <string name="d86_initial_ram_size_7018b9">초기 RAM 크기</string>
     <!-- EN: Interpolation Method -->
     <string name="d86_interpolation_method_e7ec55">보간 방법</string>
-    <!-- EN: IRQ -->
+    <!-- SAME: IRQ -->
     <string name="d86_irq_6dcf08">IRQ</string>
     <!-- EN: Korean (Kasan Hangulmadang-16 VGA) -->
     <string name="d86_korean_kasan_hangulmadang_16_vga_2b3a56">한국어(Kasan 한글마당-16 VGA)</string>

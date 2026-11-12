@@ -31,7 +31,7 @@
     <!-- %1$s is the game's name in an eXoWin9x collection, %2$s the Windows image it is set up for there (KairoX86#219). -->
     <!-- %1$s is the game's name in an eXoWin9x collection (KairoX86#219). -->
     <!-- EN: %1$s reads its CD from a folder, which KairoX86 can\'t put in a drive yet -->
-    <string name="exo_folder_cd">%1$s reads its CD from a folder, which KairoX86 can\'t put in a drive yet</string>
+    <string name="exo_folder_cd">%1$s は CD をフォルダーから読み込みますが、KairoX86 はまだフォルダーをドライブに入れられません</string>
     <!-- EN: Another machine is still running -->
     <string name="machine_still_running">ほかのマシンがまだ動いています</string>
     <!-- EN: The machine\'s working folder could not be prepared -->
@@ -47,9 +47,13 @@
     <!-- %1$s is a file or folder's path in the machine's folder. -->
     <!-- EN: %1$s could not be created -->
     <string name="machine_create_failed">%1$s を作成できませんでした</string>
+    <!-- EN: A file named %1$s is already in the machine\'s folder -->
     <string name="machine_disk_name_taken">%1$s という名前のファイルがすでにマシンのフォルダーにあります</string>
+    <!-- EN: %1$s, which %2$s needs, is not beside it -->
     <string name="machine_disk_track_missing">%2$s に必要な %1$s が同じ場所にありません</string>
+    <!-- EN: %2$d%% copied: %1$s -->
     <string name="machine_disk_copying">%2$d%% コピー済み: %1$s</string>
+    <!-- EN: %2$d%% unpacked: %1$s -->
     <string name="machine_disk_unpacking">%2$d%% 展開済み: %1$s</string>
     <!-- %1$s is the name of a file in the machine's folder. -->
     <!-- EN: %1$s is not a name a machine\'s file can have -->
@@ -133,8 +137,11 @@
     <string name="new_game_processor_memory">プロセッサとメモリ</string>
     <!-- EN: Cards -->
     <string name="new_game_cards">カード</string>
+    <!-- EN: PRESETS -->
     <string name="new_game_presets">プリセット</string>
+    <!-- EN: CUSTOM -->
     <string name="new_game_custom">カスタム</string>
+    <!-- EN: BLANK FLOPPIES -->
     <string name="new_game_blank_floppies">空のフロッピー</string>
     <!-- A machine setting (86box.cfg time_sync): the clock the guest reads. -->
     <!-- EN: Clock -->
