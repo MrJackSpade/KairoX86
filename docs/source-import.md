@@ -153,6 +153,7 @@
 - **`kairox86-io-direct` group:** `io.c` keeps, by port, the one handler that takes a byte read and the one that takes a byte write (function, priv and a count: none, one, several), rebuilt for each port `io_sethandler_common`, `io_removehandler_common` and `io_init` touch; `inb`/`outb` call that handler directly and walk the list only for several (KairoX86#380); exact by `tools/exact.ps1 -Device`.
 - **`kairox86-walk-ad-changed` group:** `mmutranslatereal_normal` sets the PDE's accessed bit and the PTE's (or 4 MB PDE's) accessed/dirty bits only when the entry just read lacks them, instead of an unconditional read-modify-write that stores the same word (KairoX86#368); the guest's memory ends the same; exact by `tools/exact.ps1 -Device` and `-Local`.
 - **`kairox86-io-delay-machine` group:** `io_init` sets `io_delay_every_read` when the machine is the IBM 5550 or 5535, and `inb`/`inw`/`inl` read that flag instead of comparing `machines[machine].init` with both machines' init functions on every access (KairoX86#432); exact by `tools/exact.ps1 -Device` and `-Local`, and identical hashes on both IBM machines.
+- **`kairox86-lapic-highest-clz` group:** `cpu_lapic_highest_vector` in `cpu_lapic.c` returns `(word << 5) | (31 - __builtin_clz(word))` for the highest nonzero word instead of a bit loop: the same vector (KairoX86#434); exact by `tools/exact.ps1 -Device` and identical hashes on the APIC-path machines.
 
 ## 86Box's translations
 

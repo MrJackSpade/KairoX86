@@ -6553,6 +6553,13 @@ KAIROX86_IO_DELAY_MACHINE = [
      '    memset(io_turbo_map, 0, sizeof(io_turbo_map));\n    io_delay_every_read = (machines[machine].init == machine_xt_ibm5550_init) || (machines[machine].init == machine_xt_ibm5535_init); /* KairoX86#432 */\n'),
 ]
 
+
+# KairoX86#434: cpu_lapic_highest_vector takes a word's highest set bit from a count of leading zeros, not a bit loop.
+KAIROX86_LAPIC_HIGHEST_CLZ = [
+    ('86box/src/cpu/cpu_lapic.c', '        if (!bits[word])\n            continue;\n\n        for (int bit = 31; bit >= 0; bit--) {\n            if (bits[word] & (1u << bit))\n                return (word << 5) | bit;\n        }\n    }\n\n    return -1;',
+     '        if (!bits[word])\n            continue;\n\n        /* KairoX86#434: the highest set bit of a word that has one */\n        return (word << 5) | (31 - __builtin_clz(bits[word]));\n    }\n\n    return -1;'),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -6711,6 +6718,7 @@ PATCHES = {
     'kairox86-io-direct': KAIROX86_IO_DIRECT,
     'kairox86-walk-ad-changed': KAIROX86_WALK_AD_CHANGED,
     'kairox86-io-delay-machine': KAIROX86_IO_DELAY_MACHINE,
+    'kairox86-lapic-highest-clz': KAIROX86_LAPIC_HIGHEST_CLZ,
 }
 
 ADDED = [

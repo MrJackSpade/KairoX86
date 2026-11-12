@@ -1268,10 +1268,8 @@ cpu_lapic_highest_vector(const uint32_t bits[IOAPIC_STATE_LAPIC_BIT_WORDS])
         if (!bits[word])
             continue;
 
-        for (int bit = 31; bit >= 0; bit--) {
-            if (bits[word] & (1u << bit))
-                return (word << 5) | bit;
-        }
+        /* KairoX86#434: the highest set bit of a word that has one */
+        return (word << 5) | (31 - __builtin_clz(bits[word]));
     }
 
     return -1;
