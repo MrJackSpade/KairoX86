@@ -144,6 +144,8 @@
     <string name="firmware_rom_description">File firmware 86Box</string>
     <!-- EN: Import the folder holding 86Box\'s BIOS and device firmware. Each file is found by its content, whatever its name. -->
     <string name="firmware_rom_set_note">Impor folder yang berisi BIOS dan firmware perangkat 86Box. Tiap file dikenali dari isinya, apa pun namanya.</string>
+    <!-- EN: 86Box on GitHub -->
+    <string name="firmware_source_86box">86Box di GitHub</string>
     <!-- EN: 486 DOS PC -->
     <string name="preset_486">PC DOS 486</string>
     <!-- EN: Pentium Windows 9x PC -->

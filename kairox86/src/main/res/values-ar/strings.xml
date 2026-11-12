@@ -144,6 +144,8 @@
     <string name="firmware_rom_description">ملف برنامج ثابت من 86Box</string>
     <!-- EN: Import the folder holding 86Box\'s BIOS and device firmware. Each file is found by its content, whatever its name. -->
     <string name="firmware_rom_set_note">استورد المجلد الذي يحوي BIOS والبرامج الثابتة للأجهزة من 86Box. يُعرف كل ملف من محتواه أيًّا كان اسمه.</string>
+    <!-- EN: 86Box on GitHub -->
+    <string name="firmware_source_86box">\u206686Box\u2069 على \u2066GitHub\u2069</string>
     <!-- EN: 486 DOS PC -->
     <string name="preset_486">حاسوب 486 لنظام DOS</string>
     <!-- EN: Pentium Windows 9x PC -->

@@ -144,6 +144,8 @@
     <string name="firmware_rom_description">Eine Firmware-Datei von 86Box</string>
     <!-- EN: Import the folder holding 86Box\'s BIOS and device firmware. Each file is found by its content, whatever its name. -->
     <string name="firmware_rom_set_note">Importiere den Ordner mit dem BIOS und der Geräte-Firmware von 86Box. Jede Datei wird an ihrem Inhalt erkannt, wie sie auch heißt.</string>
+    <!-- EN: 86Box on GitHub -->
+    <string name="firmware_source_86box">86Box auf GitHub</string>
     <!-- EN: 486 DOS PC -->
     <string name="preset_486">486-DOS-PC</string>
     <!-- EN: Pentium Windows 9x PC -->

@@ -144,6 +144,8 @@
     <string name="firmware_rom_description">86Box のファームウェアファイル</string>
     <!-- EN: Import the folder holding 86Box\'s BIOS and device firmware. Each file is found by its content, whatever its name. -->
     <string name="firmware_rom_set_note">86Box の BIOS とデバイスのファームウェアが入ったフォルダをインポートしてください。各ファイルは名前に関係なく中身で見分けられます。</string>
+    <!-- EN: 86Box on GitHub -->
+    <string name="firmware_source_86box">GitHub の 86Box</string>
     <!-- EN: 486 DOS PC -->
     <string name="preset_486">DOS 用 486 PC</string>
     <!-- EN: Pentium Windows 9x PC -->
