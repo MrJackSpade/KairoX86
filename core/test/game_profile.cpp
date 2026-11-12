@@ -43,6 +43,8 @@
 //   --gpu-frames 1  the frames handed over on the GPU, as the app's presenter takes them (KairoX86#384): the four
 //                   slots named in turn, one before each frame. The frames then give no pixels (hashed as 0).
 //                   Fails unless the machine hands its frames over so (Hardware acceleration on, Android).
+//   --slot-hashes 1 with --gpu-frames 1: each frame's picture read back from its slot (after the frame's timing)
+//                   and hashed as the processor's picture is, to compare with a run that hands frames over on it.
 //
 // Prints one line starting "start ": how long the machine took to start; and one starting "host ":
 // the frames per second the host reached, the guest's rate and the frame time distribution. At the
@@ -65,6 +67,9 @@
 #include <dlfcn.h>
 #endif
 #include "x86_machine.h"
+#ifdef __ANDROID__
+#include <android/hardware_buffer.h> // --slot-hashes (KairoX86#384)
+#endif
 
 #ifdef _WIN32
 #include <windows.h>
@@ -291,6 +296,47 @@ struct Diag {
 };
 #endif
 
+// KairoX86#384: the last frame's picture, read back from the slot the GPU copied it to, one of each pixel the card
+// drew twice (as the processor's picture takes them); none before the first frame.
+static bool read_slot(const kairox86::X86Machine &machine, uint32_t &width, uint32_t &height, std::vector<uint32_t> &out,
+                      std::string &error) {
+#ifdef __ANDROID__
+    const kairox86::X86Machine::GpuFrame frame = machine.gpu_frame();
+    out.clear();
+    if (!frame.buffer) {
+        width = height = 0;
+        return true;
+    }
+    auto *buffer = static_cast<AHardwareBuffer *>(frame.buffer);
+    AHardwareBuffer_Desc desc{};
+    AHardwareBuffer_describe(buffer, &desc);
+    void *mapped = nullptr;
+    if (AHardwareBuffer_lock(buffer, AHARDWAREBUFFER_USAGE_CPU_READ_RARELY, -1, nullptr, &mapped) != 0) {
+        error = "cannot lock the frame's slot";
+        return false;
+    }
+    width = frame.width;
+    height = frame.height;
+    out.resize(size_t(width) * height);
+    const auto *pixels = static_cast<const uint32_t *>(mapped);
+    for (uint32_t row = 0; row < height; ++row)
+        for (uint32_t column = 0; column < width; ++column)
+            out[size_t(row) * width + column] = pixels[size_t(row) * frame.down * desc.stride + size_t(column) * frame.across];
+    if (AHardwareBuffer_unlock(buffer, nullptr) != 0) {
+        error = "cannot unlock the frame's slot";
+        return false;
+    }
+    return true;
+#else
+    (void) machine;
+    (void) width;
+    (void) height;
+    (void) out;
+    error = "frames on the GPU are Android's only";
+    return false;
+#endif
+}
+
 int main(int argc, char **argv) {
 #ifdef _WIN32
     SetUnhandledExceptionFilter(report_crash);
@@ -312,6 +358,7 @@ int main(int argc, char **argv) {
     std::string commands;
     std::string until_halt;
     bool gpu_frames = false;
+    bool slot_hashes = false;
     for (int i = 6; i < argc; ++i) {
         const std::string option = argv[i];
         if (i + 1 >= argc) return fail(option + " needs a value");
@@ -325,6 +372,7 @@ int main(int argc, char **argv) {
         else if (option == "--runs") runs = std::atol(value.c_str());
         else if (option == "--until-halt") until_halt = value;
         else if (option == "--gpu-frames") gpu_frames = value == "1";
+        else if (option == "--slot-hashes") slot_hashes = value == "1";
         else if (option == "--media") {
             const size_t first = value.find(':'), second = first == std::string::npos ? first : value.find(':', first + 1);
             if (second == std::string::npos) return fail("--media is <frame>:<slot>:<path>, not " + value);
@@ -378,6 +426,8 @@ int main(int argc, char **argv) {
         std::printf("start %.3f s\n", std::chrono::duration<double>(Clock::now() - started).count());
         std::printf("started %s\n", machine->started().c_str());
         if (gpu_frames && !machine->gpu_frames()) return fail("--gpu-frames: the machine does not hand its frames over on the GPU");
+        if (slot_hashes && !gpu_frames) return fail("--slot-hashes needs --gpu-frames 1");
+        std::vector<uint32_t> slot_pixels;
 
         std::vector<int16_t> audio(48000 * 2);
         std::FILE *audio_out = nullptr;
@@ -460,6 +510,10 @@ int main(int argc, char **argv) {
             }
             uint32_t width = 0, height = 0;
             const uint8_t *pixels = machine->frame(width, height);
+            if (slot_hashes) {
+                if (!read_slot(*machine, width, height, slot_pixels, error)) return fail("--slot-hashes: " + error);
+                pixels = slot_pixels.empty() ? nullptr : reinterpret_cast<const uint8_t *>(slot_pixels.data());
+            }
             char line[160];
             std::snprintf(line, sizeof(line), "%ld %ux%u %016llx %016llx %u", frame, width, height,
                           (unsigned long long) (pixels ? hash(pixels, size_t(width) * height * 4) : 0),

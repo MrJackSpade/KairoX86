@@ -213,5 +213,9 @@ target_link_libraries(hardware_query PRIVATE kairox86_core)
 # The measurement tool (KairoX86#56), likewise: host and device.
 add_executable(game_profile EXCLUDE_FROM_ALL test/game_profile.cpp)
 target_link_libraries(game_profile PRIVATE kairox86_core)
+if(ANDROID)
+    # --slot-hashes reads the frames handed over on the GPU back (AHardwareBuffer_lock, KairoX86#384)
+    target_link_libraries(game_profile PRIVATE nativewindow)
+endif()
 # The shared startup typer (startup_typer.h, header only), as the app runs it (KairoX86#46).
 target_include_directories(game_profile PRIVATE "${CMAKE_CURRENT_LIST_DIR}/../shared/frontend/src/main/cpp")
