@@ -40,6 +40,9 @@
 //   --until-halt <cs:ip>  a machine that stops halted with interrupts off at cs:ip (as the stop
 //                   reports it, "0000:8003") has run to its end: the run ends there as if its frames
 //                   were done, its hashes and state kept. Prints "halted <frame>".
+//   --gpu-frames 1  the frames handed over on the GPU, as the app's presenter takes them (KairoX86#384): the four
+//                   slots named in turn, one before each frame. The frames then give no pixels (hashed as 0).
+//                   Fails unless the machine hands its frames over so (Hardware acceleration on, Android).
 //
 // Prints one line starting "start ": how long the machine took to start; and one starting "host ":
 // the frames per second the host reached, the guest's rate and the frame time distribution. At the
@@ -308,6 +311,7 @@ int main(int argc, char **argv) {
     std::vector<std::array<long, 3>> places;
     std::string commands;
     std::string until_halt;
+    bool gpu_frames = false;
     for (int i = 6; i < argc; ++i) {
         const std::string option = argv[i];
         if (i + 1 >= argc) return fail(option + " needs a value");
@@ -320,6 +324,7 @@ int main(int argc, char **argv) {
         else if (option == "--seed") seed = uint32_t(std::strtoul(value.c_str(), nullptr, 0));
         else if (option == "--runs") runs = std::atol(value.c_str());
         else if (option == "--until-halt") until_halt = value;
+        else if (option == "--gpu-frames") gpu_frames = value == "1";
         else if (option == "--media") {
             const size_t first = value.find(':'), second = first == std::string::npos ? first : value.find(':', first + 1);
             if (second == std::string::npos) return fail("--media is <frame>:<slot>:<path>, not " + value);
@@ -372,6 +377,7 @@ int main(int argc, char **argv) {
         if (!machine) return fail("could not start: " + error);
         std::printf("start %.3f s\n", std::chrono::duration<double>(Clock::now() - started).count());
         std::printf("started %s\n", machine->started().c_str());
+        if (gpu_frames && !machine->gpu_frames()) return fail("--gpu-frames: the machine does not hand its frames over on the GPU");
 
         std::vector<int16_t> audio(48000 * 2);
         std::FILE *audio_out = nullptr;
@@ -428,6 +434,7 @@ int main(int argc, char **argv) {
                 else if (event.kind == 'y') machine->mouse_move(0, event.down ? event.code : -event.code);
             else machine->joystick_axis(event.code, event.down ? (event.kind == 'p' ? 32767 : -32767) : 0);
             }
+            if (gpu_frames) machine->gpu_frame_slot(int(frame % 4));
             const auto before = Clock::now();
             if (!machine->run_frame(error)) {
                 // A program that ends by halting where --until-halt says has run to its end (the

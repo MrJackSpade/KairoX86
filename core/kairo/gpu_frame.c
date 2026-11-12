@@ -45,6 +45,7 @@
         F(vkDestroyFence)                              \
         F(vkResetFences)                               \
         F(vkWaitForFences)                             \
+        F(vkGetFenceStatus)                            \
         F(vkQueueSubmit)
 
 #    define FRAME_DECLARE(name) static PFN_##name name;
@@ -264,7 +265,11 @@ kairo_gpu_frame_copy(kairo_gpu_frame_t *frame, const kairo_gpu_buffer_t *bitmap,
     const VkResult submitted = vkQueueSubmit(frames.queue, 1, &submit, frames.done);
     kairo_gpu_queue_unlock();
     frame_check(submitted, "vkQueueSubmit");
-    frame_check(vkWaitForFences(frames.device, 1, &frames.done, VK_TRUE, UINT64_MAX), "vkWaitForFences");
+    /* KairoX86#384: polled, not slept on, as kairo_gpu_run does: the emulation thread waits for this copy */
+    VkResult status;
+    while ((status = vkGetFenceStatus(frames.device, frames.done)) == VK_NOT_READY)
+        ;
+    frame_check(status, "vkGetFenceStatus");
     void *const buffer = frame->buffer;
     pthread_mutex_unlock(&frames_lock);
     return buffer;
