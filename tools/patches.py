@@ -6560,6 +6560,14 @@ KAIROX86_LAPIC_HIGHEST_CLZ = [
      '        if (!bits[word])\n            continue;\n\n        /* KairoX86#434: the highest set bit of a word that has one */\n        return (word << 5) | (31 - __builtin_clz(bits[word]));\n    }\n\n    return -1;'),
 ]
 
+
+# KairoX86#379: FPU_exception with no exception clears the store hold and returns at its start (the rest would do only
+# that).
+KAIROX86_SF_EXCEPTION_NONE = [
+    ('86box/src/cpu/x87.c', '    const int was_es = fpu_state.swd & FPU_SW_Summary;\n    uint16_t  raised = (exceptions & FPU_SW_Exceptions_Mask) & ~fpu_state.cwd & FPU_CW_Exceptions_Mask;\n    uint16_t  ret;\n\n    if (exceptions & (FPU_EX_Invalid | FPU_EX_Zero_Div))',
+     '    /* KairoX86#379: with no exception, all the rest does is clear the store hold */\n    if (!(exceptions & FPU_SW_Exceptions_Mask)) {\n        x87_ferr_store_hold(0, 0);\n        return 0;\n    }\n\n    const int was_es = fpu_state.swd & FPU_SW_Summary;\n    uint16_t  raised = (exceptions & FPU_SW_Exceptions_Mask) & ~fpu_state.cwd & FPU_CW_Exceptions_Mask;\n    uint16_t  ret;\n\n    if (exceptions & (FPU_EX_Invalid | FPU_EX_Zero_Div))'),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -6719,6 +6727,7 @@ PATCHES = {
     'kairox86-walk-ad-changed': KAIROX86_WALK_AD_CHANGED,
     'kairox86-io-delay-machine': KAIROX86_IO_DELAY_MACHINE,
     'kairox86-lapic-highest-clz': KAIROX86_LAPIC_HIGHEST_CLZ,
+    'kairox86-sf-exception-none': KAIROX86_SF_EXCEPTION_NONE,
 }
 
 ADDED = [

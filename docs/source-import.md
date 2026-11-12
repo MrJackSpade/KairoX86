@@ -154,6 +154,7 @@
 - **`kairox86-walk-ad-changed` group:** `mmutranslatereal_normal` sets the PDE's accessed bit and the PTE's (or 4 MB PDE's) accessed/dirty bits only when the entry just read lacks them, instead of an unconditional read-modify-write that stores the same word (KairoX86#368); the guest's memory ends the same; exact by `tools/exact.ps1 -Device` and `-Local`.
 - **`kairox86-io-delay-machine` group:** `io_init` sets `io_delay_every_read` when the machine is the IBM 5550 or 5535, and `inb`/`inw`/`inl` read that flag instead of comparing `machines[machine].init` with both machines' init functions on every access (KairoX86#432); exact by `tools/exact.ps1 -Device` and `-Local`, and identical hashes on both IBM machines.
 - **`kairox86-lapic-highest-clz` group:** `cpu_lapic_highest_vector` in `cpu_lapic.c` returns `(word << 5) | (31 - __builtin_clz(word))` for the highest nonzero word instead of a bit loop: the same vector (KairoX86#434); exact by `tools/exact.ps1 -Device` and identical hashes on the APIC-path machines.
+- **`kairox86-sf-exception-none` group:** `FPU_exception` (x87.c) returns 0 after `x87_ferr_store_hold(0, 0)` when no bit of `FPU_SW_Exceptions_Mask` is set, before the record and the raise, which would do nothing else (KairoX86#379); exact by `tools/exact.ps1 -Device` and identical hashes on the softfloat x87 workload.
 
 ## 86Box's translations
 

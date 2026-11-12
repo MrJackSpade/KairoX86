@@ -384,6 +384,12 @@ FPU_exception_record(uint16_t exceptions, int store)
 uint16_t
 FPU_exception(UNUSED(uint32_t fetchdat), uint16_t exceptions, int store)
 {
+    /* KairoX86#379: with no exception, all the rest does is clear the store hold */
+    if (!(exceptions & FPU_SW_Exceptions_Mask)) {
+        x87_ferr_store_hold(0, 0);
+        return 0;
+    }
+
     const int was_es = fpu_state.swd & FPU_SW_Summary;
     uint16_t  raised = (exceptions & FPU_SW_Exceptions_Mask) & ~fpu_state.cwd & FPU_CW_Exceptions_Mask;
     uint16_t  ret;
