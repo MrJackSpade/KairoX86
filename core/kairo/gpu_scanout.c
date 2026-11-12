@@ -117,7 +117,9 @@ void
 kairo_gpu_scan_cut(const void *bitmap, uint32_t start, uint32_t count)
 {
     pthread_mutex_lock(&queue_lock);
-    if ((line_count != 0) && (queued_bitmap == bitmap)) {
+    /* KairoX86#384: as kairo_gpu_scan_touch, pixels at or past queued_end (no queued line ends after it: it only
+       grows) cut none, and the usual cut, the overscan beside the line being drawn, is there; the queue isn't walked */
+    if ((line_count != 0) && (queued_bitmap == bitmap) && (start < queued_end)) {
         kairo_gpu_scan_t *queued = lines->data;
         const uint32_t    end    = start + count;
         for (uint32_t i = 0; i < line_count; i++) {
