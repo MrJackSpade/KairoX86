@@ -55,10 +55,17 @@ codegen_get_instruction_uop(codeblock_t *block, uint32_t pc, int *first_instruct
 #if defined(K9X_DIAG) && (defined(__aarch64__) || defined(_M_ARM64))
 /* KairoX86#419: how many of the block's recorded instructions begin at uop [uop] (more than one when some have no
    uops of their own), or, with [and_after], at it or later (the block's end) */
+/* KairoX86#439: the block's unrolled body, [start, end), and the uops its later copies fill after it (0: none) */
+int k9x_unroll_start, k9x_unroll_end, k9x_unroll_copies_end;
+
 int
 codegen_instructions_at_uop(codeblock_t *block, int uop, int and_after)
 {
     int n = 0;
+
+    /* KairoX86#439: a later copy's uop as the body's own, so the copy's instructions are counted too */
+    if (!and_after && (k9x_unroll_copies_end > k9x_unroll_end) && (uop >= k9x_unroll_end) && (uop < k9x_unroll_copies_end))
+        uop = k9x_unroll_start + ((uop - k9x_unroll_end) % (k9x_unroll_end - k9x_unroll_start));
 
     for (int c = 0; c < block->ins; c++)
         if ((codegen_instructions[c].first_uop == uop) || (and_after && (codegen_instructions[c].first_uop > uop)))

@@ -6821,6 +6821,15 @@ KAIROX86_MMX_ENTER_ONCE_UNROLLED = [
      '    [UOP_NOP_BARRIER & UOP_MASK] = codegen_NOP,\n    [UOP_NOP & UOP_MASK]         = codegen_NOP, /* KairoX86#399 */'),
 ]
 
+
+# KairoX86#439: K9X_DIAG's per-instruction counters count an unrolled loop's later copies too.
+KAIROX86_DIAG_UNROLLED_INS = [
+    ('86box/src/codegen/codegen.c', 'int\ncodegen_instructions_at_uop(codeblock_t *block, int uop, int and_after)\n{\n    int n = 0;\n',
+     "/* KairoX86#439: the block's unrolled body, [start, end), and the uops its later copies fill after it (0: none) */\nint k9x_unroll_start, k9x_unroll_end, k9x_unroll_copies_end;\n\nint\ncodegen_instructions_at_uop(codeblock_t *block, int uop, int and_after)\n{\n    int n = 0;\n\n    /* KairoX86#439: a later copy's uop as the body's own, so the copy's instructions are counted too */\n    if (!and_after && (k9x_unroll_copies_end > k9x_unroll_end) && (uop >= k9x_unroll_end) && (uop < k9x_unroll_copies_end))\n        uop = k9x_unroll_start + ((uop - k9x_unroll_end) % (k9x_unroll_end - k9x_unroll_start));\n"),
+    ('86box/src/codegen/codegen_ir.c', '    codegen_reg_mark_as_required();\n    codegen_reg_process_dead_list(ir);\n    block_write_data = codeblock_allocator_get_ptr(block->head_mem_block);',
+     '#if defined(K9X_DIAG) && (defined(__aarch64__) || defined(_M_ARM64))\n    {\n        extern int k9x_unroll_start, k9x_unroll_end, k9x_unroll_copies_end;\n\n        /* KairoX86#439: the unrolled body and its copies, for the per-instruction counters */\n        k9x_unroll_copies_end = 0;\n        if (codegen_unroll_count) {\n            k9x_unroll_start      = codegen_unroll_start;\n            k9x_unroll_end        = codegen_unroll_start + (ir->wr_pos - codegen_unroll_start) / codegen_unroll_count;\n            k9x_unroll_copies_end = ir->wr_pos;\n        }\n    }\n#endif\n    codegen_reg_mark_as_required();\n    codegen_reg_process_dead_list(ir);\n    block_write_data = codeblock_allocator_get_ptr(block->head_mem_block);'),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -6993,6 +7002,7 @@ PATCHES = {
     'kairox86-io-direct-wide': KAIROX86_IO_DIRECT_WIDE,
     'kairox86-mmx-enter-inline': KAIROX86_MMX_ENTER_INLINE,
     'kairox86-mmx-enter-once-unrolled': KAIROX86_MMX_ENTER_ONCE_UNROLLED,
+    'kairox86-diag-unrolled-ins': KAIROX86_DIAG_UNROLLED_INS,
 }
 
 ADDED = [

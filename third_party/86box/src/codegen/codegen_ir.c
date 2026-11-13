@@ -127,6 +127,19 @@ codegen_ir_compile(ir_data_t *ir, codeblock_t *block)
         }
     }
 
+#if defined(K9X_DIAG) && (defined(__aarch64__) || defined(_M_ARM64))
+    {
+        extern int k9x_unroll_start, k9x_unroll_end, k9x_unroll_copies_end;
+
+        /* KairoX86#439: the unrolled body and its copies, for the per-instruction counters */
+        k9x_unroll_copies_end = 0;
+        if (codegen_unroll_count) {
+            k9x_unroll_start      = codegen_unroll_start;
+            k9x_unroll_end        = codegen_unroll_start + (ir->wr_pos - codegen_unroll_start) / codegen_unroll_count;
+            k9x_unroll_copies_end = ir->wr_pos;
+        }
+    }
+#endif
     codegen_reg_mark_as_required();
     codegen_reg_process_dead_list(ir);
     block_write_data = codeblock_allocator_get_ptr(block->head_mem_block);
