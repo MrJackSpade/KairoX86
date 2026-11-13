@@ -11,6 +11,7 @@
 #include "386_common.h"
 #include "codegen.h"
 #include "codegen_ir.h"
+#include "codegen_accumulate.h" /* KairoX86#396 */
 #include "codegen_ops.h"
 #include "codegen_ops_helpers.h"
 #include "codegen_ops_jit_wrappers.h"
@@ -490,6 +491,93 @@ ropPUSHF(UNUSED(codeblock_t *block), ir_data_t *ir, UNUSED(uint8_t opcode), UNUS
 
     return op_pc;
 }
+/*KairoX86#396: POPF and POPFD as x86_ops_flag.h's opPOPF/opPOPFD outside V86 mode. Blocks are keyed on protected
+  mode but not on CPL or IOPL, so the bits the guest may not change (K: none at CPL 0 or in real mode, IOPL at a CPL
+  IOPL allows, IOPL and IF above it) are worked out at run time: CPL > 0 as (CPL + 3) >> 2, CPL > IOPL as the sign of
+  IOPL - CPL. With the 486 debug registers the interpreter's loop reads the rf_flag_no_clear the handler sets, so the
+  handler runs there. TF turned on ends the block past POPF, as the handler's nonzero answer does.*/
+extern int cpu_debug_regs_486;
+
+static uint32_t
+rop_popf_common(ir_data_t *ir, uint32_t op_pc, int size32)
+{
+    int sp_reg;
+    int jump_uop;
+
+    if ((cpu_state.eflags & VM_FLAG) || cpu_debug_regs_486)
+        return 0;
+
+    codegen_accumulate_flush(ir);
+    uop_MOV_IMM(ir, IREG_oldpc, cpu_state.oldpc);
+    sp_reg = LOAD_SP(ir);
+    if (size32)
+        uop_MEM_LOAD_REG(ir, IREG_temp2, IREG_SS_base, sp_reg);
+    else
+        uop_MEM_LOAD_REG(ir, IREG_temp2_W, IREG_SS_base, sp_reg);
+    ADD_SP(ir, size32 ? 4 : 2);
+
+    uop_MOVZX(ir, IREG_temp3, IREG_temp2_W);
+    if (cpu_cur_status & CPU_STATUS_PMODE) {
+        uop_MOVZX_REG_PTR_8(ir, IREG_temp0, &cpu_state.seg_cs.access);
+        uop_SHR_IMM(ir, IREG_temp0, IREG_temp0, 5);
+        uop_AND_IMM(ir, IREG_temp0, IREG_temp0, 3);
+        uop_MOVZX(ir, IREG_temp1, IREG_flags);
+        uop_SHR_IMM(ir, IREG_temp1, IREG_temp1, 12);
+        uop_AND_IMM(ir, IREG_temp1, IREG_temp1, 3);
+        uop_SUB(ir, IREG_temp1, IREG_temp1, IREG_temp0);
+        uop_SHR_IMM(ir, IREG_temp1, IREG_temp1, 31); /*CPL > IOPL*/
+        uop_ADD_IMM(ir, IREG_temp0, IREG_temp0, 3);
+        uop_SHR_IMM(ir, IREG_temp0, IREG_temp0, 2); /*CPL > 0*/
+        /*K = (CPL > 0) * 0x3000 + (CPL > IOPL) * 0x200 (CPL > IOPL only when CPL > 0)*/
+        uop_SHL_IMM(ir, IREG_temp0, IREG_temp0, 12);
+        uop_SHL_IMM(ir, IREG_temp1, IREG_temp1, 9);
+        uop_ADD(ir, IREG_temp1, IREG_temp1, IREG_temp0);
+        uop_SHL_IMM(ir, IREG_temp0, IREG_temp0, 1);
+        uop_ADD(ir, IREG_temp0, IREG_temp0, IREG_temp1);
+        uop_MOVZX(ir, IREG_temp1, IREG_flags);
+        uop_AND(ir, IREG_temp1, IREG_temp1, IREG_temp0);
+        uop_XOR_IMM(ir, IREG_temp0, IREG_temp0, 0x7fd5);
+        uop_AND(ir, IREG_temp3, IREG_temp3, IREG_temp0);
+        uop_OR(ir, IREG_temp1, IREG_temp1, IREG_temp3);
+    } else {
+        uop_AND_IMM(ir, IREG_temp1, IREG_temp3, 0x7fd5);
+    }
+    uop_OR_IMM(ir, IREG_temp1, IREG_temp1, 2);
+
+    uop_MOVZX(ir, IREG_temp0, IREG_flags);
+    uop_XOR_IMM(ir, IREG_temp0, IREG_temp0, 0xffff);
+    uop_AND(ir, IREG_temp0, IREG_temp0, IREG_temp1);
+    uop_AND_IMM(ir, IREG_temp0, IREG_temp0, T_FLAG);
+    uop_MOV(ir, IREG_flags, IREG_temp1_W);
+    uop_MOV_IMM(ir, IREG_flags_op, FLAGS_UNKNOWN);
+    if (size32) {
+        uop_AND_IMM(ir, IREG_eflags, IREG_eflags, VM_FLAG | RF_FLAG | VIF_FLAG | VIP_FLAG);
+        uop_SHR_IMM(ir, IREG_temp2, IREG_temp2, 16);
+        uop_AND_IMM(ir, IREG_temp2, IREG_temp2, (AC_FLAG | VID_FLAG) & cpu_eflags_implemented());
+        uop_OR(ir, IREG_eflags, IREG_eflags, IREG_temp2_W);
+    }
+    codegen_flags_changed = 0;
+
+    jump_uop = uop_CMP_IMM_JZ_DEST(ir, IREG_temp0, 0);
+    uop_MOV_IMM(ir, IREG_pc, op_pc);
+    uop_JMP(ir, codegen_exit_rout);
+    uop_set_jump_dest(ir, jump_uop);
+
+    return op_pc;
+}
+
+uint32_t
+ropPOPF(UNUSED(codeblock_t *block), ir_data_t *ir, UNUSED(uint8_t opcode), UNUSED(uint32_t fetchdat), UNUSED(uint32_t op_32), uint32_t op_pc)
+{
+    return rop_popf_common(ir, op_pc, 0);
+}
+
+uint32_t
+ropPOPFD(UNUSED(codeblock_t *block), ir_data_t *ir, UNUSED(uint8_t opcode), UNUSED(uint32_t fetchdat), UNUSED(uint32_t op_32), uint32_t op_pc)
+{
+    return rop_popf_common(ir, op_pc, 1);
+}
+
 uint32_t
 ropPUSHFD(UNUSED(codeblock_t *block), ir_data_t *ir, UNUSED(uint8_t opcode), UNUSED(uint32_t fetchdat), UNUSED(uint32_t op_32), uint32_t op_pc)
 {
