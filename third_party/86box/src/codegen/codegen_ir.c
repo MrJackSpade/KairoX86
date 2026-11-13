@@ -115,6 +115,9 @@ codegen_ir_compile(ir_data_t *ir, codeblock_t *block)
 
     for (c = 0; c < ir->wr_pos; c++) {
         uop_t *uop = &ir->uops[c];
+        extern int codegen_reg_uop_now;
+
+        codegen_reg_uop_now = c; /* KairoX86#363 */
 
         //                pclog("uOP %i : %08x\n", c, uop->type);
 

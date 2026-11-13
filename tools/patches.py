@@ -6735,6 +6735,20 @@ KAIROX86_VOODOO_BUSY_UNSEEN = [
      '                case SST_nopCMD:\n                    voodoo->cmd_written++;\n                    voodoo_queue_command(voodoo, (addr & 0x3fc) | FIFO_WRITEL_REG, val);\n                    voodoo_wake_fifo_threads(voodoo->set, voodoo); /* KairoX86#436: not voodoo_busy, unseen timing */'),
 ]
 
+
+# KairoX86#363: a register spill drops the store of a dead lazy-flag version (no reads left, a later version) when
+# nothing between the spill and the next version's write can abort, exit or be jumped to.
+KAIROX86_DEAD_FLAG_SPILL = [
+    ('86box/src/codegen/codegen_reg.c', 'ir_host_reg_t\ncodegen_reg_alloc_read_reg(codeblock_t *block, ir_reg_t ir_reg, int *host_reg_idx)\n{',
+     '/* KairoX86#363: the uop codegen_ir_compile is allocating for */\nint codegen_reg_uop_now;\n\n/* KairoX86#363: whether register c holds a lazy-flag version a spill need not store: no reads left, a later version in\n   the block, and nothing from the uop being allocated for up to the one that writes the next version (that one\n   included) that can abort, exit or be jumped to, so nothing reads the old value from memory first */\nstatic int\nflag_spill_droppable(const host_reg_set_t *reg_set, int c)\n{\n    const int r = IREG_GET_REG(reg_set->regs[c].reg);\n    const int v = reg_set->regs[c].version;\n\n    if ((r < IREG_flags_op) || (r > IREG_flags_op2) || reg_version[r][v].refcount || (reg_last_version[r] <= v))\n        return 0;\n    const ir_data_t *ir    = codegen_get_ir_data();\n    const int        until = reg_version[r][v + 1].parent_uop;\n    if ((until < codegen_reg_uop_now) || (until >= ir->wr_pos))\n        return 0;\n    for (int u = codegen_reg_uop_now; u <= until; u++)\n        if (ir->uops[u].type & (UOP_TYPE_BARRIER | UOP_TYPE_ORDER_BARRIER | UOP_TYPE_JUMP | UOP_TYPE_JUMP_DEST))\n            return 0;\n    return 1;\n}\n\nir_host_reg_t\ncodegen_reg_alloc_read_reg(codeblock_t *block, ir_reg_t ir_reg, int *host_reg_idx)\n{'),
+    ('86box/src/codegen/codegen_reg.c', '        if (reg_set->dirty[c])\n            codegen_reg_writeback(reg_set, block, c, 1);\n        codegen_reg_load(reg_set, block, c, ir_reg);',
+     '        if (reg_set->dirty[c]) {\n            if (flag_spill_droppable(reg_set, c)) { /* KairoX86#363 */\n                reg_set->regs[c]  = invalid_ir_reg;\n                reg_set->dirty[c] = 0;\n            } else\n                codegen_reg_writeback(reg_set, block, c, 1);\n        }\n        codegen_reg_load(reg_set, block, c, ir_reg);'),
+    ('86box/src/codegen/codegen_reg.c', '#ifndef RELEASE_BUILD\n            if (c == reg_set->nr_regs)\n                fatal("codegen_reg_alloc_write_reg - out of registers\\n");\n#endif\n            if (reg_set->dirty[c])\n                codegen_reg_writeback(reg_set, block, c, 1);',
+     '#ifndef RELEASE_BUILD\n            if (c == reg_set->nr_regs)\n                fatal("codegen_reg_alloc_write_reg - out of registers\\n");\n#endif\n            if (reg_set->dirty[c]) {\n                if (flag_spill_droppable(reg_set, c)) { /* KairoX86#363 */\n                    reg_set->regs[c]  = invalid_ir_reg;\n                    reg_set->dirty[c] = 0;\n                } else\n                    codegen_reg_writeback(reg_set, block, c, 1);\n            }'),
+    ('86box/src/codegen/codegen_ir.c', '    for (c = 0; c < ir->wr_pos; c++) {\n        uop_t *uop = &ir->uops[c];\n',
+     '    for (c = 0; c < ir->wr_pos; c++) {\n        uop_t *uop = &ir->uops[c];\n        extern int codegen_reg_uop_now;\n\n        codegen_reg_uop_now = c; /* KairoX86#363 */\n'),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -6903,6 +6917,7 @@ PATCHES = {
     'kairox86-voodoo-cmdfifo-settle': KAIROX86_VOODOO_CMDFIFO_SETTLE,
     'kairox86-lapic-ppr-derived': KAIROX86_LAPIC_PPR_DERIVED,
     'kairox86-voodoo-busy-unseen': KAIROX86_VOODOO_BUSY_UNSEEN,
+    'kairox86-dead-flag-spill': KAIROX86_DEAD_FLAG_SPILL,
 }
 
 ADDED = [

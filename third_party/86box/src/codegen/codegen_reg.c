@@ -683,6 +683,30 @@ codegen_reg_alloc_register(ir_reg_t dest_reg_a, ir_reg_t src_reg_a, ir_reg_t src
         alloc_dest_reg(dest_reg_a, dest_reference);
 }
 
+/* KairoX86#363: the uop codegen_ir_compile is allocating for */
+int codegen_reg_uop_now;
+
+/* KairoX86#363: whether register c holds a lazy-flag version a spill need not store: no reads left, a later version in
+   the block, and nothing from the uop being allocated for up to the one that writes the next version (that one
+   included) that can abort, exit or be jumped to, so nothing reads the old value from memory first */
+static int
+flag_spill_droppable(const host_reg_set_t *reg_set, int c)
+{
+    const int r = IREG_GET_REG(reg_set->regs[c].reg);
+    const int v = reg_set->regs[c].version;
+
+    if ((r < IREG_flags_op) || (r > IREG_flags_op2) || reg_version[r][v].refcount || (reg_last_version[r] <= v))
+        return 0;
+    const ir_data_t *ir    = codegen_get_ir_data();
+    const int        until = reg_version[r][v + 1].parent_uop;
+    if ((until < codegen_reg_uop_now) || (until >= ir->wr_pos))
+        return 0;
+    for (int u = codegen_reg_uop_now; u <= until; u++)
+        if (ir->uops[u].type & (UOP_TYPE_BARRIER | UOP_TYPE_ORDER_BARRIER | UOP_TYPE_JUMP | UOP_TYPE_JUMP_DEST))
+            return 0;
+    return 1;
+}
+
 ir_host_reg_t
 codegen_reg_alloc_read_reg(codeblock_t *block, ir_reg_t ir_reg, int *host_reg_idx)
 {
@@ -729,8 +753,13 @@ codegen_reg_alloc_read_reg(codeblock_t *block, ir_reg_t ir_reg, int *host_reg_id
                 fatal("codegen_reg_alloc_read_reg - out of registers\n");
 #endif
         }
-        if (reg_set->dirty[c])
-            codegen_reg_writeback(reg_set, block, c, 1);
+        if (reg_set->dirty[c]) {
+            if (flag_spill_droppable(reg_set, c)) { /* KairoX86#363 */
+                reg_set->regs[c]  = invalid_ir_reg;
+                reg_set->dirty[c] = 0;
+            } else
+                codegen_reg_writeback(reg_set, block, c, 1);
+        }
         codegen_reg_load(reg_set, block, c, ir_reg);
         reg_set->locked |= (1 << c);
         reg_set->dirty[c] = 0;
@@ -806,8 +835,13 @@ codegen_reg_alloc_write_reg(codeblock_t *block, ir_reg_t ir_reg)
             if (c == reg_set->nr_regs)
                 fatal("codegen_reg_alloc_write_reg - out of registers\n");
 #endif
-            if (reg_set->dirty[c])
-                codegen_reg_writeback(reg_set, block, c, 1);
+            if (reg_set->dirty[c]) {
+                if (flag_spill_droppable(reg_set, c)) { /* KairoX86#363 */
+                    reg_set->regs[c]  = invalid_ir_reg;
+                    reg_set->dirty[c] = 0;
+                } else
+                    codegen_reg_writeback(reg_set, block, c, 1);
+            }
         }
     }
 
