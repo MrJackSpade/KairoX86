@@ -470,8 +470,7 @@ voodoo_readl(uint32_t addr, void *priv)
                     int swap_count   = voodoo->swap_count;
                     int written      = voodoo->cmd_written + voodoo->cmd_written_fifo + voodoo->cmd_written_fifo_2;
                     int busy         = (written - voodoo->cmd_read) ||
-                               (voodoo->cmdfifo_depth_rd != voodoo->cmdfifo_depth_wr) ||
-                               voodoo->voodoo_busy ||
+                               (voodoo->cmdfifo_depth_rd != voodoo->cmdfifo_depth_wr) || /* KairoX86#436: not voodoo_busy, settled */
                                RENDER_VOODOO_BUSY(voodoo, 0) ||
                                (voodoo->render_threads >= 2 && RENDER_VOODOO_BUSY(voodoo, 1)) ||
                                (voodoo->render_threads == 4 && (RENDER_VOODOO_BUSY(voodoo, 2) || RENDER_VOODOO_BUSY(voodoo, 3)));
@@ -485,14 +484,12 @@ voodoo_readl(uint32_t addr, void *priv)
                         if ((voodoo_other->fifo_write_idx - voodoo_other->fifo_read_idx) > fifo_entries)
                             fifo_entries = voodoo_other->fifo_write_idx - voodoo_other->fifo_read_idx;
                         if ((other_written - voodoo_other->cmd_read) ||
-                            (voodoo_other->cmdfifo_depth_rd != voodoo_other->cmdfifo_depth_wr) ||
-                            voodoo_other->voodoo_busy ||
+                            (voodoo_other->cmdfifo_depth_rd != voodoo_other->cmdfifo_depth_wr) || /* KairoX86#436: not voodoo_busy, settled */
                             RENDER_VOODOO_BUSY(voodoo_other, 0) ||
                             (voodoo_other->render_threads >= 2 && RENDER_VOODOO_BUSY(voodoo_other, 1)) ||
                             (voodoo_other->render_threads == 4 && (RENDER_VOODOO_BUSY(voodoo_other, 2) || RENDER_VOODOO_BUSY(voodoo_other, 3))))
                             busy = 1;
-                        if (!voodoo_other->voodoo_busy)
-                            voodoo_wake_fifo_thread(voodoo_other);
+                        voodoo_wake_fifo_thread(voodoo_other); /* KairoX86#436: not voodoo_busy, unseen timing */
                     }
 
                     fifo_size = 0xffff - fifo_entries;
@@ -511,8 +508,7 @@ voodoo_readl(uint32_t addr, void *priv)
                     if (busy)
                         temp |= 0x380; /*Busy*/
 
-                    if (!voodoo->voodoo_busy)
-                        voodoo_wake_fifo_thread(voodoo);
+                    voodoo_wake_fifo_thread(voodoo); /* KairoX86#436: not voodoo_busy, unseen timing */
                 }
                 break;
 
@@ -762,40 +758,35 @@ voodoo_writel(uint32_t addr, uint32_t val, void *priv)
                 if (voodoo->fbiInit7 & FBIINIT7_CMDFIFO_ENABLE)
                     return;
                 voodoo_queue_command(voodoo, addr | FIFO_WRITEL_REG, val);
-                if (!voodoo->voodoo_busy)
-                    voodoo_wake_fifo_threads(voodoo->set, voodoo);
+                voodoo_wake_fifo_threads(voodoo->set, voodoo); /* KairoX86#436: not voodoo_busy, unseen timing */
                 break;
             case SST_triangleCMD:
                 if (voodoo->fbiInit7 & FBIINIT7_CMDFIFO_ENABLE)
                     return;
                 voodoo->cmd_written++;
                 voodoo_queue_command(voodoo, addr | FIFO_WRITEL_REG, val);
-                if (!voodoo->voodoo_busy)
-                    voodoo_wake_fifo_threads(voodoo->set, voodoo);
+                voodoo_wake_fifo_threads(voodoo->set, voodoo); /* KairoX86#436: not voodoo_busy, unseen timing */
                 break;
             case SST_ftriangleCMD:
                 if (voodoo->fbiInit7 & FBIINIT7_CMDFIFO_ENABLE)
                     return;
                 voodoo->cmd_written++;
                 voodoo_queue_command(voodoo, addr | FIFO_WRITEL_REG, val);
-                if (!voodoo->voodoo_busy)
-                    voodoo_wake_fifo_threads(voodoo->set, voodoo);
+                voodoo_wake_fifo_threads(voodoo->set, voodoo); /* KairoX86#436: not voodoo_busy, unseen timing */
                 break;
             case SST_fastfillCMD:
                 if (voodoo->fbiInit7 & FBIINIT7_CMDFIFO_ENABLE)
                     return;
                 voodoo->cmd_written++;
                 voodoo_queue_command(voodoo, addr | FIFO_WRITEL_REG, val);
-                if (!voodoo->voodoo_busy)
-                    voodoo_wake_fifo_threads(voodoo->set, voodoo);
+                voodoo_wake_fifo_threads(voodoo->set, voodoo); /* KairoX86#436: not voodoo_busy, unseen timing */
                 break;
             case SST_nopCMD:
                 if (voodoo->fbiInit7 & FBIINIT7_CMDFIFO_ENABLE)
                     return;
                 voodoo->cmd_written++;
                 voodoo_queue_command(voodoo, addr | FIFO_WRITEL_REG, val);
-                if (!voodoo->voodoo_busy)
-                    voodoo_wake_fifo_threads(voodoo->set, voodoo);
+                voodoo_wake_fifo_threads(voodoo->set, voodoo); /* KairoX86#436: not voodoo_busy, unseen timing */
                 break;
 
             case SST_fbiInit4:

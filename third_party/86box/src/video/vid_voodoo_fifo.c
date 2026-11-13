@@ -351,6 +351,9 @@ voodoo_flush(voodoo_t *voodoo)
     }
     voodoo_wait_for_render_thread_idle(voodoo);
     voodoo->flush = 0;
+    /* KairoX86#436: the command FIFOs the FIFO thread works through too, so a read after the flush never sees that
+       work half done (the callers are the emulation thread's read handlers) */
+    voodoo_settle(voodoo);
 }
 
 /* KairoX86#222: waits until the FIFO thread has settled (see KAIROX86_VOODOO_SETTLE in

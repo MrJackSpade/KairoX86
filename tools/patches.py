@@ -6695,6 +6695,46 @@ KAIROX86_LAPIC_PPR_DERIVED = [
      '    } else if ((reg == LAPIC_REG_SVR)'),
 ]
 
+
+# KairoX86#436's class: the FIFO thread's voodoo_busy flag stays out of what the guest sees (the status reads, the
+# wake timer's arming), and voodoo_flush ends settled.
+KAIROX86_VOODOO_BUSY_UNSEEN = [
+    ('86box/src/video/vid_voodoo_fifo.c', '    voodoo_wait_for_render_thread_idle(voodoo);\n    voodoo->flush = 0;\n}',
+     "    voodoo_wait_for_render_thread_idle(voodoo);\n    voodoo->flush = 0;\n    /* KairoX86#436: the command FIFOs the FIFO thread works through too, so a read after the flush never sees that\n       work half done (the callers are the emulation thread's read handlers) */\n    voodoo_settle(voodoo);\n}"),
+    ('86box/src/video/vid_voodoo_banshee.c', ' || RENDER_VOODOO_BUSY(voodoo, 3) || voodoo->voodoo_busy;',
+     ' || RENDER_VOODOO_BUSY(voodoo, 3); /* KairoX86#436: not voodoo_busy, settled */'),
+    ('86box/src/video/vid_voodoo.c', '                               (voodoo->cmdfifo_depth_rd != voodoo->cmdfifo_depth_wr) ||\n                               voodoo->voodoo_busy ||\n',
+     '                               (voodoo->cmdfifo_depth_rd != voodoo->cmdfifo_depth_wr) || /* KairoX86#436: not voodoo_busy, settled */\n'),
+    ('86box/src/video/vid_voodoo.c', '                            (voodoo_other->cmdfifo_depth_rd != voodoo_other->cmdfifo_depth_wr) ||\n                            voodoo_other->voodoo_busy ||\n',
+     '                            (voodoo_other->cmdfifo_depth_rd != voodoo_other->cmdfifo_depth_wr) || /* KairoX86#436: not voodoo_busy, settled */\n'),
+    ('86box/src/video/vid_voodoo.c', '                            busy = 1;\n                        if (!voodoo_other->voodoo_busy)\n                            voodoo_wake_fifo_thread(voodoo_other);',
+     '                            busy = 1;\n                        voodoo_wake_fifo_thread(voodoo_other); /* KairoX86#436: not voodoo_busy, unseen timing */'),
+    ('86box/src/video/vid_voodoo.c', '\n                    if (!voodoo->voodoo_busy)\n                        voodoo_wake_fifo_thread(voodoo);',
+     '\n                    voodoo_wake_fifo_thread(voodoo); /* KairoX86#436: not voodoo_busy, unseen timing */'),
+    ('86box/src/video/vid_voodoo.c', '                    return;\n                voodoo_queue_command(voodoo, addr | FIFO_WRITEL_REG, val);\n                if (!voodoo->voodoo_busy)\n                    voodoo_wake_fifo_threads(voodoo->set, voodoo);',
+     '                    return;\n                voodoo_queue_command(voodoo, addr | FIFO_WRITEL_REG, val);\n                voodoo_wake_fifo_threads(voodoo->set, voodoo); /* KairoX86#436: not voodoo_busy, unseen timing */'),
+    ('86box/src/video/vid_voodoo.c', '            case SST_triangleCMD:\n                if (voodoo->fbiInit7 & FBIINIT7_CMDFIFO_ENABLE)\n                    return;\n                voodoo->cmd_written++;\n                voodoo_queue_command(voodoo, addr | FIFO_WRITEL_REG, val);\n                if (!voodoo->voodoo_busy)\n                    voodoo_wake_fifo_threads(voodoo->set, voodoo);',
+     '            case SST_triangleCMD:\n                if (voodoo->fbiInit7 & FBIINIT7_CMDFIFO_ENABLE)\n                    return;\n                voodoo->cmd_written++;\n                voodoo_queue_command(voodoo, addr | FIFO_WRITEL_REG, val);\n                voodoo_wake_fifo_threads(voodoo->set, voodoo); /* KairoX86#436: not voodoo_busy, unseen timing */'),
+    ('86box/src/video/vid_voodoo.c', '            case SST_ftriangleCMD:\n                if (voodoo->fbiInit7 & FBIINIT7_CMDFIFO_ENABLE)\n                    return;\n                voodoo->cmd_written++;\n                voodoo_queue_command(voodoo, addr | FIFO_WRITEL_REG, val);\n                if (!voodoo->voodoo_busy)\n                    voodoo_wake_fifo_threads(voodoo->set, voodoo);',
+     '            case SST_ftriangleCMD:\n                if (voodoo->fbiInit7 & FBIINIT7_CMDFIFO_ENABLE)\n                    return;\n                voodoo->cmd_written++;\n                voodoo_queue_command(voodoo, addr | FIFO_WRITEL_REG, val);\n                voodoo_wake_fifo_threads(voodoo->set, voodoo); /* KairoX86#436: not voodoo_busy, unseen timing */'),
+    ('86box/src/video/vid_voodoo.c', '            case SST_fastfillCMD:\n                if (voodoo->fbiInit7 & FBIINIT7_CMDFIFO_ENABLE)\n                    return;\n                voodoo->cmd_written++;\n                voodoo_queue_command(voodoo, addr | FIFO_WRITEL_REG, val);\n                if (!voodoo->voodoo_busy)\n                    voodoo_wake_fifo_threads(voodoo->set, voodoo);',
+     '            case SST_fastfillCMD:\n                if (voodoo->fbiInit7 & FBIINIT7_CMDFIFO_ENABLE)\n                    return;\n                voodoo->cmd_written++;\n                voodoo_queue_command(voodoo, addr | FIFO_WRITEL_REG, val);\n                voodoo_wake_fifo_threads(voodoo->set, voodoo); /* KairoX86#436: not voodoo_busy, unseen timing */'),
+    ('86box/src/video/vid_voodoo.c', '            case SST_nopCMD:\n                if (voodoo->fbiInit7 & FBIINIT7_CMDFIFO_ENABLE)\n                    return;\n                voodoo->cmd_written++;\n                voodoo_queue_command(voodoo, addr | FIFO_WRITEL_REG, val);\n                if (!voodoo->voodoo_busy)\n                    voodoo_wake_fifo_threads(voodoo->set, voodoo);',
+     '            case SST_nopCMD:\n                if (voodoo->fbiInit7 & FBIINIT7_CMDFIFO_ENABLE)\n                    return;\n                voodoo->cmd_written++;\n                voodoo_queue_command(voodoo, addr | FIFO_WRITEL_REG, val);\n                voodoo_wake_fifo_threads(voodoo->set, voodoo); /* KairoX86#436: not voodoo_busy, unseen timing */'),
+    ('86box/src/video/vid_voodoo_banshee.c', '\n    if (!voodoo->voodoo_busy)\n        voodoo_wake_fifo_thread(voodoo);',
+     '\n    voodoo_wake_fifo_thread(voodoo); /* KairoX86#436: not voodoo_busy, unseen timing */'),
+    ('86box/src/video/vid_voodoo_banshee.c', '                case SST_swapbufferCMD:\n                    voodoo->cmd_written++;\n                    voodoo_queue_command(voodoo, (addr & 0x3fc) | FIFO_WRITEL_REG, val);\n                    if (!voodoo->voodoo_busy)\n                        voodoo_wake_fifo_threads(voodoo->set, voodoo);',
+     '                case SST_swapbufferCMD:\n                    voodoo->cmd_written++;\n                    voodoo_queue_command(voodoo, (addr & 0x3fc) | FIFO_WRITEL_REG, val);\n                    voodoo_wake_fifo_threads(voodoo->set, voodoo); /* KairoX86#436: not voodoo_busy, unseen timing */'),
+    ('86box/src/video/vid_voodoo_banshee.c', '                case SST_triangleCMD:\n                    voodoo->cmd_written++;\n                    voodoo_queue_command(voodoo, (addr & 0x3fc) | FIFO_WRITEL_REG, val);\n                    if (!voodoo->voodoo_busy)\n                        voodoo_wake_fifo_threads(voodoo->set, voodoo);',
+     '                case SST_triangleCMD:\n                    voodoo->cmd_written++;\n                    voodoo_queue_command(voodoo, (addr & 0x3fc) | FIFO_WRITEL_REG, val);\n                    voodoo_wake_fifo_threads(voodoo->set, voodoo); /* KairoX86#436: not voodoo_busy, unseen timing */'),
+    ('86box/src/video/vid_voodoo_banshee.c', '                case SST_ftriangleCMD:\n                    voodoo->cmd_written++;\n                    voodoo_queue_command(voodoo, (addr & 0x3fc) | FIFO_WRITEL_REG, val);\n                    if (!voodoo->voodoo_busy)\n                        voodoo_wake_fifo_threads(voodoo->set, voodoo);',
+     '                case SST_ftriangleCMD:\n                    voodoo->cmd_written++;\n                    voodoo_queue_command(voodoo, (addr & 0x3fc) | FIFO_WRITEL_REG, val);\n                    voodoo_wake_fifo_threads(voodoo->set, voodoo); /* KairoX86#436: not voodoo_busy, unseen timing */'),
+    ('86box/src/video/vid_voodoo_banshee.c', '                case SST_fastfillCMD:\n                    voodoo->cmd_written++;\n                    voodoo_queue_command(voodoo, (addr & 0x3fc) | FIFO_WRITEL_REG, val);\n                    if (!voodoo->voodoo_busy)\n                        voodoo_wake_fifo_threads(voodoo->set, voodoo);',
+     '                case SST_fastfillCMD:\n                    voodoo->cmd_written++;\n                    voodoo_queue_command(voodoo, (addr & 0x3fc) | FIFO_WRITEL_REG, val);\n                    voodoo_wake_fifo_threads(voodoo->set, voodoo); /* KairoX86#436: not voodoo_busy, unseen timing */'),
+    ('86box/src/video/vid_voodoo_banshee.c', '                case SST_nopCMD:\n                    voodoo->cmd_written++;\n                    voodoo_queue_command(voodoo, (addr & 0x3fc) | FIFO_WRITEL_REG, val);\n                    if (!voodoo->voodoo_busy)\n                        voodoo_wake_fifo_threads(voodoo->set, voodoo);',
+     '                case SST_nopCMD:\n                    voodoo->cmd_written++;\n                    voodoo_queue_command(voodoo, (addr & 0x3fc) | FIFO_WRITEL_REG, val);\n                    voodoo_wake_fifo_threads(voodoo->set, voodoo); /* KairoX86#436: not voodoo_busy, unseen timing */'),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -6862,6 +6902,7 @@ PATCHES = {
     'kairox86-voodoo-status-settle': KAIROX86_VOODOO_STATUS_SETTLE,
     'kairox86-voodoo-cmdfifo-settle': KAIROX86_VOODOO_CMDFIFO_SETTLE,
     'kairox86-lapic-ppr-derived': KAIROX86_LAPIC_PPR_DERIVED,
+    'kairox86-voodoo-busy-unseen': KAIROX86_VOODOO_BUSY_UNSEEN,
 }
 
 ADDED = [
