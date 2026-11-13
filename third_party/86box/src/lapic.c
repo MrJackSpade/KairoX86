@@ -1087,15 +1087,7 @@ lapic_bsp_const(const lapic_state_t *lapics, uint8_t count)
     return lapic_at_const(lapics, count, 0);
 }
 
-void
-lapic_sync_ppr(lapic_state_t *lapic)
-{
-    if (lapic == NULL)
-        return;
-
-    cpu_lapic_ppr_update_index(lapic->index);
-}
-
+/* KairoX86#434: no lapic_sync_ppr: the PPR is worked out at each read */
 uint32_t
 lapic_timer_current(const lapic_state_t *lapic)
 {
@@ -1123,7 +1115,11 @@ lapic_sync_int_regs(lapic_state_t *lapic)
         lapic_mirror_write_reg(lapic, LAPIC_REG_TMR_BASE + (((uint32_t) i) << 4), tmr[i]);
         lapic_mirror_write_reg(lapic, LAPIC_REG_IRR_BASE + (((uint32_t) i) << 4), irr[i]);
     }
-    lapic_sync_ppr(lapic);
+    { /* KairoX86#434: the PPR as a read works it out */
+        uint32_t ppr;
+        if (cpu_lapic_mmio_read_index(lapic->index, LAPIC_REG_PPR, &ppr))
+            lapic_mirror_write_reg(lapic, LAPIC_REG_PPR, ppr);
+    }
     lapic_mirror_write_reg(lapic, LAPIC_REG_CURRENT_CNT, lapic_timer_current(lapic));
 }
 
@@ -1176,7 +1172,6 @@ lapic_tpr_sync_index(uint8_t lapic_index, uint32_t tpr)
     lapic_state_t *lapic = lapic_active_at(lapic_index);
 
     lapic_reg_sync(lapic, LAPIC_REG_TPR, tpr);
-    lapic_sync_ppr(lapic);
 }
 
 void
@@ -1203,12 +1198,7 @@ lapic_arb_id_sync_index(uint8_t lapic_index, uint32_t apr)
     lapic_reg_sync(lapic_active_at(lapic_index), LAPIC_REG_APR, apr);
 }
 
-void
-lapic_ppr_sync_index(uint8_t lapic_index, uint32_t ppr)
-{
-    lapic_reg_sync(lapic_active_at(lapic_index), LAPIC_REG_PPR, ppr);
-}
-
+/* KairoX86#434: no lapic_ppr_sync_index: the PPR is worked out at each read */
 void
 lapic_esr_sync_index(uint8_t lapic_index, uint32_t esr)
 {

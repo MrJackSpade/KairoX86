@@ -65,9 +65,8 @@ lapic_accept_fixed_interrupt(lapic_state_t *lapic,
 
     cpu_lapic_accept_interrupt_index(lapic->index, message->vector, message->level);
 
-    /* Register reads come from the CPU-owned state (cpu_lapic_mmio_read_index);
-       the mirror is brought up to date only for save states. */
-    lapic_sync_ppr(lapic);
+    /* Register reads come from the CPU-owned state (cpu_lapic_mmio_read_index); the PPR is worked out at each read
+       (KairoX86#434) */
     if (lapic_log_first(&lapic->accept_log_count[message->vector], 8))
         lapic_log(lapic->mmio, "LAPIC: accepted vector=%02x trigger=%s count=%u\n",
                   message->vector, message->level ? "level" : "edge",
@@ -435,7 +434,6 @@ lapic_icr_fixed_write(lapic_state_t *lapic, const lapic_target_info_t *targets,
            the sender waiting on its own delivery status could never see
            it clear. It goes into the IRR, merging with one pending. */
         cpu_lapic_accept_interrupt_index(lapic->index, vector, 0);
-        lapic_sync_ppr(lapic);
         return 1;
     }
 

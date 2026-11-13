@@ -220,7 +220,7 @@ extern lapic_state_t       *lapic_choose_lowest_priority_target(
                                                 uint8_t *lowest_priority_next,
                                                 int route_parked);
 
-extern void                 lapic_sync_ppr(lapic_state_t *lapic);
+/* KairoX86#434: no lapic_sync_ppr's declaration: the PPR is worked out at each read */
 extern uint32_t             lapic_timer_current(const lapic_state_t *lapic);
 extern void                 lapic_sync_int_regs(lapic_state_t *lapic);
 extern void                 lapic_sync_cpu_owned_regs(lapic_state_t *lapic);

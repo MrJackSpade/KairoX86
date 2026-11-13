@@ -6645,6 +6645,56 @@ KAIROX86_VOODOO_CMDFIFO_SETTLE = [
      "banshee_cmd_read(banshee_t *banshee, uint32_t addr)\n{\n    const voodoo_t *voodoo = banshee->voodoo;\n    uint32_t        ret    = 0xffffffff;\n\n    /* The command FIFOs' read pointers, depths and status are moved by the FIFO thread: settled first, so the guest\n       never sees how far it had got (KairoX86#436) */\n    switch (addr & 0x1fc) {\n        case cmdRdPtrL0:\n        case cmdFifoDepth0:\n        case cmdStatus0:\n        case cmdRdPtrL1:\n        case cmdFifoDepth1:\n        case cmdStatus1:\n            voodoo_settle(banshee->voodoo);\n            break;\n        default:\n            break;\n    }\n\n    switch (addr & 0x1fc) {"),
 ]
 
+
+# KairoX86#434: the PPR is worked out at every read, so its stored copy, mirror write and per-event update (every TPR
+# write, EOI, accepted or promoted vector and PPR read) are removed; save states take the computed value.
+KAIROX86_LAPIC_PPR_DERIVED = [
+    ('86box/src/cpu/cpu_lapic.c', 'static uint32_t              cpu_lapic_pprs[IOAPIC_STATE_MAX_LAPICS];\n',
+     '/* KairoX86#434: no PPR is stored: it is worked out at each read (cpu_lapic_ppr_value_index) */\n'),
+    ('86box/src/cpu/cpu_lapic.c', '    cpu_lapic_tprs[lapic_index] = lapic_tpr_sanitize(val);\n    cpu_lapic_ppr_update_index(lapic_index);\n}',
+     '    cpu_lapic_tprs[lapic_index] = lapic_tpr_sanitize(val);\n}'),
+    ('86box/src/cpu/cpu_lapic.c', 'static void\ncpu_lapic_pprs_reset(void)\n{\n    memset(cpu_lapic_pprs, 0, sizeof(cpu_lapic_pprs));\n}\n\nstatic void\ncpu_lapic_pprs_sync(void)\n{\n    for (uint8_t i = 0; i < IOAPIC_STATE_MAX_LAPICS; i++)\n        lapic_ppr_sync_index(i, cpu_lapic_pprs[i]);\n}\n\nvoid\ncpu_lapic_ppr_write_index(uint8_t lapic_index, uint32_t val)\n{\n    if (lapic_index >= IOAPIC_STATE_MAX_LAPICS)\n        return;\n\n    cpu_lapic_pprs[lapic_index] = val;\n    lapic_ppr_sync_index(lapic_index, cpu_lapic_pprs[lapic_index]);\n}\n\nvoid\ncpu_lapic_ppr_load_index(uint8_t lapic_index, uint32_t val)\n{\n    if (lapic_index >= IOAPIC_STATE_MAX_LAPICS)\n        return;\n\n    cpu_lapic_pprs[lapic_index] = val;\n}\n\n',
+     "/* KairoX86#434: no the stored PPR's reset, sync, write and load: the PPR is worked out at each read */\n"),
+    ('86box/src/cpu/cpu_lapic.c', 'uint32_t\ncpu_lapic_ppr_update_index(uint8_t lapic_index)\n{\n    if (lapic_index >= IOAPIC_STATE_MAX_LAPICS)\n        return 0;\n\n    cpu_lapic_pprs[lapic_index] = cpu_lapic_ppr_value_index(lapic_index);\n    lapic_ppr_sync_index(lapic_index, cpu_lapic_pprs[lapic_index]);\n\n    return cpu_lapic_pprs[lapic_index];\n}\n\n',
+     '/* KairoX86#434: no the PPR update: the PPR is worked out at each read */\n'),
+    ('86box/src/cpu/cpu_lapic.c', '        cpu_lapic_clear_vector(cpu_lapic_isrs[lapic_index], vector);\n        cpu_lapic_lint_remote_irr_eoi(lapic_index, vector);\n        cpu_lapic_ppr_update_index(lapic_index);\n    }',
+     '        cpu_lapic_clear_vector(cpu_lapic_isrs[lapic_index], vector);\n        cpu_lapic_lint_remote_irr_eoi(lapic_index, vector);\n    }'),
+    ('86box/src/cpu/cpu_lapic.c', '    cpu_lapic_set_vector(cpu_lapic_isrs[lapic_index], vector);\n    cpu_lapic_ppr_update_index(lapic_index);\n',
+     '    cpu_lapic_set_vector(cpu_lapic_isrs[lapic_index], vector);\n'),
+    ('86box/src/cpu/cpu_lapic.c', '            cpu_lapic_tprs[lapic_index] = lapic_tpr_sanitize(val);\n            lapic_tpr_sync_index(lapic_index, cpu_lapic_tprs[lapic_index]);\n            cpu_lapic_ppr_update_index(lapic_index);\n            return 1;',
+     '            cpu_lapic_tprs[lapic_index] = lapic_tpr_sanitize(val);\n            lapic_tpr_sync_index(lapic_index, cpu_lapic_tprs[lapic_index]);\n            return 1;'),
+    ('86box/src/cpu/cpu_lapic.c', '    cpu_lapic_arb_id_load_index(lapic_index, 0);\n    cpu_lapic_ppr_load_index(lapic_index, 0);\n',
+     '    cpu_lapic_arb_id_load_index(lapic_index, 0);\n'),
+    ('86box/src/cpu/cpu_lapic.c', '        case CPU_LAPIC_REG_PPR:\n            cpu_lapic_ppr_load_index(lapic_index, val);\n            return 1;',
+     '        case CPU_LAPIC_REG_PPR:\n            /* Derived: worked out at each read from the TPR and the ISR (KairoX86#434) */\n            return 1;'),
+    ('86box/src/cpu/cpu_lapic.c', '    cpu_lapic_arb_ids_reset();\n    cpu_lapic_pprs_reset();\n    cpu_lapic_esrs_reset();',
+     '    cpu_lapic_arb_ids_reset();\n    cpu_lapic_esrs_reset();'),
+    ('86box/src/cpu/cpu_lapic.c', '    cpu_lapic_arb_ids_sync();\n    cpu_lapic_pprs_reset();\n    cpu_lapic_pprs_sync();\n',
+     '    cpu_lapic_arb_ids_sync();\n'),
+    ('86box/src/cpu/cpu.h', 'extern uint32_t cpu_lapic_ppr_update_index(uint8_t lapic_index);\nextern void     cpu_lapic_ppr_write_index(uint8_t lapic_index, uint32_t val);\nextern void     cpu_lapic_ppr_load_index(uint8_t lapic_index, uint32_t val);\n',
+     "/* KairoX86#434: no the PPR update's declarations: the PPR is worked out at each read */\n"),
+    ('86box/src/lapic.c', 'void\nlapic_sync_ppr(lapic_state_t *lapic)\n{\n    if (lapic == NULL)\n        return;\n\n    cpu_lapic_ppr_update_index(lapic->index);\n}\n\n',
+     '/* KairoX86#434: no lapic_sync_ppr: the PPR is worked out at each read */\n'),
+    ('86box/src/lapic.c', '    lapic_sync_ppr(lapic);\n    lapic_mirror_write_reg(lapic, LAPIC_REG_CURRENT_CNT, lapic_timer_current(lapic));',
+     '    { /* KairoX86#434: the PPR as a read works it out */\n        uint32_t ppr;\n        if (cpu_lapic_mmio_read_index(lapic->index, LAPIC_REG_PPR, &ppr))\n            lapic_mirror_write_reg(lapic, LAPIC_REG_PPR, ppr);\n    }\n    lapic_mirror_write_reg(lapic, LAPIC_REG_CURRENT_CNT, lapic_timer_current(lapic));'),
+    ('86box/src/lapic.c', '    lapic_reg_sync(lapic, LAPIC_REG_TPR, tpr);\n    lapic_sync_ppr(lapic);\n}',
+     '    lapic_reg_sync(lapic, LAPIC_REG_TPR, tpr);\n}'),
+    ('86box/src/lapic.c', 'void\nlapic_ppr_sync_index(uint8_t lapic_index, uint32_t ppr)\n{\n    lapic_reg_sync(lapic_active_at(lapic_index), LAPIC_REG_PPR, ppr);\n}\n\n',
+     '/* KairoX86#434: no lapic_ppr_sync_index: the PPR is worked out at each read */\n'),
+    ('86box/src/include/86box/chipset.h', 'extern void           lapic_ppr_sync_index(uint8_t lapic_index, uint32_t ppr);\n',
+     "/* KairoX86#434: no lapic_ppr_sync_index's declaration: the PPR is worked out at each read */\n"),
+    ('86box/src/lapic_internal.h', 'extern void                 lapic_sync_ppr(lapic_state_t *lapic);\n',
+     "/* KairoX86#434: no lapic_sync_ppr's declaration: the PPR is worked out at each read */\n"),
+    ('86box/src/lapic_delivery.c', '    /* Register reads come from the CPU-owned state (cpu_lapic_mmio_read_index);\n       the mirror is brought up to date only for save states. */\n    lapic_sync_ppr(lapic);\n',
+     '    /* Register reads come from the CPU-owned state (cpu_lapic_mmio_read_index); the PPR is worked out at each read\n       (KairoX86#434) */\n'),
+    ('86box/src/lapic_delivery.c', '        cpu_lapic_accept_interrupt_index(lapic->index, vector, 0);\n        lapic_sync_ppr(lapic);\n        return 1;',
+     '        cpu_lapic_accept_interrupt_index(lapic->index, vector, 0);\n        return 1;'),
+    ('86box/src/lapic_mmio.c', '    /* Every register is read from the CPU-owned state (cpu_lapic_mmio_read_index);\n       only PPR is derived and must be current. The whole mirror was once\n       rebuilt here, on every read -- the NT HAL reads TPR at every IRQL change. */\n    if (reg == LAPIC_REG_PPR)\n        lapic_sync_ppr(lapic);\n',
+     '    /* Every register is read from the CPU-owned state (cpu_lapic_mmio_read_index), the PPR worked out there at the\n       read (KairoX86#434). The whole mirror was once rebuilt here, on every read -- the NT HAL reads TPR at every\n       IRQL change. */\n'),
+    ('86box/src/lapic_mmio.c', '    } else if (reg == LAPIC_REG_TPR) {\n        lapic_sync_ppr(lapic);\n    } else if ((reg == LAPIC_REG_SVR)',
+     '    } else if ((reg == LAPIC_REG_SVR)'),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -6811,6 +6861,7 @@ PATCHES = {
     'kairox86-gpu-cursor-probe-span': KAIROX86_GPU_CURSOR_PROBE_SPAN,
     'kairox86-voodoo-status-settle': KAIROX86_VOODOO_STATUS_SETTLE,
     'kairox86-voodoo-cmdfifo-settle': KAIROX86_VOODOO_CMDFIFO_SETTLE,
+    'kairox86-lapic-ppr-derived': KAIROX86_LAPIC_PPR_DERIVED,
 }
 
 ADDED = [

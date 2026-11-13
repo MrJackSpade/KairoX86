@@ -988,9 +988,7 @@ extern void     cpu_lapic_dfr_load_index(uint8_t lapic_index, uint32_t val);
 extern void     cpu_lapic_version_load_index(uint8_t lapic_index, uint32_t val);
 extern void     cpu_lapic_arb_id_load_index(uint8_t lapic_index, uint32_t val);
 extern uint32_t cpu_lapic_apr_value_index(uint8_t lapic_index);
-extern uint32_t cpu_lapic_ppr_update_index(uint8_t lapic_index);
-extern void     cpu_lapic_ppr_write_index(uint8_t lapic_index, uint32_t val);
-extern void     cpu_lapic_ppr_load_index(uint8_t lapic_index, uint32_t val);
+/* KairoX86#434: no the PPR update's declarations: the PPR is worked out at each read */
 extern void     cpu_lapic_esr_or_index(uint8_t lapic_index, uint32_t error);
 extern void     cpu_lapic_esr_load_index(uint8_t lapic_index, uint32_t val);
 extern void     cpu_lapic_esr_read_clear_index(uint8_t lapic_index);

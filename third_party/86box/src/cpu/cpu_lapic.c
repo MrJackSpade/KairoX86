@@ -43,7 +43,7 @@ static uint32_t              cpu_lapic_versions[IOAPIC_STATE_MAX_LAPICS];
    not the APR, the arbitration priority register (Vol. 3 19.3.1.9.4),
    which is worked out at each read (cpu_lapic_apr_value_index). */
 static uint32_t              cpu_lapic_arb_ids[IOAPIC_STATE_MAX_LAPICS];
-static uint32_t              cpu_lapic_pprs[IOAPIC_STATE_MAX_LAPICS];
+/* KairoX86#434: no PPR is stored: it is worked out at each read (cpu_lapic_ppr_value_index) */
 static uint32_t              cpu_lapic_esrs[IOAPIC_STATE_MAX_LAPICS];
 /* The errors a P6's local APIC has detected since its ESR was last
    written, which the next write makes readable. */
@@ -350,7 +350,6 @@ cpu_lapic_tpr_load_index(uint8_t lapic_index, uint32_t val)
         return;
 
     cpu_lapic_tprs[lapic_index] = lapic_tpr_sanitize(val);
-    cpu_lapic_ppr_update_index(lapic_index);
 }
 
 static uint32_t
@@ -497,38 +496,7 @@ cpu_lapic_version_load_index(uint8_t lapic_index, uint32_t val)
     cpu_lapic_versions[lapic_index] = val;
 }
 
-static void
-cpu_lapic_pprs_reset(void)
-{
-    memset(cpu_lapic_pprs, 0, sizeof(cpu_lapic_pprs));
-}
-
-static void
-cpu_lapic_pprs_sync(void)
-{
-    for (uint8_t i = 0; i < IOAPIC_STATE_MAX_LAPICS; i++)
-        lapic_ppr_sync_index(i, cpu_lapic_pprs[i]);
-}
-
-void
-cpu_lapic_ppr_write_index(uint8_t lapic_index, uint32_t val)
-{
-    if (lapic_index >= IOAPIC_STATE_MAX_LAPICS)
-        return;
-
-    cpu_lapic_pprs[lapic_index] = val;
-    lapic_ppr_sync_index(lapic_index, cpu_lapic_pprs[lapic_index]);
-}
-
-void
-cpu_lapic_ppr_load_index(uint8_t lapic_index, uint32_t val)
-{
-    if (lapic_index >= IOAPIC_STATE_MAX_LAPICS)
-        return;
-
-    cpu_lapic_pprs[lapic_index] = val;
-}
-
+/* KairoX86#434: no the stored PPR's reset, sync, write and load: the PPR is worked out at each read */
 static void
 cpu_lapic_esrs_reset(void)
 {
@@ -1411,18 +1379,7 @@ cpu_lapic_apr_value_index(uint8_t lapic_index)
     return cls;
 }
 
-uint32_t
-cpu_lapic_ppr_update_index(uint8_t lapic_index)
-{
-    if (lapic_index >= IOAPIC_STATE_MAX_LAPICS)
-        return 0;
-
-    cpu_lapic_pprs[lapic_index] = cpu_lapic_ppr_value_index(lapic_index);
-    lapic_ppr_sync_index(lapic_index, cpu_lapic_pprs[lapic_index]);
-
-    return cpu_lapic_pprs[lapic_index];
-}
-
+/* KairoX86#434: no the PPR update: the PPR is worked out at each read */
 static int
 cpu_lapic_priority_deliverable_index(uint8_t lapic_index, uint8_t vector)
 {
@@ -1463,7 +1420,6 @@ cpu_lapic_eoi_index(uint8_t lapic_index, int *level)
         /* Only acceptance changes the TMR (Pentium Vol. 3, 19.3.1.9). */
         cpu_lapic_clear_vector(cpu_lapic_isrs[lapic_index], vector);
         cpu_lapic_lint_remote_irr_eoi(lapic_index, vector);
-        cpu_lapic_ppr_update_index(lapic_index);
     }
 
     return vector;
@@ -1520,7 +1476,6 @@ cpu_lapic_promote_irr_index(uint8_t lapic_index, uint8_t vector)
     cpu_lapic_clear_vector(cpu_lapic_irrs[lapic_index], vector);
     cpu_lapic_irr_live_sync(lapic_index);
     cpu_lapic_set_vector(cpu_lapic_isrs[lapic_index], vector);
-    cpu_lapic_ppr_update_index(lapic_index);
 
     return 1;
 }
@@ -1695,7 +1650,6 @@ cpu_lapic_reset_index(uint8_t lapic_index, uint8_t id, uint64_t base_msr)
     cpu_lapic_dfr_load_index(lapic_index, CPU_LAPIC_DFR_DEFAULT);
     cpu_lapic_version_load_index(lapic_index, cpu_lapic_version_for_model());
     cpu_lapic_arb_id_load_index(lapic_index, 0);
-    cpu_lapic_ppr_load_index(lapic_index, 0);
     cpu_lapic_esr_load_index(lapic_index, 0);
     cpu_lapic_icr_lo_load_index(lapic_index, 0);
     cpu_lapic_icr_hi_load_index(lapic_index, 0);
@@ -2142,7 +2096,6 @@ cpu_lapic_mmio_write_index(uint8_t lapic_index, uint32_t reg, uint32_t val)
         case CPU_LAPIC_REG_TPR:
             cpu_lapic_tprs[lapic_index] = lapic_tpr_sanitize(val);
             lapic_tpr_sync_index(lapic_index, cpu_lapic_tprs[lapic_index]);
-            cpu_lapic_ppr_update_index(lapic_index);
             return 1;
         case CPU_LAPIC_REG_LDR:
             cpu_lapic_ldrs[lapic_index] = lapic_ldr_sanitize(val);
@@ -2240,7 +2193,7 @@ cpu_lapic_mmio_load_index(uint8_t lapic_index, uint32_t reg, uint32_t val)
             cpu_lapic_arb_id_load_index(lapic_index, val);
             return 1;
         case CPU_LAPIC_REG_PPR:
-            cpu_lapic_ppr_load_index(lapic_index, val);
+            /* Derived: worked out at each read from the TPR and the ISR (KairoX86#434) */
             return 1;
         case CPU_LAPIC_REG_ESR:
             cpu_lapic_esr_load_index(lapic_index, val);
@@ -2427,7 +2380,6 @@ cpu_lapic_reset_all(void)
     cpu_lapic_dfrs_reset();
     cpu_lapic_versions_reset();
     cpu_lapic_arb_ids_reset();
-    cpu_lapic_pprs_reset();
     cpu_lapic_esrs_reset();
     cpu_lapic_icrs_reset();
     cpu_lapic_rrrs_reset();
@@ -2465,8 +2417,6 @@ cpu_lapic_ven_reset(void)
     cpu_lapic_versions_sync();
     cpu_lapic_arb_ids_reset();
     cpu_lapic_arb_ids_sync();
-    cpu_lapic_pprs_reset();
-    cpu_lapic_pprs_sync();
     cpu_lapic_esrs_reset();
     cpu_lapic_esrs_sync();
     cpu_lapic_icrs_reset();

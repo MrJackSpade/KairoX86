@@ -263,7 +263,7 @@ extern void           lapic_ldr_sync_index(uint8_t lapic_index, uint32_t ldr);
 extern void           lapic_dfr_sync_index(uint8_t lapic_index, uint32_t dfr);
 extern void           lapic_version_sync_index(uint8_t lapic_index, uint32_t version);
 extern void           lapic_arb_id_sync_index(uint8_t lapic_index, uint32_t apr);
-extern void           lapic_ppr_sync_index(uint8_t lapic_index, uint32_t ppr);
+/* KairoX86#434: no lapic_ppr_sync_index's declaration: the PPR is worked out at each read */
 extern void           lapic_esr_sync_index(uint8_t lapic_index, uint32_t esr);
 extern void           lapic_icr_lo_sync_index(uint8_t lapic_index, uint32_t icr_lo);
 extern void           lapic_icr_hi_sync_index(uint8_t lapic_index, uint32_t icr_hi);
