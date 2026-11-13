@@ -6,8 +6,9 @@ an end.
 
   make_workload.py <out folder> [name ...]     every .c here when none is named
   make_workload.py <out folder> --machines <reference folder>
-      also writes the machines that run mmxint (out/mmx-tx97, out/mmx-686bx: 86box.cfg, the floppy and nvr/), their
-      CMOS from the exactness standard's references (<reference>/win98-pentium/nvr, <reference>/win98-voodoo3/nvr),
+      also writes the machines that run mmxint (out/mmx-tx97, out/mmx-686bx) and k6dnow (out/k6-tx97, KairoX86#399):
+      86box.cfg, the floppy and nvr/, their CMOS from the exactness standard's references (<reference>/win98-pentium/nvr,
+      <reference>/win98-voodoo3/nvr),
       as KairoX86#417 measured them (game_profile ... 2000 - --warmup 1000: the program runs from about frame 700)
 """
 import shutil
@@ -22,7 +23,9 @@ sys.path.insert(0, str(HERE.parent))
 import make_tests  # noqa: E402
 from floppy import TOOLCHAIN, FLOPPY_BYTES, boot_sector  # noqa: E402
 
-CFLAGS = [f for f in make_tests.CFLAGS if not f.startswith('-march=')] + ['-march=pentium-mmx']
+CFLAGS = [f for f in make_tests.CFLAGS if not f.startswith('-march=')]
+# Each program's processor: a Pentium MMX, but k6dnow's 3DNow! instructions need the K6-2 (KairoX86#399)
+MARCH = {'k6dnow': '-march=k6-2'}
 NL = chr(10)
 
 
@@ -31,7 +34,8 @@ def build(name, work):
     objects = []
     for source in (GPU / 'runtime.c', HERE / f'{name}.c'):
         obj = work / f'{name}-{source.stem}.o'
-        subprocess.run([str(TOOLCHAIN / 'clang.exe'), *CFLAGS, f'-I{GPU}', '-c', str(source), '-o', str(obj)], check=True)
+        subprocess.run([str(TOOLCHAIN / 'clang.exe'), *CFLAGS, MARCH.get(name, '-march=pentium-mmx'), f'-I{GPU}', '-c', str(source),
+                        '-o', str(obj)], check=True)
         objects.append(str(obj))
     script = work / 'link.ld'
     script.write_text(make_tests.LINK)
@@ -62,21 +66,27 @@ def machines(out, reference):
                                                          extra=extra)
                      + section('S3 Trio64V2/DX PCI #1', 'bios = trio64v2dx_pci') + inputs
                      + section('Sound', 'fm_driver = ymfm', 'sndcard = sb16') + standard.floppy('mmxint.img', '35_2hd'),
-                     'win98-pentium'),
+                     'win98-pentium', 'mmxint.img'),
         # The 686BX with a Pentium II 300 (the Pentium Pro has no MMX) and the Voodoo3 3000, as eXoWin9x's games run
         'mmx-686bx': (standard.GENERAL + standard.machine('686bx', 'pentium2_deschutes', 300000000, 4.5, 65536,
                                                           'voodoo3_3k_agp', extra=extra)
                       + section('3dfx Voodoo3 3000', 'render_threads = 2', 'recompiler = 1') + inputs
                       + section('Sound', 'sndcard = sbawe32_pnp') + standard.floppy('mmxint.img', '35_2hd'),
-                      'win98-voodoo3'),
+                      'win98-voodoo3', 'mmxint.img'),
+        # KairoX86#399: the TX97 with an AMD K6-2 233 (3DNow!), running k6dnow
+        'k6-tx97': (standard.GENERAL + standard.machine('tx97', 'k6_2', 233333333, 3.5, 65536, 's3_trio64v2dx_pci',
+                                                        extra=extra)
+                    + section('S3 Trio64V2/DX PCI #1', 'bios = trio64v2dx_pci') + inputs
+                    + section('Sound', 'fm_driver = ymfm', 'sndcard = sb16') + standard.floppy('k6dnow.img', '35_2hd'),
+                    'win98-pentium', 'k6dnow.img'),
     }
-    for name, (config, cmos) in configs.items():
+    for name, (config, cmos, image) in configs.items():
         folder = out / name
         if folder.exists():
             shutil.rmtree(folder)
         folder.mkdir()
         (folder / '86box.cfg').write_text(config, encoding='utf-8', newline=NL)
-        shutil.copy2(out / 'mmxint.img', folder / 'mmxint.img')
+        shutil.copy2(out / image, folder / image)
         shutil.copytree(reference / cmos / 'nvr', folder / 'nvr')
         print(name)
 
