@@ -23,7 +23,13 @@ $machine = Join-Path $Build "machine-$Name"
 $work = Join-Path $Build "work-$Name"
 foreach ($folder in $machine, $work) { if (Test-Path $folder) { Remove-Item -Recurse -Force $folder } }
 Copy-Item -Recurse (Join-Path $Exact "machines\$Name") $machine
-$nvr = Join-Path $Reference "$Name\nvr"
+# KairoX86#437: a machine sharing another's disk names its reference in ref.txt; one that receives input has its
+# game_profile script in script.txt
+$ref = $Name
+if (Test-Path (Join-Path $machine 'ref.txt')) { $ref = (Get-Content -Raw (Join-Path $machine 'ref.txt')).Trim() }
+$script = '-'
+if (Test-Path (Join-Path $machine 'script.txt')) { $script = (Get-Content -Raw (Join-Path $machine 'script.txt')).Trim() }
+$nvr = Join-Path $Reference "$ref\nvr"
 if (Test-Path $nvr) {
     if (Test-Path (Join-Path $machine 'nvr')) { Remove-Item -Recurse -Force (Join-Path $machine 'nvr') }
     Copy-Item -Recurse $nvr (Join-Path $machine 'nvr')
@@ -35,7 +41,7 @@ if ($Mode -eq 'unlinked') {
 }
 New-Item -ItemType Directory $work | Out-Null
 $log = Join-Path $Build "$Name.log"
-& (Join-Path $root 'shared\tools\run-limited.ps1') (Join-Path $Build 'game_profile.exe') $RomSet $work $machine $Frames '-' `
+& (Join-Path $root 'shared\tools\run-limited.ps1') (Join-Path $Build 'game_profile.exe') $RomSet $work $machine $Frames $script `
     --hashes (Join-Path $Build "$Name.hashes") *> $log
 $status = $LASTEXITCODE
 Remove-Item -Recurse -Force $work, $machine

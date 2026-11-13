@@ -103,6 +103,16 @@ def windows(name, cpu, speed, multi, memory, reference):
             + "[Floppy and CD-ROM drives]\nfdd_01_type = 35_2hd\nfdd_02_type = none\n")
 
 
+# KairoX86#437: (name, the machine it copies, game_profile's script). The FreeDOS 486 gets commands typed at its prompt
+# (from frame 422 the text screen is up) at unevenly spaced frames, so presses fall in different poll phases, and PS/2
+# mouse moves and a click (the controller's aux side, with no DOS driver to take them); win98-486 gets mouse moves, a
+# right-click menu closed with Esc, an arrow key and a click on the desktop (up from frame 1767).
+INPUT_MACHINES = (
+    ("486-input", "486", "640:+0x20,643:-0x20,647:+0x17,649:-0x17,654:+0x13,657:-0x13,662:+0x1c,664:-0x1c,760:+x12,761:+y5,790:-x7,833:-y9,1001:+0x2f,1002:-0x2f,1006:+0x12,1010:-0x12,1013:+0x13,1014:-0x13,1021:+0x1c,1023:-0x1c,1200:+m1,1203:-m1,1250:+x3"),
+    ("win98-486-input", "win98-486", "2600:+x40,2630:+y25,2661:-x15,2700:+m2,2703:-m2,2760:+0x01,2762:-0x01,2900:+0x14d,2903:-0x14d,3101:+x7,3207:-y9,3400:+m1,3404:-m1,3555:+y3"),
+)
+
+
 def main():
     if len(sys.argv) != 4:
         raise SystemExit(__doc__)
@@ -133,6 +143,15 @@ def main():
     folder.mkdir()
     (folder / "86box.cfg").write_text(voodoo3(f"{reference}/win98-voodoo3"), encoding="utf-8", newline="\n")
     frames["win98-voodoo3"] = 4000
+    # KairoX86#437: machines that receive input, so a change to when the guest takes keys and the mouse is seen. Each is
+    # another machine with script.txt (game_profile's events, typed by run.sh/run.ps1) and, for a Windows one,
+    # ref.txt (the reference whose CMOS it starts from: it shares that machine's disk).
+    for name, parent, script in INPUT_MACHINES:
+        shutil.copytree(out / parent, out / name)
+        (out / name / "script.txt").write_text(script, encoding="utf-8", newline="\n")
+        if parent.startswith("win98-"):
+            (out / name / "ref.txt").write_text(parent, encoding="utf-8", newline="\n")
+        frames[name] = frames[parent]
     (out / "machines.json").write_text(json.dumps(frames, indent=1) + "\n", encoding="utf-8", newline="\n")
     print(f"{len(frames)} machines in {out}")
 

@@ -12,9 +12,19 @@ DIR=$EXACT/$BUILD
 MACHINE=$DIR/machine-$NAME
 rm -rf "$MACHINE"
 cp -r "$EXACT/machines/$NAME" "$MACHINE"
-if [ -d "$EXACT/ref/$NAME/nvr" ]; then
+# KairoX86#437: a machine sharing another's disk names its reference in ref.txt; one that receives input has its
+# game_profile script in script.txt
+REF=$NAME
+if [ -f "$MACHINE/ref.txt" ]; then
+  REF=$(cat "$MACHINE/ref.txt")
+fi
+if [ -d "$EXACT/ref/$REF/nvr" ]; then
   rm -rf "$MACHINE/nvr"
-  cp -r "$EXACT/ref/$NAME/nvr" "$MACHINE/nvr"
+  cp -r "$EXACT/ref/$REF/nvr" "$MACHINE/nvr"
+fi
+SCRIPT=-
+if [ -f "$MACHINE/script.txt" ]; then
+  SCRIPT=$(cat "$MACHINE/script.txt")
 fi
 if [ "$MODE" = unlinked ]; then
   sed -i 's/^\[Machine\]$/[Machine]\ncpu_dyn_block_link = 0/' "$MACHINE/86box.cfg"
@@ -24,7 +34,7 @@ rm -rf "$WORK"
 mkdir -p "$WORK"
 echo kx86exact > /sys/power/wake_lock
 cd "$DIR"
-LD_LIBRARY_PATH=$DIR ./game_profile "$ROMS" "$WORK" "$MACHINE" "$FRAMES" - --hashes "$DIR/$NAME.hashes" > "$DIR/$NAME.log" 2>&1 || STATUS=$?
+LD_LIBRARY_PATH=$DIR ./game_profile "$ROMS" "$WORK" "$MACHINE" "$FRAMES" "$SCRIPT" --hashes "$DIR/$NAME.hashes" > "$DIR/$NAME.log" 2>&1 || STATUS=$?
 echo kx86exact > /sys/power/wake_unlock
 rm -rf "$WORK" "$MACHINE"
 grep -E '^(host|state)' "$DIR/$NAME.log"
