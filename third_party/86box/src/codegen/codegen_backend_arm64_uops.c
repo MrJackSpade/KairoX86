@@ -3906,7 +3906,8 @@ const uOpFn uop_handlers[UOP_MAX] = {
 
     [UOP_NOP_BARRIER &
         UOP_MASK]
-    = codegen_NOP
+    = codegen_NOP,
+    [UOP_NOP & UOP_MASK] = codegen_NOP /* KairoX86#399 */
 };
 
 void

@@ -54,6 +54,8 @@
 /*UOP_JMP_DEST - jump to ptr*/
 #define UOP_JMP_DEST       (UOP_TYPE_PARAMS_IMM | UOP_TYPE_PARAMS_POINTER | 0x17 | UOP_TYPE_ORDER_BARRIER | UOP_TYPE_JUMP)
 #define UOP_NOP_BARRIER    (UOP_TYPE_BARRIER | 0x18)
+/*KairoX86#399: no code and no registers, an unrolled copy's place for a uop it leaves out*/
+#define UOP_NOP            0x1b
 #define UOP_STORE_P_IMM_16 (UOP_TYPE_PARAMS_IMM | 0x19)
 /*UOP_CALL_FUNC_RESULT_ORDERED - dest_reg = C function at p, with registers written back but left
   loaded. The function must only read guest state*/
@@ -929,6 +931,8 @@ extern void codegen_fpu_guard_int_indefinite(ir_data_t *ir, uint32_t fetchdat, u
 #endif
 /* KairoX86#399: the common case inline (codegen.c), MMX_ENTER in C otherwise */
 extern void codegen_mmx_enter_arm64(ir_data_t *ir);
+/* KairoX86#399: the uops [first, end) of an MMX entry, so an unrolled loop's later copies can leave them out */
+extern void codegen_mmx_enter_note(int first, int end);
 #define uop_MMX_ENTER(ir)                                    \
     do {                                                     \
         if (!codegen_mmx_entered)                           \
@@ -952,9 +956,11 @@ extern void codegen_mmx_enter_arm64(ir_data_t *ir);
         codegen_fpu_entered = 1;                            \
         codegen_mmx_entered = 0;                            \
     } while (0)
+extern void codegen_mmx_enter_note(int first, int end);
 #define uop_MMX_ENTER(ir)                                                    \
     do {                                                                     \
         if (!codegen_mmx_entered) {                                          \
+            const int mmx_enter_first = ir->wr_pos; /* KairoX86#399 */        \
             if (fpu_softfloat) {                                             \
                 uop_MOV_IMM(ir, IREG_oldpc, cpu_state.oldpc);                \
                 uop_CALL_FUNC_RESULT(ir, IREG_temp0, codegen_mmx_fpu_pending); \
@@ -962,6 +968,7 @@ extern void codegen_mmx_enter_arm64(ir_data_t *ir);
             } else                                                           \
                 codegen_fp_pending_check(ir);                                \
             uop_gen_imm(UOP_MMX_ENTER, ir, cpu_state.oldpc);                 \
+            codegen_mmx_enter_note(mmx_enter_first, ir->wr_pos);             \
         }                                                                    \
         codegen_mmx_entered = 1;                                             \
         codegen_fpu_entered = 0;                                             \

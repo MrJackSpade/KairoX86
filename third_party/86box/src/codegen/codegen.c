@@ -569,9 +569,11 @@ codegen_mmx_enter_arm64(ir_data_t *ir)
     extern int codegen_mmx_enter(void);
 
     uop_MOV_IMM(ir, IREG_oldpc, cpu_state.oldpc);
+    const int first = ir->wr_pos; /* KairoX86#399: the entry after its oldpc move */
     if (fpu_softfloat || !cpu_has_feature(CPU_FEATURE_MMX)) {
         uop_CALL_FUNC_RESULT(ir, IREG_temp0, codegen_mmx_enter);
         uop_CMP_IMM_JZ(ir, IREG_temp0, 1, codegen_exit_rout);
+        codegen_mmx_enter_note(first, ir->wr_pos);
         return;
     }
     uop_MOV_REG_PTR(ir, IREG_temp0, &cr0);
@@ -586,8 +588,24 @@ codegen_mmx_enter_arm64(ir_data_t *ir)
     uop_CMP_IMM_JZ(ir, IREG_temp0, 1, codegen_exit_rout);
     uop_set_jump_dest(ir, jump_uop);
     uop_gen_imm(UOP_MMX_ENTER, ir, cpu_state.oldpc);
+    codegen_mmx_enter_note(first, ir->wr_pos);
 }
 #endif
+
+/* KairoX86#399: the block's MMX entry, [first, end) of its uops (first -1: none yet), and whether it has more */
+int codegen_mmx_enter_first = -1;
+int codegen_mmx_enter_end;
+int codegen_mmx_enter_more;
+
+void
+codegen_mmx_enter_note(int first, int end)
+{
+    if (codegen_mmx_enter_first < 0) {
+        codegen_mmx_enter_first = first;
+        codegen_mmx_enter_end   = end;
+    } else
+        codegen_mmx_enter_more = 1;
+}
 
 void
 codegen_fp_pending_check(ir_data_t *ir)

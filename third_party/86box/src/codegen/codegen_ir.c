@@ -76,6 +76,27 @@ duplicate_uop(ir_data_t *ir, uop_t *uop, int offset)
     }
 }
 
+/* KairoX86#399: whether an unrolled body's later copies can leave out its MMX entry: exactly one entry, inside the
+   body, and nothing else in the body that can undo what it found or made (an interpreted instruction, an x87 entry,
+   any C call) */
+static int
+mmx_enter_once(const ir_data_t *ir, int start, int end)
+{
+    extern int codegen_mmx_enter_first, codegen_mmx_enter_end, codegen_mmx_enter_more;
+
+    if ((codegen_mmx_enter_first < start) || (codegen_mmx_enter_end > end) || codegen_mmx_enter_more)
+        return 0;
+    for (int c = start; c < end; c++) {
+        if ((c >= codegen_mmx_enter_first) && (c < codegen_mmx_enter_end))
+            continue;
+        const uint32_t type = ir->uops[c].type & ~(UOP_TYPE_JUMP_DEST);
+        if ((type & UOP_TYPE_BARRIER) || (type == UOP_CALL_FUNC_ORDERED) || (type == UOP_CALL_FUNC_RESULT_ORDERED) ||
+            (type == UOP_CALL_REP_STRING) || (type == UOP_FP_ENTER_ORDERED))
+            return 0;
+    }
+    return 1;
+}
+
 void
 codegen_ir_compile(ir_data_t *ir, codeblock_t *block)
 {
@@ -88,11 +109,19 @@ codegen_ir_compile(ir_data_t *ir, codeblock_t *block)
         codegen_set_loop_start(ir, codegen_unroll_first_instruction);
         unroll_end = ir->wr_pos;
 
+        const int enter_once = mmx_enter_once(ir, codegen_unroll_start, unroll_end); /* KairoX86#399 */
+        extern int codegen_mmx_enter_first, codegen_mmx_enter_end;
+
         for (int unroll_count = 1; unroll_count < codegen_unroll_count; unroll_count++) {
             int offset = ir->wr_pos - codegen_unroll_start;
             //                        pclog("Unroll from %i to %i, offset %i - iteration %i\n", codegen_unroll_start, ir->wr_pos, offset, unroll_count);
             for (c = codegen_unroll_start; c < unroll_end; c++) {
                 //                                pclog(" Duplicate uop %i\n", c);
+                if (enter_once && (c >= codegen_mmx_enter_first) && (c < codegen_mmx_enter_end)) {
+                    uop_t *nop = uop_alloc_unroll(ir, UOP_NOP); /* KairoX86#399: the entry left out */
+                    nop->type  = UOP_NOP;
+                    continue;
+                }
                 duplicate_uop(ir, &ir->uops[c], offset);
             }
         }
