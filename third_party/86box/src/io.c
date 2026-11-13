@@ -78,6 +78,24 @@ typedef struct io_direct_out_t {
 static io_direct_in_t  io_direct_inb[NPORTS];
 static io_direct_out_t io_direct_outb[NPORTS];
 
+/* KairoX86#432: by port, how many handlers each wide walk calls (0, 1, 2 for two or more) and the one there is:
+   the walk of inw/inl/outw/outl's own width, and of the narrower handlers each falls back to */
+enum {
+    IO_D_INW,
+    IO_D_INB_NOW,
+    IO_D_INL,
+    IO_D_INW_NOL,
+    IO_D_INB_NOWL,
+    IO_D_OUTW,
+    IO_D_OUTB_NOW,
+    IO_D_OUTL,
+    IO_D_OUTW_NOL,
+    IO_D_OUTB_NOWL,
+    IO_D_CATS
+};
+static uint8_t io_direct_nr[IO_D_CATS][NPORTS];
+static io_t   *io_direct_one[IO_D_CATS][NPORTS];
+
 /* The port's direct entries, from its list */
 static void
 io_direct_update(uint16_t port)
@@ -105,6 +123,55 @@ io_direct_update(uint16_t port)
         out.nr = 2;
     io_direct_inb[port]  = in;
     io_direct_outb[port] = out;
+    /* KairoX86#432: each wide walk's filter, as the walks test it */
+    for (int c = 0; c < IO_D_CATS; c++) {
+        int   nr  = 0;
+        io_t *one = NULL;
+
+        for (io_t *p = io[port]; p != NULL; p = p->next) {
+            int take;
+
+            switch (c) {
+                case IO_D_INW:
+                    take = !!p->inw;
+                    break;
+                case IO_D_INB_NOW:
+                    take = !!p->inb && !p->inw;
+                    break;
+                case IO_D_INL:
+                    take = !!p->inl;
+                    break;
+                case IO_D_INW_NOL:
+                    take = !!p->inw && !p->inl;
+                    break;
+                case IO_D_INB_NOWL:
+                    take = !!p->inb && !p->inw && !p->inl;
+                    break;
+                case IO_D_OUTW:
+                    take = !!p->outw;
+                    break;
+                case IO_D_OUTB_NOW:
+                    take = !!p->outb && !p->outw;
+                    break;
+                case IO_D_OUTL:
+                    take = !!p->outl;
+                    break;
+                case IO_D_OUTW_NOL:
+                    take = !!p->outw && !p->outl;
+                    break;
+                case IO_D_OUTB_NOWL:
+                    take = !!p->outb && !p->outw && !p->outl;
+                    break;
+                default:
+                    take = 0;
+                    break;
+            }
+            if (take && (nr++ == 0))
+                one = p;
+        }
+        io_direct_nr[c][port]  = (nr > 2) ? 2 : nr;
+        io_direct_one[c][port] = one;
+    }
 }
 uint8_t io_turbo_map[NPORTS >> 3];
 int io_turbo_throttle = 0;
@@ -174,6 +241,8 @@ io_init(void)
     }
     memset(io_direct_inb, 0, sizeof(io_direct_inb)); /* KairoX86#380 */
     memset(io_direct_outb, 0, sizeof(io_direct_outb));
+    memset(io_direct_nr, 0, sizeof(io_direct_nr)); /* KairoX86#432 */
+    memset(io_direct_one, 0, sizeof(io_direct_one));
 
     memset(io_claims, 0x00, sizeof(io_claims));
     memset(io_claimed, 0x00, sizeof(io_claimed));
@@ -644,17 +713,28 @@ inw(uint16_t port)
         qfound = 1;
 #endif
     } else {
-        p = io[port];
-        while (p) {
-            q = p->next;
-            if (p->inw) {
+        if (io_direct_nr[IO_D_INW][port] < 2) { /* KairoX86#432: none, or the one handler */
+            if (io_direct_nr[IO_D_INW][port]) {
+                p = io_direct_one[IO_D_INW][port];
                 ret &= p->inw(port, p->priv);
                 found |= 2;
 #ifdef ENABLE_IO_LOG
                 qfound++;
 #endif
             }
-            p = q;
+        } else {
+            p = io[port];
+            while (p) {
+                q = p->next;
+                if (p->inw) {
+                    ret &= p->inw(port, p->priv);
+                    found |= 2;
+#ifdef ENABLE_IO_LOG
+                    qfound++;
+#endif
+                }
+                p = q;
+            }
         }
 
         ret8[0] = ret & 0xff;
@@ -664,17 +744,28 @@ inw(uint16_t port)
                 found |= 1;
                 continue;
             }
-            p = io[(port + i) & 0xffff];
-            while (p) {
-                q = p->next;
-                if (p->inb && !p->inw) {
+            if (io_direct_nr[IO_D_INB_NOW][(port + i) & 0xffff] < 2) { /* KairoX86#432: none, or the one handler */
+                if (io_direct_nr[IO_D_INB_NOW][(port + i) & 0xffff]) {
+                    p = io_direct_one[IO_D_INB_NOW][(port + i) & 0xffff];
                     ret8[i] &= p->inb(port + i, p->priv);
                     found |= 1;
 #ifdef ENABLE_IO_LOG
                     qfound++;
 #endif
                 }
-                p = q;
+            } else {
+                p = io[(port + i) & 0xffff];
+                while (p) {
+                    q = p->next;
+                    if (p->inb && !p->inw) {
+                        ret8[i] &= p->inb(port + i, p->priv);
+                        found |= 1;
+#ifdef ENABLE_IO_LOG
+                        qfound++;
+#endif
+                    }
+                    p = q;
+                }
             }
         }
         ret = (ret8[1] << 8) | ret8[0];
@@ -734,17 +825,28 @@ outw(uint16_t port, uint16_t val)
         qfound = 1;
 #endif
     } else {
-        p = io[port];
-        while (p) {
-            q = p->next;
-            if (p->outw) {
+        if (io_direct_nr[IO_D_OUTW][port] < 2) { /* KairoX86#432: none, or the one handler */
+            if (io_direct_nr[IO_D_OUTW][port]) {
+                p = io_direct_one[IO_D_OUTW][port];
                 p->outw(port, val, p->priv);
                 found |= 2;
 #ifdef ENABLE_IO_LOG
                 qfound++;
 #endif
             }
-            p = q;
+        } else {
+            p = io[port];
+            while (p) {
+                q = p->next;
+                if (p->outw) {
+                    p->outw(port, val, p->priv);
+                    found |= 2;
+#ifdef ENABLE_IO_LOG
+                    qfound++;
+#endif
+                }
+                p = q;
+            }
         }
 
         for (uint8_t i = 0; i < 2; i++) {
@@ -752,17 +854,28 @@ outw(uint16_t port, uint16_t val)
                 found |= 1;
                 continue;
             }
-            p = io[(port + i) & 0xffff];
-            while (p) {
-                q = p->next;
-                if (p->outb && !p->outw) {
+            if (io_direct_nr[IO_D_OUTB_NOW][(port + i) & 0xffff] < 2) { /* KairoX86#432: none, or the one handler */
+                if (io_direct_nr[IO_D_OUTB_NOW][(port + i) & 0xffff]) {
+                    p = io_direct_one[IO_D_OUTB_NOW][(port + i) & 0xffff];
                     p->outb(port + i, val >> (i << 3), p->priv);
                     found |= 1;
 #ifdef ENABLE_IO_LOG
                     qfound++;
 #endif
                 }
-                p = q;
+            } else {
+                p = io[(port + i) & 0xffff];
+                while (p) {
+                    q = p->next;
+                    if (p->outb && !p->outw) {
+                        p->outb(port + i, val >> (i << 3), p->priv);
+                        found |= 1;
+#ifdef ENABLE_IO_LOG
+                        qfound++;
+#endif
+                    }
+                    p = q;
+                }
             }
         }
     }
@@ -817,45 +930,78 @@ inl(uint16_t port)
         qfound = 1;
 #endif
     } else {
-        p = io[port];
-        while (p) {
-            q = p->next;
-            if (p->inl) {
+        if (io_direct_nr[IO_D_INL][port] < 2) { /* KairoX86#432: none, or the one handler */
+            if (io_direct_nr[IO_D_INL][port]) {
+                p = io_direct_one[IO_D_INL][port];
                 ret &= p->inl(port, p->priv);
                 found |= 4;
 #ifdef ENABLE_IO_LOG
                 qfound++;
 #endif
             }
-            p = q;
+        } else {
+            p = io[port];
+            while (p) {
+                q = p->next;
+                if (p->inl) {
+                    ret &= p->inl(port, p->priv);
+                    found |= 4;
+#ifdef ENABLE_IO_LOG
+                    qfound++;
+#endif
+                }
+                p = q;
+            }
         }
 
         ret16[0] = ret & 0xffff;
         ret16[1] = (ret >> 16) & 0xffff;
-        p        = io[port & 0xffff];
-        while (p) {
-            q = p->next;
-            if (p->inw && !p->inl) {
+        if (io_direct_nr[IO_D_INW_NOL][port & 0xffff] < 2) { /* KairoX86#432: none, or the one handler */
+            if (io_direct_nr[IO_D_INW_NOL][port & 0xffff]) {
+                p = io_direct_one[IO_D_INW_NOL][port & 0xffff];
                 ret16[0] &= p->inw(port, p->priv);
                 found |= 2;
 #ifdef ENABLE_IO_LOG
                 qfound++;
 #endif
             }
-            p = q;
+        } else {
+            p        = io[port & 0xffff];
+            while (p) {
+                q = p->next;
+                if (p->inw && !p->inl) {
+                    ret16[0] &= p->inw(port, p->priv);
+                    found |= 2;
+#ifdef ENABLE_IO_LOG
+                    qfound++;
+#endif
+                }
+                p = q;
+            }
         }
 
-        p = io[(port + 2) & 0xffff];
-        while (p) {
-            q = p->next;
-            if (p->inw && !p->inl) {
+        if (io_direct_nr[IO_D_INW_NOL][(port + 2) & 0xffff] < 2) { /* KairoX86#432: none, or the one handler */
+            if (io_direct_nr[IO_D_INW_NOL][(port + 2) & 0xffff]) {
+                p = io_direct_one[IO_D_INW_NOL][(port + 2) & 0xffff];
                 ret16[1] &= p->inw(port + 2, p->priv);
                 found |= 2;
 #ifdef ENABLE_IO_LOG
                 qfound++;
 #endif
             }
-            p = q;
+        } else {
+            p = io[(port + 2) & 0xffff];
+            while (p) {
+                q = p->next;
+                if (p->inw && !p->inl) {
+                    ret16[1] &= p->inw(port + 2, p->priv);
+                    found |= 2;
+#ifdef ENABLE_IO_LOG
+                    qfound++;
+#endif
+                }
+                p = q;
+            }
         }
         ret = (ret16[1] << 16) | ret16[0];
 
@@ -868,17 +1014,28 @@ inl(uint16_t port)
                 found |= 1;
                 continue;
             }
-            p = io[(port + i) & 0xffff];
-            while (p) {
-                q = p->next;
-                if (p->inb && !p->inw && !p->inl) {
+            if (io_direct_nr[IO_D_INB_NOWL][(port + i) & 0xffff] < 2) { /* KairoX86#432: none, or the one handler */
+                if (io_direct_nr[IO_D_INB_NOWL][(port + i) & 0xffff]) {
+                    p = io_direct_one[IO_D_INB_NOWL][(port + i) & 0xffff];
                     ret8[i] &= p->inb(port + i, p->priv);
                     found |= 1;
 #ifdef ENABLE_IO_LOG
                     qfound++;
 #endif
                 }
-                p = q;
+            } else {
+                p = io[(port + i) & 0xffff];
+                while (p) {
+                    q = p->next;
+                    if (p->inb && !p->inw && !p->inl) {
+                        ret8[i] &= p->inb(port + i, p->priv);
+                        found |= 1;
+#ifdef ENABLE_IO_LOG
+                        qfound++;
+#endif
+                    }
+                    p = q;
+                }
             }
         }
         ret = (ret8[3] << 24) | (ret8[2] << 16) | (ret8[1] << 8) | ret8[0];
@@ -938,33 +1095,55 @@ outl(uint16_t port, uint32_t val)
         qfound = 1;
 #endif
     } else {
-        p = io[port];
-        if (p) {
-            while (p) {
-                q = p->next;
-                if (p->outl) {
-                    p->outl(port, val, p->priv);
-                    found |= 4;
+        if (io_direct_nr[IO_D_OUTL][port] < 2) { /* KairoX86#432: none, or the one handler */
+            if (io_direct_nr[IO_D_OUTL][port]) {
+                p = io_direct_one[IO_D_OUTL][port];
+                p->outl(port, val, p->priv);
+                found |= 4;
 #ifdef ENABLE_IO_LOG
-                    qfound++;
+                qfound++;
 #endif
+            }
+        } else {
+            p = io[port];
+            if (p) {
+                while (p) {
+                    q = p->next;
+                    if (p->outl) {
+                        p->outl(port, val, p->priv);
+                        found |= 4;
+#ifdef ENABLE_IO_LOG
+                        qfound++;
+#endif
+                    }
+                    p = q;
                 }
-                p = q;
             }
         }
 
         for (uint8_t i = 0; i < 4; i += 2) {
-            p = io[(port + i) & 0xffff];
-            while (p) {
-                q = p->next;
-                if (p->outw && !p->outl) {
+            if (io_direct_nr[IO_D_OUTW_NOL][(port + i) & 0xffff] < 2) { /* KairoX86#432: none, or the one handler */
+                if (io_direct_nr[IO_D_OUTW_NOL][(port + i) & 0xffff]) {
+                    p = io_direct_one[IO_D_OUTW_NOL][(port + i) & 0xffff];
                     p->outw(port + i, val >> (i << 3), p->priv);
                     found |= 2;
 #ifdef ENABLE_IO_LOG
                     qfound++;
 #endif
                 }
-                p = q;
+            } else {
+                p = io[(port + i) & 0xffff];
+                while (p) {
+                    q = p->next;
+                    if (p->outw && !p->outl) {
+                        p->outw(port + i, val >> (i << 3), p->priv);
+                        found |= 2;
+#ifdef ENABLE_IO_LOG
+                        qfound++;
+#endif
+                    }
+                    p = q;
+                }
             }
         }
 
@@ -973,17 +1152,28 @@ outl(uint16_t port, uint32_t val)
                 found |= 1;
                 continue;
             }
-            p = io[(port + i) & 0xffff];
-            while (p) {
-                q = p->next;
-                if (p->outb && !p->outw && !p->outl) {
+            if (io_direct_nr[IO_D_OUTB_NOWL][(port + i) & 0xffff] < 2) { /* KairoX86#432: none, or the one handler */
+                if (io_direct_nr[IO_D_OUTB_NOWL][(port + i) & 0xffff]) {
+                    p = io_direct_one[IO_D_OUTB_NOWL][(port + i) & 0xffff];
                     p->outb(port + i, val >> (i << 3), p->priv);
                     found |= 1;
 #ifdef ENABLE_IO_LOG
                     qfound++;
 #endif
                 }
-                p = q;
+            } else {
+                p = io[(port + i) & 0xffff];
+                while (p) {
+                    q = p->next;
+                    if (p->outb && !p->outw && !p->outl) {
+                        p->outb(port + i, val >> (i << 3), p->priv);
+                        found |= 1;
+#ifdef ENABLE_IO_LOG
+                        qfound++;
+#endif
+                    }
+                    p = q;
+                }
             }
         }
     }
