@@ -927,13 +927,12 @@ extern void codegen_fpu_guard_int_indefinite(ir_data_t *ir, uint32_t fetchdat, u
         codegen_mmx_entered = 0;                            \
     } while (0)
 #endif
+/* KairoX86#399: the common case inline (codegen.c), MMX_ENTER in C otherwise */
+extern void codegen_mmx_enter_arm64(ir_data_t *ir);
 #define uop_MMX_ENTER(ir)                                    \
     do {                                                     \
-        if (!codegen_mmx_entered) {                         \
-            uop_MOV_IMM(ir, IREG_oldpc, cpu_state.oldpc);            \
-            uop_CALL_FUNC_RESULT(ir, IREG_temp0, codegen_mmx_enter); \
-            uop_CMP_IMM_JZ(ir, IREG_temp0, 1, codegen_exit_rout); \
-        }                                                   \
+        if (!codegen_mmx_entered)                           \
+            codegen_mmx_enter_arm64(ir);                    \
         codegen_mmx_entered = 1;                             \
         codegen_fpu_entered = 0;                             \
     } while (0)

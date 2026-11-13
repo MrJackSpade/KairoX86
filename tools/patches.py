@@ -6783,6 +6783,16 @@ KAIROX86_IO_DIRECT_WIDE = [
      '    memset(io_direct_inb, 0, sizeof(io_direct_inb)); /* KairoX86#380 */\n    memset(io_direct_outb, 0, sizeof(io_direct_outb));\n    memset(io_direct_nr, 0, sizeof(io_direct_nr)); /* KairoX86#432 */\n    memset(io_direct_one, 0, sizeof(io_direct_one));\n'),
 ]
 
+
+# KairoX86#399: arm64's MMX entry tests the common case inline (EM, TS, ES clear, fpu_ignne 0: UOP_MMX_ENTER alone) and
+# calls MMX_ENTER in C otherwise, instead of the C call at every entry.
+KAIROX86_MMX_ENTER_INLINE = [
+    ('86box/src/codegen/codegen_ir_defs.h', '#define uop_MMX_ENTER(ir)                                    \\\n    do {                                                     \\\n        if (!codegen_mmx_entered) {                         \\\n            uop_MOV_IMM(ir, IREG_oldpc, cpu_state.oldpc);            \\\n            uop_CALL_FUNC_RESULT(ir, IREG_temp0, codegen_mmx_enter); \\\n            uop_CMP_IMM_JZ(ir, IREG_temp0, 1, codegen_exit_rout); \\\n        }                                                   \\\n        codegen_mmx_entered = 1;                             \\\n        codegen_fpu_entered = 0;                             \\\n    } while (0)\n#else',
+     '/* KairoX86#399: the common case inline (codegen.c), MMX_ENTER in C otherwise */\nextern void codegen_mmx_enter_arm64(ir_data_t *ir);\n#define uop_MMX_ENTER(ir)                                    \\\n    do {                                                     \\\n        if (!codegen_mmx_entered)                           \\\n            codegen_mmx_enter_arm64(ir);                    \\\n        codegen_mmx_entered = 1;                             \\\n        codegen_fpu_entered = 0;                             \\\n    } while (0)\n#else'),
+    ('86box/src/codegen/codegen.c', 'void\ncodegen_fp_pending_check(ir_data_t *ir)\n{',
+     "#if defined __aarch64__ || defined _M_ARM64\n/* KairoX86#399: an MMX instruction's entry on arm64. With CR0.EM and TS clear, the x87 status's ES bit clear and\n   fpu_ignne 0, MMX_ENTER (codegen_mmx_enter) would only make x87_set_mmx's stores, which UOP_MMX_ENTER makes inline\n   (cpu_block_end, which it also sets, is reset before every interpreted loop and never read by compiled code).\n   Otherwise it is called as before; returning 0, it has made the same stores, which UOP_MMX_ENTER then repeats (its\n   CR0 test passes: EM and TS are clear). softfloat (whose x87_set_mmx resets fpu_state) and a CPU without MMX keep\n   the call alone. */\nvoid\ncodegen_mmx_enter_arm64(ir_data_t *ir)\n{\n    extern int codegen_mmx_enter(void);\n\n    uop_MOV_IMM(ir, IREG_oldpc, cpu_state.oldpc);\n    if (fpu_softfloat || !cpu_has_feature(CPU_FEATURE_MMX)) {\n        uop_CALL_FUNC_RESULT(ir, IREG_temp0, codegen_mmx_enter);\n        uop_CMP_IMM_JZ(ir, IREG_temp0, 1, codegen_exit_rout);\n        return;\n    }\n    uop_MOV_REG_PTR(ir, IREG_temp0, &cr0);\n    uop_AND_IMM(ir, IREG_temp0, IREG_temp0, 0xc);\n    uop_MOVZX(ir, IREG_temp1, IREG_NPXS);\n    uop_AND_IMM(ir, IREG_temp1, IREG_temp1, 0x80);\n    uop_OR(ir, IREG_temp0, IREG_temp0, IREG_temp1);\n    uop_MOV_REG_PTR(ir, IREG_temp1, &fpu_ignne);\n    uop_OR(ir, IREG_temp0, IREG_temp0, IREG_temp1);\n    const int jump_uop = uop_CMP_IMM_JZ_DEST(ir, IREG_temp0, 0);\n    uop_CALL_FUNC_RESULT(ir, IREG_temp0, codegen_mmx_enter);\n    uop_CMP_IMM_JZ(ir, IREG_temp0, 1, codegen_exit_rout);\n    uop_set_jump_dest(ir, jump_uop);\n    uop_gen_imm(UOP_MMX_ENTER, ir, cpu_state.oldpc);\n}\n#endif\n\nvoid\ncodegen_fp_pending_check(ir_data_t *ir)\n{"),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -6953,6 +6963,7 @@ PATCHES = {
     'kairox86-voodoo-busy-unseen': KAIROX86_VOODOO_BUSY_UNSEEN,
     'kairox86-dead-flag-spill': KAIROX86_DEAD_FLAG_SPILL,
     'kairox86-io-direct-wide': KAIROX86_IO_DIRECT_WIDE,
+    'kairox86-mmx-enter-inline': KAIROX86_MMX_ENTER_INLINE,
 }
 
 ADDED = [

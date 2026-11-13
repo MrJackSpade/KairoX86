@@ -556,6 +556,39 @@ static uint8_t opcode_0f_modrm[256] = {
    (x87_legacy_pending_entry). ES is tested inline; the helper is called
    only when it is set. A waiting x87 instruction has the same test in
    codegen_generate_call, so its entry does not repeat it. */
+#if defined __aarch64__ || defined _M_ARM64
+/* KairoX86#399: an MMX instruction's entry on arm64. With CR0.EM and TS clear, the x87 status's ES bit clear and
+   fpu_ignne 0, MMX_ENTER (codegen_mmx_enter) would only make x87_set_mmx's stores, which UOP_MMX_ENTER makes inline
+   (cpu_block_end, which it also sets, is reset before every interpreted loop and never read by compiled code).
+   Otherwise it is called as before; returning 0, it has made the same stores, which UOP_MMX_ENTER then repeats (its
+   CR0 test passes: EM and TS are clear). softfloat (whose x87_set_mmx resets fpu_state) and a CPU without MMX keep
+   the call alone. */
+void
+codegen_mmx_enter_arm64(ir_data_t *ir)
+{
+    extern int codegen_mmx_enter(void);
+
+    uop_MOV_IMM(ir, IREG_oldpc, cpu_state.oldpc);
+    if (fpu_softfloat || !cpu_has_feature(CPU_FEATURE_MMX)) {
+        uop_CALL_FUNC_RESULT(ir, IREG_temp0, codegen_mmx_enter);
+        uop_CMP_IMM_JZ(ir, IREG_temp0, 1, codegen_exit_rout);
+        return;
+    }
+    uop_MOV_REG_PTR(ir, IREG_temp0, &cr0);
+    uop_AND_IMM(ir, IREG_temp0, IREG_temp0, 0xc);
+    uop_MOVZX(ir, IREG_temp1, IREG_NPXS);
+    uop_AND_IMM(ir, IREG_temp1, IREG_temp1, 0x80);
+    uop_OR(ir, IREG_temp0, IREG_temp0, IREG_temp1);
+    uop_MOV_REG_PTR(ir, IREG_temp1, &fpu_ignne);
+    uop_OR(ir, IREG_temp0, IREG_temp0, IREG_temp1);
+    const int jump_uop = uop_CMP_IMM_JZ_DEST(ir, IREG_temp0, 0);
+    uop_CALL_FUNC_RESULT(ir, IREG_temp0, codegen_mmx_enter);
+    uop_CMP_IMM_JZ(ir, IREG_temp0, 1, codegen_exit_rout);
+    uop_set_jump_dest(ir, jump_uop);
+    uop_gen_imm(UOP_MMX_ENTER, ir, cpu_state.oldpc);
+}
+#endif
+
 void
 codegen_fp_pending_check(ir_data_t *ir)
 {
