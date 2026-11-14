@@ -174,7 +174,9 @@ struct descloc_s rombios32_gdt_48 VARFSEG = {
  ****************************************************************/
 
 // BIOS build date
-char BiosDate[] VARFSEGFIXED(0xfff5) = "06/23/99";
+// KairoX86: after 12/01/1999, the date from which Windows 98 SE (and
+// 2000 and XP, from 01/01/1999) runs on the BIOS's ACPI tables.
+char BiosDate[] VARFSEGFIXED(0xfff5) = "12/31/99";
 
 u8 BiosModelId VARFSEGFIXED(0xfffe) = BUILD_MODEL_ID;
 

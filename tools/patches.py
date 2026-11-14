@@ -6569,7 +6569,8 @@ KAIROX86_GD5446_FREE_BIOS = [
 #   linear-aperture bits clear in banked modes (set, they close the A0000 window), and sets AR10, AR13 and CR14 as
 #   Cirrus's own BIOS does (8-bit pixels, no panning, byte addressing);
 # - SeaVGABIOS writes a planar pixel (INT 10h AH=0Ch) through write mode 2 and the bit mask, as a VGA BIOS does,
-#   not by rewriting all four planes in turn.
+#   not by rewriting all four planes in turn;
+# - the BIOS date is 12/31/99, after the 12/01/1999 from which Windows 98 SE runs on the BIOS's ACPI tables.
 KAIROX86_SEABIOS = [
     ('seabios/scripts/buildversion.py',
      '        verstr = check_output("%s --version" % (tool,)).split(\'\\n\')[0]\n',
@@ -6580,6 +6581,9 @@ KAIROX86_SEABIOS = [
     ('seabios/src/hw/timer.c',
      '    outb(0x0, PORT_PIT_COUNTER0);\n}\n',
      "    outb(0x0, PORT_PIT_COUNTER0);\n    // KairoX86: timer1, the DRAM refresh request, as every AT BIOS sets it:\n    // binary count, low byte, mode 2, 18 counts (15.08us), so port 61h\n    // bit 4 toggles. DOS drivers time their delays by that bit (Adaptec's\n    // ASPI managers on the Windows 98 boot disk wait on it forever without).\n    outb(PM_SEL_TIMER1|PM_ACCESS_LOBYTE|PM_MODE2|PM_CNT_BINARY, PORT_PIT_MODE);\n    outb(18, PORT_PIT_COUNTER1);\n}\n"),
+    ('seabios/src/misc.c',
+     'char BiosDate[] VARFSEGFIXED(0xfff5) = "06/23/99";\n',
+     '// KairoX86: after 12/01/1999, the date from which Windows 98 SE (and\n// 2000 and XP, from 01/01/1999) runs on the BIOS\'s ACPI tables.\nchar BiosDate[] VARFSEGFIXED(0xfff5) = "12/31/99";\n'),
     ('seabios/vgasrc/clext.c',
      '    stdvga_attr_mask(0x10, 0x01, on);\n    stdvga_attrindex_write(0x20);\n}\n',
      "    if (memmodel == MM_PACKED || memmodel == MM_DIRECT) {\n        // KairoX86: as Cirrus's own BIOS sets its modes: 8-bit pixels past\n        // the attribute palette and no blink (AR10), no pixel panning (AR13,\n        // which text mode leaves at 8) and byte, not doubleword, display\n        // addressing (CR14, which the tables set to 40h). A real GD5446\n        // (86Box's too) honours all three; QEMU's ignores them.\n        stdvga_attr_write(0x10, 0x41);\n        stdvga_attr_write(0x13, 0x00);\n        stdvga_crtc_write(stdvga_get_crtc(), 0x14, 0x00);\n    } else\n        stdvga_attr_mask(0x10, 0x01, on);\n    stdvga_attrindex_write(0x20);\n    // KairoX86: the mode tables write SR1 with its screen-off bit (5) set;\n    // turn the screen back on, as a VGA BIOS ends a mode set. A real\n    // Cirrus chip (and 86Box's) blanks the screen while the bit is set.\n    stdvga_sequ_mask(0x01, 0x20, 0x00);\n}\n"),
