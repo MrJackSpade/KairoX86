@@ -78,6 +78,7 @@ uint32_t    *video_8to32          = NULL;
 uint32_t    *video_15to32         = NULL;
 uint32_t    *video_16to32         = NULL;
 uint8_t      video_16to32_channels[128]; /* KairoX86#425 */
+uint8_t      video_15to32_channels[96];  /* KairoX86#443: blue [0, 32), green [32, 64), red [64, 96) */
 monitor_t          monitors[MONITORS_NUM];
 monitor_settings_t monitor_settings[MONITORS_NUM];
 atomic_bool        doresize_monitors[MONITORS_NUM];
@@ -984,6 +985,11 @@ video_init(void)
     }
     for (int c = 0; c < 64; c++)
         video_16to32_channels[32 + c] = (calc_16to32(c << 5) >> 8) & 0xff;
+    for (int c = 0; c < 32; c++) { /* KairoX86#443 */
+        video_15to32_channels[c]      = calc_15to32(c) & 0xff;
+        video_15to32_channels[32 + c] = (calc_15to32(c << 5) >> 8) & 0xff;
+        video_15to32_channels[64 + c] = (calc_15to32(c << 10) >> 16) & 0xff;
+    }
 
     /* KairoX86#233: the GPU's copy of the 15 and 16-bit colour tables */
     if (kairo_gpu_on)
@@ -1020,6 +1026,35 @@ video_16to32_run(uint32_t *dst, const uint16_t *src, int n, const uint8_t *chann
         memcpy(&c, &src[i], 2);
         dst[i] = 0xff000000 | ((uint32_t) channels[96 + (c >> 11)] << 16) |
                  ((uint32_t) channels[32 + ((c >> 5) & 63)] << 8) | channels[c & 31];
+    }
+#endif
+}
+
+/* KairoX86#443: [n] (a multiple of 8) 15-bit pixels at [src] (bit 15 ignored) to 32 bits at [dst], each channel from
+   its own five bits through [channels] (video_15to32_channels' layout), with alpha ff: eight a step with NEON on arm64 */
+void
+video_15to32_run(uint32_t *dst, const uint16_t *src, int n, const uint8_t *channels)
+{
+#if defined(__aarch64__) || defined(_M_ARM64)
+    const uint8x16x2_t blue  = { { vld1q_u8(&channels[0]), vld1q_u8(&channels[16]) } };
+    const uint8x16x2_t green = { { vld1q_u8(&channels[32]), vld1q_u8(&channels[48]) } };
+    const uint8x16x2_t red   = { { vld1q_u8(&channels[64]), vld1q_u8(&channels[80]) } };
+    const uint8x8_t    alpha = vdup_n_u8(0xff);
+    for (int i = 0; i < n; i += 8) {
+        const uint16x8_t px = vld1q_u16(&src[i]);
+        uint8x8x4_t      out;
+        out.val[0] = vqtbl2_u8(blue, vmovn_u16(vandq_u16(px, vdupq_n_u16(31))));
+        out.val[1] = vqtbl2_u8(green, vmovn_u16(vandq_u16(vshrq_n_u16(px, 5), vdupq_n_u16(31))));
+        out.val[2] = vqtbl2_u8(red, vmovn_u16(vandq_u16(vshrq_n_u16(px, 10), vdupq_n_u16(31))));
+        out.val[3] = alpha;
+        vst4_u8((uint8_t *) &dst[i], out);
+    }
+#else
+    for (int i = 0; i < n; i++) {
+        uint16_t c;
+        memcpy(&c, &src[i], 2);
+        dst[i] = 0xff000000 | ((uint32_t) channels[64 + ((c >> 10) & 31)] << 16) |
+                 ((uint32_t) channels[32 + ((c >> 5) & 31)] << 8) | channels[c & 31];
     }
 #endif
 }

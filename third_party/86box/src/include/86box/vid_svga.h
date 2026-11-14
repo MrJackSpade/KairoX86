@@ -592,6 +592,8 @@ extern uint8_t tkd8001_ramdac_in(uint16_t addr, void *priv, svga_t *svga);
 extern void     tvp3026_ramdac_out(uint16_t addr, int rs2, int rs3, uint8_t val, void *priv, svga_t *svga);
 extern uint8_t  tvp3026_ramdac_in(uint16_t addr, int rs2, int rs3, void *priv, svga_t *svga);
 extern uint32_t tvp3026_conv_16to32(svga_t* svga, uint16_t color, uint8_t bpp);
+/* KairoX86#443: tvp3026_conv_16to32's 15 bpp conversion as per-channel tables (video_15to32_channels' layout) */
+extern const uint8_t *tvp3026_15to32_channels(svga_t *svga, uint8_t *scratch);
 extern void     tvp3026_recalctimings(void *priv, svga_t *svga);
 extern void     tvp3026_hwcursor_draw(svga_t *svga, int displine);
 extern float    tvp3026_getclock(int clock, void *priv);

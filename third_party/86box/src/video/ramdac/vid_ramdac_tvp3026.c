@@ -573,6 +573,21 @@ tvp3026_conv_16to32(svga_t* svga, uint16_t color, uint8_t bpp)
     return ret;
 }
 
+/* KairoX86#443: tvp3026_conv_16to32's 15 bpp colours channel by channel: video_15to32's without the colour lookup,
+   else each channel's byte from pallook[c << 3] (blue its red byte, green its green, red its blue, as it reads them) */
+const uint8_t *
+tvp3026_15to32_channels(svga_t *svga, uint8_t *scratch)
+{
+    if (!svga->lut_map)
+        return video_15to32_channels;
+    for (int c = 0; c < 32; c++) {
+        scratch[c]      = getcolr(svga->pallook[c << 3]);
+        scratch[32 + c] = getcolg(svga->pallook[c << 3]);
+        scratch[64 + c] = getcolb(svga->pallook[c << 3]);
+    }
+    return scratch;
+}
+
 void
 tvp3026_hwcursor_draw(svga_t *svga, int displine)
 {
