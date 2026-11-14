@@ -6891,6 +6891,15 @@ KAIROX86_15BPP_LOWRES_LINES = [
      '                x = render_gpu_wide(svga, p, 15, (svga->render == svga_render_15bpp_lowres) && (svga->conv_16to32 == svga_conv_16to32));\n                if (x == 0) /* KairoX86#443 */\n                    x = render_15bpp_lowres_default(svga, p, 0);\n                p += 2 * x;'),
 ]
 
+
+# KairoX86#442: the plain packed byte write (chain 4 packed or frame buffer only) straight to its plane.
+KAIROX86_PACKED_BYTE_WRITES = [
+    ('86box/src/video/vid_svga.c', 'static __inline void\nsvga_write_common(uint32_t addr, uint8_t val, uint8_t linear, void *priv)\n{',
+     '/* KairoX86#442: a write makes a straight store of the (rotated) byte into its plane on a packed card (chain 4 packed,\n   or frame buffer only): write mode 0, no bit mask, logical operation or set/reset, no address translation, none of\n   the extended addressing */\nstatic __inline int\nsvga_packed_plain(const svga_t *svga)\n{\n    return !(svga->adv_flags & (FLAG_ADDR_BY8 | FLAG_ADDR_BY16 | FLAG_LATCH8 | FLAG_EXT_WRITE)) && (svga->writemode == 0) &&\n           ((svga->chain4 && (svga->packed_chain4 || svga->force_old_addr)) || svga->fb_only) && (svga->gdcreg[8] == 0xff) &&\n           !(svga->gdcreg[3] & 0x18) && (!svga->gdcreg[1] || svga->set_reset_disabled) && (svga->translate_address == NULL);\n}\n\nstatic __inline void\nsvga_write_common(uint32_t addr, uint8_t val, uint8_t linear, void *priv)\n{'),
+    ('86box/src/video/vid_svga.c', '        return;\n    }\n\n    if (!linear) {\n        xga_write_test(addr, val, svga);\n        addr = svga_decode_addr(svga, addr, 1);\n        if (addr == 0xffffffff) {',
+     '        return;\n    }\n\n    /* KairoX86#442: the plain packed write, as the general path below makes it */\n    if (svga_packed_plain(svga)) {\n        if (!linear) {\n            xga_write_test(addr, val, svga);\n            addr = svga_decode_addr(svga, addr, 1);\n            if (addr == 0xffffffff)\n                return;\n        }\n        if (!(svga->gdcreg[6] & 1))\n            svga->fullchange = 2;\n        const uint32_t plane = addr & 3;\n        if (!(writemask2 & (1 << plane)))\n            return;\n        addr = (addr & ~3) & svga->decode_mask;\n        if (addr >= svga->vram_max)\n            return;\n        addr &= svga->vram_mask;\n        svga->changedvram[addr >> 12] = svga->monitor->mon_changeframecount;\n        svga->vram[addr | plane]      = (val >> (svga->gdcreg[3] & 7)) | (val << (8 - (svga->gdcreg[3] & 7)));\n        return;\n    }\n\n    if (!linear) {\n        xga_write_test(addr, val, svga);\n        addr = svga_decode_addr(svga, addr, 1);\n        if (addr == 0xffffffff) {'),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -7068,6 +7077,7 @@ PATCHES = {
     'kairox86-chips69000-srccopy': KAIROX86_CHIPS69000_SRCCOPY,
     'kairox86-15bpp-lines': KAIROX86_15BPP_LINES,
     'kairox86-15bpp-lowres-lines': KAIROX86_15BPP_LOWRES_LINES,
+    'kairox86-packed-byte-writes': KAIROX86_PACKED_BYTE_WRITES,
 }
 
 ADDED = [

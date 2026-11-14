@@ -2376,6 +2376,17 @@ svga_kairo_touch(svga_t *svga, uint32_t addr, uint8_t linear, uint32_t len)
         svga->kairo_touch(svga, 0, svga->vram_max);
 }
 
+/* KairoX86#442: a write makes a straight store of the (rotated) byte into its plane on a packed card (chain 4 packed,
+   or frame buffer only): write mode 0, no bit mask, logical operation or set/reset, no address translation, none of
+   the extended addressing */
+static __inline int
+svga_packed_plain(const svga_t *svga)
+{
+    return !(svga->adv_flags & (FLAG_ADDR_BY8 | FLAG_ADDR_BY16 | FLAG_LATCH8 | FLAG_EXT_WRITE)) && (svga->writemode == 0) &&
+           ((svga->chain4 && (svga->packed_chain4 || svga->force_old_addr)) || svga->fb_only) && (svga->gdcreg[8] == 0xff) &&
+           !(svga->gdcreg[3] & 0x18) && (!svga->gdcreg[1] || svga->set_reset_disabled) && (svga->translate_address == NULL);
+}
+
 static __inline void
 svga_write_common(uint32_t addr, uint8_t val, uint8_t linear, void *priv)
 {
@@ -2416,6 +2427,28 @@ svga_write_common(uint32_t addr, uint8_t val, uint8_t linear, void *priv)
             svga->vram[addr | 2] = val;
         if (writemask2 & 8)
             svga->vram[addr | 3] = val;
+        return;
+    }
+
+    /* KairoX86#442: the plain packed write, as the general path below makes it */
+    if (svga_packed_plain(svga)) {
+        if (!linear) {
+            xga_write_test(addr, val, svga);
+            addr = svga_decode_addr(svga, addr, 1);
+            if (addr == 0xffffffff)
+                return;
+        }
+        if (!(svga->gdcreg[6] & 1))
+            svga->fullchange = 2;
+        const uint32_t plane = addr & 3;
+        if (!(writemask2 & (1 << plane)))
+            return;
+        addr = (addr & ~3) & svga->decode_mask;
+        if (addr >= svga->vram_max)
+            return;
+        addr &= svga->vram_mask;
+        svga->changedvram[addr >> 12] = svga->monitor->mon_changeframecount;
+        svga->vram[addr | plane]      = (val >> (svga->gdcreg[3] & 7)) | (val << (8 - (svga->gdcreg[3] & 7)));
         return;
     }
 
