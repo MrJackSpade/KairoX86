@@ -63,6 +63,18 @@ New-Item -ItemType Directory -Force $work | Out-Null
 if (-not $RomSet) { $RomSet = if ($Local) { 'G:\tools\src\86box-roms' } else { '/data/local/tmp/kx86/bios' } }
 if ($Local -and -not $Reference) { $Reference = Join-Path $root '.build\exact-ref' }
 
+# The free firmware the app installs beside the player's (firmware/, X86Firmware.FREE): the free machine
+# (KairoX86#446) boots it. Here the ROM set is mirrored into the work folder with it laid over; on the
+# device it is pushed into the ROM set.
+$free = Join-Path $root 'firmware'
+if ($Local) {
+    $merged = Join-Path $work 'romset'
+    robocopy $RomSet $merged /MIR /NFL /NDL /NJH /NJS /NP | Out-Null
+    if ($LASTEXITCODE -ge 8) { throw "robocopy could not mirror the ROM set $RomSet (exit $LASTEXITCODE)" }
+    Copy-Item (Join-Path $free '*') $merged -Recurse -Force
+    $RomSet = $merged
+}
+
 # The base revision's tree: its files and the shared commit it pins, as git archives.
 if ($Unlinked) { $Base = 'HEAD' }
 $baseCommit = (git -C $root rev-parse $Base).Trim()
@@ -107,6 +119,7 @@ if ($Local) {
 } else {
     $cxx = $tools.CxxShared
     & $adb -s $Device shell "su 0 sh -c 'rm -rf $remote/machines $remote/base $remote/tree; mkdir -p $remote/base $remote/tree'"
+    foreach ($folder in Get-ChildItem $free -Directory) { Push-ToDevice $Device $folder.FullName "$RomSet/" }
     Push-ToDevice $Device $machines "$remote/"
     Push-ToDevice $Device (Join-Path $root 'core\test\exact\run.sh') "$remote/run.sh"
     foreach ($name in $builds.Keys) {
