@@ -33,6 +33,13 @@ The standard's free-machine entries (`free-486`, `free-pentium`) boot the app's 
 
 The presets' board, `kairo_pc` (KairoX86#446, [source import](source-import.md#the-free-machine)), boots SeaBIOS and SeaVGABIOS, which `tools/seabios/build.sh` builds from `third_party/seabios` into `firmware/` (Git Bash, with the toolchain its header names; `--check` fails unless a rebuild matches the committed files byte for byte). A machine folder's `86box.cfg` sets its boot order in `[KairoX86]` `boot_order` (`a`, `c` and `cd`, comma-separated; `a,cd,c` when it names none), and `firmware_log = 1` there writes SeaBIOS's log to `firmware.log` in the machine's folder, on the PC and the device alike. A SeaBIOS built with `CONFIG_DEBUG_LEVEL=8` added to `tools/seabios/seabios.config` logs every step.
 
+`core/test/free/check_free.py` proves the machine on the PC with small guest programs, each against a reference board (the 486AP4 with an S3 Trio64V2/DX and their own BIOSes): every BIOS video mode's picture and VESA mode 101h pixel for pixel, the boot order across floppy, hard disk and El Torito CD, and a Sound Blaster 16 tone. Run it with the `game_profile` build and the ROM set `tools/exact.ps1 -Local` lays the free firmware over; name groups (`modes`, `vbe`, `boot`, `sb16`) to run part of it:
+
+```powershell
+python core\test\free\check_free.py .build\dev\out\game_profile.exe .build\exact\romset <work folder> [group ...]
+omset <work folder> [group ...]
+```
+
 ## Host tests
 
 The core builds for the host with llvm-mingw (`shared\tools\test-core.ps1` configures `.build\host`). `core/test/boot_test` runs machine folders in turn in one process, as the app runs one machine after another, and checks each leaves no thread behind and gives its memory back (each run ends within 32 MB of where the first ended, KairoX86#186); run it under `shared\tools\run-limited.ps1`:
