@@ -17,7 +17,9 @@ void test_main(void) {
         if (int10(0x4f01, 0, mode, 0, 0x6200, 0) != 0x004f)
             continue;
         const int lfb = (VBE_MODE->attributes & 0x81) == 0x81 && VBE_MODE->framebuffer;
-        if (!lfb || (VBE_MODE->model != 6) || (VBE_MODE->bpp != 15) || (VBE_MODE->width > 320))
+        /* 5-5-5 (a BIOS lists it as 15 or 16 bits a pixel; the green mask's 5 bits tell it from 5-6-5) */
+        if (!lfb || (VBE_MODE->model != 6) || ((VBE_MODE->bpp != 15) && (VBE_MODE->bpp != 16)) ||
+            (VBE_MODE->green_size != 5) || (VBE_MODE->width > 320))
             continue;
         if (int10(0x4f02, mode | 0x4000, 0, 0, 0, 0) != 0x004f)
             continue;
