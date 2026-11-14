@@ -6157,7 +6157,7 @@ static const device_config_t gd5446_pci_config[] = {
                 .files         = { BIOS_GD5446_STB_PATH, "" }
             },
             {
-                .name          = "SeaVGABIOS (free)",
+                .name          = "SeaVGABIOS",
                 .internal_name = "cl_gd5446_free_pci",
                 .bios_type     = BIOS_NORMAL,
                 .files_no      = 1,

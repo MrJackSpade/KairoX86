@@ -6556,7 +6556,7 @@ KAIROX86_GD5446_FREE_BIOS = [
      '    if (romfn && (local & 0x800) && (id == CIRRUS_ID_CLGD5446))\n        /* SeaVGABIOS (KairoX86) is larger than 32 KB: a 64 KB ROM, at C0000h and behind the ROM BAR */\n        rom_init(&gd54xx->bios_rom, romfn, 0xc0000, 0x10000, 0xffff, 0, MEM_MAPPING_EXTERNAL);\n    else if (romfn)\n'),
     ('86box/src/video/vid_cl54xx.c',
      '                .files         = { BIOS_GD5446_STB_PATH, "" }\n            },\n            { .files_no = 0 }\n        },\n',
-     '                .files         = { BIOS_GD5446_STB_PATH, "" }\n            },\n            {\n                .name          = "SeaVGABIOS (free)",\n                .internal_name = "cl_gd5446_free_pci",\n                .bios_type     = BIOS_NORMAL,\n                .files_no      = 1,\n                .local         = CIRRUS_ID_CLGD5446 | 0x800,\n                .size          = 65536,\n                .flags         = 0,\n                .files         = { BIOS_GD5446_FREE_PATH, "" }\n            },\n            { .files_no = 0 }\n        },\n'),
+     '                .files         = { BIOS_GD5446_STB_PATH, "" }\n            },\n            {\n                .name          = "SeaVGABIOS",\n                .internal_name = "cl_gd5446_free_pci",\n                .bios_type     = BIOS_NORMAL,\n                .files_no      = 1,\n                .local         = CIRRUS_ID_CLGD5446 | 0x800,\n                .size          = 65536,\n                .flags         = 0,\n                .files         = { BIOS_GD5446_FREE_PATH, "" }\n            },\n            { .files_no = 0 }\n        },\n'),
 ]
 
 # SeaBIOS 1.17.0 (third_party/seabios), built by tools/seabios/build.sh for the free machine (KairoX86#446). Most of
