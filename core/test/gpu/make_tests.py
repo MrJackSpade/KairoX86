@@ -29,7 +29,7 @@ LINK = """SECTIONS {
 # The program runs from 0x8000 up to the 64 KB its code segment (0) reaches
 MAX_BYTES = 0x10000 - 0x8000
 # Workloads, not tests: they never reach TEST_END, so they're built only when named (KairoX86#133's s3loop)
-WORKLOADS = ('s3loop', 'vir2dloop', 'ban2dloop', 'm64_2dloop', 'mgaloop', 'et4000w32loop', 'cl54xxloop', 'tguiloop', 'xgaloop', 'ibm8514loop', 'p9100loop', 'r128loop', 'chips69000loop',)
+WORKLOADS = ('s3loop', 'low15loop', 'vir2dloop', 'ban2dloop', 'm64_2dloop', 'mgaloop', 'et4000w32loop', 'cl54xxloop', 'tguiloop', 'xgaloop', 'ibm8514loop', 'p9100loop', 'r128loop', 'chips69000loop',)
 # The 8086 machines' tests: a 360 KB floppy, 9 sectors a track
 FLOPPY_360K = 368640
 SOURCES_8086 = ('loader.S', 'rt86.S')
