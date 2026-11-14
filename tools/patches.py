@@ -6559,9 +6559,17 @@ KAIROX86_GD5446_FREE_BIOS = [
      '                .files         = { BIOS_GD5446_STB_PATH, "" }\n            },\n            {\n                .name          = "SeaVGABIOS (free)",\n                .internal_name = "cl_gd5446_free_pci",\n                .bios_type     = BIOS_NORMAL,\n                .files_no      = 1,\n                .local         = CIRRUS_ID_CLGD5446 | 0x800,\n                .size          = 65536,\n                .flags         = 0,\n                .files         = { BIOS_GD5446_FREE_PATH, "" }\n            },\n            { .files_no = 0 }\n        },\n'),
 ]
 
-# SeaBIOS 1.17.0 (third_party/seabios), built by tools/seabios/build.sh: its version script reads the Windows
-# toolchain's CRLF output, and I/O BARs are sized within x86's 64 KB I/O space, since the PIIX4's implement only
-# their low 16 bits.
+# SeaBIOS 1.17.0 (third_party/seabios), built by tools/seabios/build.sh for the free machine (KairoX86#446). Most of
+# these are hardware QEMU, the PC SeaBIOS is written for, ignores and a real board or card (and 86Box's) honours:
+# - its version script reads the Windows toolchain's CRLF output;
+# - I/O BARs are sized within x86's 64 KB I/O space, since the PIIX4's implement only their low 16 bits;
+# - PIT timer 1 counts the DRAM refresh as on every AT: 86Box, as real boards, toggles port 61h's refresh bit by it
+#   (QEMU by its clock), and DOS drivers time delays by that bit (the Windows 98 boot disk's ASPI managers);
+# - SeaVGABIOS's Cirrus mode set turns the screen back on (its tables leave SR1's screen-off bit set), keeps SR7's
+#   linear-aperture bits clear in banked modes (set, they close the A0000 window), and sets AR10, AR13 and CR14 as
+#   Cirrus's own BIOS does (8-bit pixels, no panning, byte addressing);
+# - SeaVGABIOS writes a planar pixel (INT 10h AH=0Ch) through write mode 2 and the bit mask, as a VGA BIOS does,
+#   not by rewriting all four planes in turn.
 KAIROX86_SEABIOS = [
     ('seabios/scripts/buildversion.py',
      '        verstr = check_output("%s --version" % (tool,)).split(\'\\n\')[0]\n',
@@ -6569,6 +6577,21 @@ KAIROX86_SEABIOS = [
     ('seabios/src/fw/pciinit.c',
      '        *psize = (~(val & mask)) + 1;\n    } else {\n',
      "        *psize = (~(val & mask)) + 1;\n    } else if (type == PCI_REGION_TYPE_IO) {\n        // KairoX86: x86 I/O space is 64 KB, and an I/O BAR may implement\n        // only its low 16 bits (the PIIX4's do), so size it within them.\n        *psize = ((~(val & mask)) + 1) & 0xffff;\n    } else {\n"),
+    ('seabios/src/hw/timer.c',
+     '    outb(0x0, PORT_PIT_COUNTER0);\n}\n',
+     "    outb(0x0, PORT_PIT_COUNTER0);\n    // KairoX86: timer1, the DRAM refresh request, as every AT BIOS sets it:\n    // binary count, low byte, mode 2, 18 counts (15.08us), so port 61h\n    // bit 4 toggles. DOS drivers time their delays by that bit (Adaptec's\n    // ASPI managers on the Windows 98 boot disk wait on it forever without).\n    outb(PM_SEL_TIMER1|PM_ACCESS_LOBYTE|PM_MODE2|PM_CNT_BINARY, PORT_PIT_MODE);\n    outb(18, PORT_PIT_COUNTER1);\n}\n"),
+    ('seabios/vgasrc/clext.c',
+     '    stdvga_attr_mask(0x10, 0x01, on);\n    stdvga_attrindex_write(0x20);\n}\n',
+     "    if (memmodel == MM_PACKED || memmodel == MM_DIRECT) {\n        // KairoX86: as Cirrus's own BIOS sets its modes: 8-bit pixels past\n        // the attribute palette and no blink (AR10), no pixel panning (AR13,\n        // which text mode leaves at 8) and byte, not doubleword, display\n        // addressing (CR14, which the tables set to 40h). A real GD5446\n        // (86Box's too) honours all three; QEMU's ignores them.\n        stdvga_attr_write(0x10, 0x41);\n        stdvga_attr_write(0x13, 0x00);\n        stdvga_crtc_write(stdvga_get_crtc(), 0x14, 0x00);\n    } else\n        stdvga_attr_mask(0x10, 0x01, on);\n    stdvga_attrindex_write(0x20);\n    // KairoX86: the mode tables write SR1 with its screen-off bit (5) set;\n    // turn the screen back on, as a VGA BIOS ends a mode set. A real\n    // Cirrus chip (and 86Box's) blanks the screen while the bit is set.\n    stdvga_sequ_mask(0x01, 0x20, 0x00);\n}\n"),
+    ('seabios/vgasrc/clext.c',
+     '    cirrus_switch_mode(table_g);\n    if (GET_GLOBAL(vmode_g->memmodel) == MM_PACKED && !(flags & MF_NOPALETTE))\n',
+     "    cirrus_switch_mode(table_g);\n    // KairoX86: SR7 bits 7:4 turn on the linear aperture, and a real\n    // GD5446 (86Box's too) then stops decoding the A0000 window. A banked\n    // mode keeps them clear, as Cirrus's own BIOS does; a linear mode sets\n    // them once its memory is cleared through the window.\n    u8 sr7 = stdvga_sequ_read(0x07);\n    stdvga_sequ_write(0x07, sr7 & 0x0f);\n    if (GET_GLOBAL(vmode_g->memmodel) == MM_PACKED && !(flags & MF_NOPALETTE))\n"),
+    ('seabios/vgasrc/clext.c',
+     '        cirrus_clear_vram(flags & MF_LEGACY ? 0xffff : 0x0000);\n    return 0;\n',
+     '        cirrus_clear_vram(flags & MF_LEGACY ? 0xffff : 0x0000);\n    if (flags & MF_LINEARFB)\n        stdvga_sequ_write(0x07, sr7);\n    return 0;\n'),
+    ('seabios/vgasrc/vgafb.c',
+     '        return;\n\n    struct gfx_op op;\n    init_gfx_op(&op, curmode_g);\n',
+     '        return;\n\n    if (CONFIG_VGA_STDVGA_PORTS && GET_GLOBAL(curmode_g->memmodel) == MM_PLANAR) {\n        // KairoX86: one pixel as a VGA BIOS writes it: the bit mask selects\n        // it, a read loads the latches, write mode 2 puts the colour in every\n        // plane (XORed with the latches for bit 7), instead of reading and\n        // writing all four planes in turn. The registers end in the planar\n        // defaults the plane-by-plane path also leaves.\n        void *dest_far = (void*)(y * vgahw_get_linelength(curmode_g) + x / 8);\n        stdvga_sequ_write(0x02, 0x0f);\n        stdvga_grdc_write(0x08, 0x80 >> (x & 0x07));\n        stdvga_grdc_write(0x05, 0x02);\n        if (color & 0x80)\n            stdvga_grdc_write(0x03, 0x18);\n        u8 latch = GET_FARVAR(SEG_GRAPH, *(u8*)dest_far);\n        asm volatile("" : : "r"(latch));\n        SET_FARVAR(SEG_GRAPH, *(u8*)dest_far, color);\n        stdvga_grdc_write(0x03, 0x00);\n        stdvga_grdc_write(0x05, 0x00);\n        stdvga_grdc_write(0x08, 0xff);\n        stdvga_grdc_write(0x04, 0x00);\n        return;\n    }\n\n    struct gfx_op op;\n    init_gfx_op(&op, curmode_g);\n'),
 ]
 
 # KairoX86#447: on Android a machine's disks reach 86Box as session links to the descriptors the app opened through
@@ -6616,6 +6639,35 @@ KAIROX86_HELD_DESCRIPTORS = [
     ('86box/src/cdrom/cdrom_aaru.c',
      '    stream = fopen(filename, "rb");\n',
      '    /* KairoX86#447: 86Box\'s own open, which on Android reaches the images the app holds */\n    stream = plat_fopen(filename, "rb");\n'),
+]
+
+# KairoX86#446: the free machine keeps one A20 state, as QEMU's PC does: a keyboard-controller output-port
+# write and a port 92h write each set it, the last write winning. SeaBIOS turns A20 on through port 92h
+# (romlayout.S's transition32) and leaves it on at boot; with 86Box's two gates OR'd, as a real PIIX4 does,
+# a DOS memory manager could then never turn it off through the keyboard controller. Other machines keep
+# their own gates (machine_common_init clears mem_a20_single; m_kairo_pc.c sets it).
+KAIROX86_A20_SINGLE = [
+    ('86box/src/mem/mem.c',
+     'int mem_a20_state   = 0;\n\n',
+     "int mem_a20_state   = 0;\n/* KairoX86's free machine (kairo_pc.h): one A20 state, which the keyboard controller and port 92h\n   both set, the last write winning, as on QEMU's PC, the hardware SeaBIOS is written for. */\nint mem_a20_single  = 0;\n\n"),
+    ('86box/src/include/86box/mem.h',
+     'extern int mem_a20_key;\nextern void (*mem_a20_trap)(int state, void *priv);\n',
+     'extern int mem_a20_key;\nextern int mem_a20_single;\nextern void (*mem_a20_trap)(int state, void *priv);\n'),
+    ('86box/src/machine/machine.c',
+     '\n    /* System devices first. */\n',
+     '\n    /* The A20 gates are each their own, unless the machine says otherwise (the free machine). */\n    mem_a20_single = 0;\n\n    /* System devices first. */\n'),
+    ('86box/src/port_92.c',
+     '        if (dev->flags & PORT_92_ONE)\n',
+     '        if ((dev->flags & PORT_92_ONE) || mem_a20_single)\n'),
+    ('86box/src/port_92.c',
+     '    if (dev->flags & PORT_92_ONE) {\n',
+     '    if ((dev->flags & PORT_92_ONE) || mem_a20_single) {\n'),
+    ('86box/src/device/kbc_at.c',
+     '    if ((mem_a20_key ^ val) & 0x02) { /* A20 enable change */\n',
+     '    if (mem_a20_single) {\n        /* One A20 state (the free machine): this write sets it whichever way it was set. */\n        mem_a20_key = val & 0x02;\n        mem_a20_alt = (mem_a20_alt & 0xfd) | (val & 0x02);\n        mem_a20_recalc();\n        flushmmucache();\n    } else if ((mem_a20_key ^ val) & 0x02) { /* A20 enable change */\n'),
+    ('86box/src/device/kbc_at.c',
+     '    if ((old ^ val) & 0x02) { /* A20 enable change */\n',
+     '    if (mem_a20_single) {\n        /* One A20 state (the free machine): this write sets it whichever way it was set. */\n        mem_a20_key = val & 0x02;\n        mem_a20_alt = (mem_a20_alt & 0xfd) | (val & 0x02);\n        mem_a20_recalc();\n        flushmmucache();\n    } else if ((old ^ val) & 0x02) { /* A20 enable change */\n'),
 ]
 
 PATCHES = {
@@ -6775,6 +6827,7 @@ PATCHES = {
     'kairox86-gd5446-free-bios': KAIROX86_GD5446_FREE_BIOS,
     'kairox86-seabios': KAIROX86_SEABIOS,
     'kairox86-held-descriptors': KAIROX86_HELD_DESCRIPTORS,
+    'kairox86-a20-single': KAIROX86_A20_SINGLE,
 }
 
 ADDED = [

@@ -416,8 +416,22 @@ cirrus_switch_mode(struct cirrus_mode_s *table)
         on = 0x41;
     else if (memmodel != MM_TEXT)
         on = 0x01;
-    stdvga_attr_mask(0x10, 0x01, on);
+    if (memmodel == MM_PACKED || memmodel == MM_DIRECT) {
+        // KairoX86: as Cirrus's own BIOS sets its modes: 8-bit pixels past
+        // the attribute palette and no blink (AR10), no pixel panning (AR13,
+        // which text mode leaves at 8) and byte, not doubleword, display
+        // addressing (CR14, which the tables set to 40h). A real GD5446
+        // (86Box's too) honours all three; QEMU's ignores them.
+        stdvga_attr_write(0x10, 0x41);
+        stdvga_attr_write(0x13, 0x00);
+        stdvga_crtc_write(stdvga_get_crtc(), 0x14, 0x00);
+    } else
+        stdvga_attr_mask(0x10, 0x01, on);
     stdvga_attrindex_write(0x20);
+    // KairoX86: the mode tables write SR1 with its screen-off bit (5) set;
+    // turn the screen back on, as a VGA BIOS ends a mode set. A real
+    // Cirrus chip (and 86Box's) blanks the screen while the bit is set.
+    stdvga_sequ_mask(0x01, 0x20, 0x00);
 }
 
 static void
@@ -450,6 +464,12 @@ clext_set_mode(struct vgamode_s *vmode_g, int flags)
     struct cirrus_mode_s *table_g = container_of(
         vmode_g, struct cirrus_mode_s, info);
     cirrus_switch_mode(table_g);
+    // KairoX86: SR7 bits 7:4 turn on the linear aperture, and a real
+    // GD5446 (86Box's too) then stops decoding the A0000 window. A banked
+    // mode keeps them clear, as Cirrus's own BIOS does; a linear mode sets
+    // them once its memory is cleared through the window.
+    u8 sr7 = stdvga_sequ_read(0x07);
+    stdvga_sequ_write(0x07, sr7 & 0x0f);
     if (GET_GLOBAL(vmode_g->memmodel) == MM_PACKED && !(flags & MF_NOPALETTE))
         stdvga_set_packed_palette();
     if (!(flags & MF_LINEARFB))
@@ -457,6 +477,8 @@ clext_set_mode(struct vgamode_s *vmode_g, int flags)
     if (!(flags & MF_NOCLEARMEM))
         // fill with 0xff to keep win 2K happy
         cirrus_clear_vram(flags & MF_LEGACY ? 0xffff : 0x0000);
+    if (flags & MF_LINEARFB)
+        stdvga_sequ_write(0x07, sr7);
     return 0;
 }
 

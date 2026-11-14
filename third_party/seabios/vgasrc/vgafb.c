@@ -506,6 +506,28 @@ vgafb_write_pixel(u8 color, u16 x, u16 y)
     if (!curmode_g)
         return;
 
+    if (CONFIG_VGA_STDVGA_PORTS && GET_GLOBAL(curmode_g->memmodel) == MM_PLANAR) {
+        // KairoX86: one pixel as a VGA BIOS writes it: the bit mask selects
+        // it, a read loads the latches, write mode 2 puts the colour in every
+        // plane (XORed with the latches for bit 7), instead of reading and
+        // writing all four planes in turn. The registers end in the planar
+        // defaults the plane-by-plane path also leaves.
+        void *dest_far = (void*)(y * vgahw_get_linelength(curmode_g) + x / 8);
+        stdvga_sequ_write(0x02, 0x0f);
+        stdvga_grdc_write(0x08, 0x80 >> (x & 0x07));
+        stdvga_grdc_write(0x05, 0x02);
+        if (color & 0x80)
+            stdvga_grdc_write(0x03, 0x18);
+        u8 latch = GET_FARVAR(SEG_GRAPH, *(u8*)dest_far);
+        asm volatile("" : : "r"(latch));
+        SET_FARVAR(SEG_GRAPH, *(u8*)dest_far, color);
+        stdvga_grdc_write(0x03, 0x00);
+        stdvga_grdc_write(0x05, 0x00);
+        stdvga_grdc_write(0x08, 0xff);
+        stdvga_grdc_write(0x04, 0x00);
+        return;
+    }
+
     struct gfx_op op;
     init_gfx_op(&op, curmode_g);
     op.x = ALIGN_DOWN(x, 8);

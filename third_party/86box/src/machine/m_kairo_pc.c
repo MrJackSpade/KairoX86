@@ -179,6 +179,10 @@ machine_at_kairo_pc_init(const machine_t *model)
 
     machine_at_common_init(model);
 
+    /* One A20 state, as on QEMU's PC: SeaBIOS turns A20 on through port 92h, and DOS
+       memory managers then turn it off through the keyboard controller. */
+    mem_a20_single = 1;
+
     pci_init(PCI_CONFIG_TYPE_1);
     pci_register_slot(0x00, PCI_CARD_NORTHBRIDGE, 0, 0, 0, 0);
     pci_register_slot(0x01, PCI_CARD_SOUTHBRIDGE, 1, 2, 3, 4);

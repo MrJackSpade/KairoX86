@@ -280,4 +280,10 @@ pit_setup(void)
     // maximum count of 0000H = 18.2Hz
     outb(0x0, PORT_PIT_COUNTER0);
     outb(0x0, PORT_PIT_COUNTER0);
+    // KairoX86: timer1, the DRAM refresh request, as every AT BIOS sets it:
+    // binary count, low byte, mode 2, 18 counts (15.08us), so port 61h
+    // bit 4 toggles. DOS drivers time their delays by that bit (Adaptec's
+    // ASPI managers on the Windows 98 boot disk wait on it forever without).
+    outb(PM_SEL_TIMER1|PM_ACCESS_LOBYTE|PM_MODE2|PM_CNT_BINARY, PORT_PIT_MODE);
+    outb(18, PORT_PIT_COUNTER1);
 }
