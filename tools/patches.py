@@ -7177,6 +7177,15 @@ KAIROX86_LOAD_STUB_NO_W1 = [
      '        host_arm64_LDRH_REG(block, REG_W0, REG_W1, REG_W0);\n        host_arm64_RET(block, REG_X30); /* KairoX86#131: no W1 = 0, as above */'),
 ]
 
+# KairoX86#445: the Mach64 engine's plain solid fills and same-size screen copies draw each pixel without
+# mach64_rect_draw's switches; the walk is unchanged.
+KAIROX86_MACH64_PLAIN_RECT = [
+    ('86box/src/video/vid_ati_mach64_accel.c', 'static int\nmach64_pixel(mach64_t *mach64, uint32_t host)\n{\n    if (mach64->accel.op == OP_LINE) {\n        mach64_line_draw(mach64, host);\n        return mach64_line_advance(mach64);\n    }\n    mach64_rect_draw(mach64, host);\n    return mach64_rect_advance(mach64);\n}',
+     "static int\nmach64_pixel(mach64_t *mach64, uint32_t host)\n{\n    if (mach64->accel.op == OP_LINE) {\n        mach64_line_draw(mach64, host);\n        return mach64_line_advance(mach64);\n    }\n    mach64_rect_draw(mach64, host);\n    return mach64_rect_advance(mach64);\n}\n\n/* KairoX86#445: a rectangle operation mach64_rect_draw makes plain: 1 a solid fill (the foreground colour), 2 a\n   screen copy of the destination's own width; 0 any other. Mono source 1 and mix 7 (the source), no 24 bpp rotation\n   or polygon fill, the colour compare off (mach64_blit_calc_cmp_clr answers 0 but for functions 1, 4 and 5), and the\n   write mask covering the destination's width, so each pixel is its source value, stored as WRITE stores it. */\nstatic int\nmach64_rect_plain(const mach64_t *mach64)\n{\n    static const uint32_t width_mask[3] = { 0xff, 0xffff, 0xffffffff };\n    const int             fn            = mach64->accel.clr_cmp_fn;\n\n    if ((mach64->accel.op != OP_RECT) || (mach64->dst_cntl & (DST_24_ROT_EN | DST_POLYGON_EN)) ||\n        (mach64->accel.source_mix != MONO_SRC_1) || (mach64->accel.mix_fg != 7) || (fn == 1) || (fn == 4) || (fn == 5) ||\n        (mach64->accel.dst_size < 0) || (mach64->accel.dst_size > 2) ||\n        ((mach64->accel.write_mask & width_mask[mach64->accel.dst_size]) != width_mask[mach64->accel.dst_size]))\n        return 0;\n    if (mach64->accel.source_fg == SRC_FG)\n        return 1;\n    if ((mach64->accel.source_fg == SRC_BLITSRC) && (mach64->accel.src_size == mach64->accel.dst_size) &&\n        !((mach64->accel.src_size == 0) && (mach64->type == MACH64_VT3) && (mach64->src_cntl & SRC_8x8x8_BRUSH)))\n        return 2;\n    return 0;\n}\n\n/* KairoX86#445: the rest of a plain rectangle operation (mach64_rect_plain's kind), pixel by pixel as mach64_pixel\n   runs it, each pixel without mach64_rect_draw's switches */\nstatic void\nmach64_rect_plain_run(mach64_t *mach64, int kind)\n{\n    svga_t  *svga = &mach64->svga;\n    uint32_t dest_dat;\n\n    do {\n        const int dst_x = mach64->accel.dst_x + mach64->accel.dst_x_start;\n        const int dst_y = mach64->accel.dst_y + mach64->accel.dst_y_start;\n\n        if ((dst_x >= mach64->accel.sc_left) && (dst_x <= mach64->accel.sc_right) &&\n            (dst_y >= mach64->accel.sc_top) && (dst_y <= mach64->accel.sc_bottom)) {\n            if (kind == 1)\n                dest_dat = mach64->accel.dp_frgd_clr;\n            else {\n                const int src_y = mach64->accel.src_y + mach64->accel.src_y_start;\n\n                if (mach64->src_cntl & SRC_LINEAR_EN) {\n                    READ(mach64->accel.src_offset + mach64->accel.src_x, dest_dat, mach64->accel.src_size);\n                } else {\n                    READ(mach64->accel.src_offset + (src_y * mach64->accel.src_pitch) + mach64->accel.src_x + mach64->accel.src_x_start,\n                         dest_dat, mach64->accel.src_size);\n                }\n            }\n            WRITE(mach64->accel.dst_offset + (dst_y * mach64->accel.dst_pitch) + dst_x, mach64->accel.dst_size);\n        }\n    } while (!mach64_rect_advance(mach64) && mach64->accel.busy);\n}"),
+    ('86box/src/video/vid_ati_mach64_accel.c', '    if (count == -1) {\n        while (mach64->accel.busy && !mach64_pixel(mach64, 0))\n            ;\n        return;\n    }',
+     '    if (count == -1) {\n        const int plain = mach64_rect_plain(mach64); /* KairoX86#445 */\n\n        if (plain && mach64->accel.busy)\n            mach64_rect_plain_run(mach64, plain);\n        else\n            while (mach64->accel.busy && !mach64_pixel(mach64, 0))\n                ;\n        return;\n    }'),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -7366,6 +7375,7 @@ PATCHES = {
     'kairox86-a20-single': KAIROX86_A20_SINGLE,
     'kairox86-gpu-handover-async': KAIROX86_GPU_HANDOVER_ASYNC,
     'kairox86-load-stub-no-w1': KAIROX86_LOAD_STUB_NO_W1,
+    'kairox86-mach64-plain-rect': KAIROX86_MACH64_PLAIN_RECT,
 }
 
 ADDED = [
