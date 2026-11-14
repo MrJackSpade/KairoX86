@@ -40,3 +40,4 @@ None of the 86Box ROM set ships with KairoX86: its files belong to their copyrig
 
 - [GLaBIOS](https://glabios.org/) 0.4.0, a free BIOS for the IBM PC and XT, under GPL-3.0: the project's release images, with their source in `third_party/glabios/`.
 - A character ROM (the MDA and CGA fonts, `firmware/video/mda/mda.rom`) made for KairoX86 by `tools/make_font_rom.py` from Joseph Gil's public-domain PC fonts (`third_party/seabios-fonts/`, from SeaBIOS).
+- [SeaBIOS](https://www.seabios.org/) 1.17.0 and its SeaVGABIOS (Cirrus build), the free machine's BIOS and its video card's (KairoX86#446), under LGPL-3.0: built by `tools/seabios/build.sh` from their source in `third_party/seabios/` (`firmware/machines/kairo_pc/seabios.bin`, `firmware/video/kairo/seavgabios_cirrus.bin`).
