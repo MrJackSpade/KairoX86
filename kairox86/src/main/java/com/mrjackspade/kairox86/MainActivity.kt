@@ -520,7 +520,7 @@ class MainActivity : MachineActivity<X86Entry>() {
 
         /** The free firmware's files, at their places in the ROM set (kairox86/build.gradle.kts). */
         val FREE_FIRMWARE = listOf("machines/glabios/GLABIOS_0.4.0_8P.ROM", "machines/glabios/GLABIOS_0.4.0_VP.ROM",
-            "video/mda/mda.rom", X86SoundFonts.SHIPPED)
+            "video/mda/mda.rom", "machines/kairo_pc/seabios.bin", "video/kairo/seavgabios_cirrus.bin", X86SoundFonts.SHIPPED)
 
         /** The picker of a SoundFont for a game's FluidSynth (soundFontImport). */
         private const val SOUND_FONT_IMPORT_REQUEST = FIRST_PRODUCT_REQUEST

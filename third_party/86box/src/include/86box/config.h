@@ -29,6 +29,8 @@ extern "C" {
 extern void config_load_global(void);
 /* KairoX86#224: a setting of 86box.cfg's [KairoX86] section, def when it has none */
 extern int config_kairo_int(const char *name, int def);
+/* The free machine's boot order (kairo_pc.h): a string setting of the [KairoX86] section */
+extern const char *config_kairo_string(const char *name, const char *def);
 extern int  config_load(void);
 extern void config_save_global(void);
 extern void config_save_global_setting(const char *head, const char *name);

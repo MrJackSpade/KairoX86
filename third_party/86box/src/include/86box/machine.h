@@ -1263,6 +1263,9 @@ extern int             machine_at_i430vx_init(const machine_t *);
 extern int             machine_at_nupro592_init(const machine_t *);
 extern int             machine_at_tx97_init(const machine_t *);
 extern int             machine_at_tx97xv_init(const machine_t *);
+
+/* KairoX86's free machine (kairo_pc.h) */
+extern int             machine_at_kairo_pc_init(const machine_t *);
 #ifdef EMU_DEVICE_H
 extern const device_t  txp4x_device;
 #endif

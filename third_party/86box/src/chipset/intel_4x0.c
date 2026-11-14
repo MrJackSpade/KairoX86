@@ -1896,6 +1896,14 @@ i4x0_init(const device_t *info)
             dev->max_drb = 7;
             dev->drb_unit = 8;
             dev->drb_default = 0x02;
+            /* KairoX86's free machine: QEMU's subsystem ID (1AF4:1100), by which SeaBIOS knows the
+               board it boots on (kairo_pc.h); the real 82441FX leaves these registers zero. */
+            if (machines[machine].init == machine_at_kairo_pc_init) {
+                regs[0x2c] = 0xf4;
+                regs[0x2d] = 0x1a;
+                regs[0x2e] = 0x00;
+                regs[0x2f] = 0x11;
+            }
             break;
         case INTEL_440LX:
             regs[0x02] = 0x80;

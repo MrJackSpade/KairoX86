@@ -2539,6 +2539,15 @@ acpi_apm_out(uint16_t port, uint8_t val, void *priv)
             dev->apm->cmd = val;
             if (dev->vendor == VEN_INTEL)
                 dev->regs.glbsts |= 0x20;
+            /* KairoX86's free machine (kairo_pc.h): its firmware has no SMI handler, so, as on
+               QEMU's PIIX4, the FADT's ACPI_ENABLE (F1h) and ACPI_DISABLE (F0h) set and clear
+               SCI_EN themselves. */
+            if ((dev->vendor == VEN_INTEL) && (machines[machine].init == machine_at_kairo_pc_init)) {
+                if (val == 0xf1)
+                    dev->regs.pmcntrl |= 0x0001;
+                else if (val == 0xf0)
+                    dev->regs.pmcntrl &= ~0x0001;
+            }
             acpi_raise_smi(dev, dev->apm->do_smi);
         } else
             dev->apm->stat = val;

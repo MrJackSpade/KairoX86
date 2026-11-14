@@ -190,6 +190,15 @@ nvr_init(nvr_t *nvr)
     (void) nvr_load();
 }
 
+/* The machine's NVR, its saved contents loaded (the free machine fills its CMOS bytes, kairo_pc.h). */
+nvr_t *
+nvr_get_current(void)
+{
+    if (saved_nvr == NULL)
+        fatal("NVR: the machine has no NVR yet\n");
+    return saved_nvr;
+}
+
 /* Get path to the NVR folder. */
 char *
 nvr_path(char *str)

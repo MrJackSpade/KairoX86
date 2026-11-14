@@ -6499,6 +6499,78 @@ KAIROX86_ROM_PROBE = [
      'extern int (*rom_present_probe)(const char *fn, int present);\n'),
 ]
 
+# KairoX86's free machine (kairo_pc.h, docs/source-import.md "The free machine"): a 440FX and PIIX4 board that
+# boots SeaBIOS, which the app ships. The machine itself, its fw_cfg device and its ACPI and SMBIOS tables are
+# KairoX86's own files (ADDED); these changes register it, give its 440FX QEMU's subsystem ID, let its APM port
+# set SCI_EN as QEMU's PIIX4 does, read its boot order ([KairoX86] boot_order) and fill its CMOS bytes.
+KAIROX86_FREE_MACHINE = [
+    ('86box/src/include/86box/config.h',
+     'extern int config_kairo_int(const char *name, int def);\nextern int  config_load(void);\n',
+     "extern int config_kairo_int(const char *name, int def);\n/* The free machine's boot order (kairo_pc.h): a string setting of the [KairoX86] section */\nextern const char *config_kairo_string(const char *name, const char *def);\nextern int  config_load(void);\n"),
+    ('86box/src/config.c',
+     '    return ini_section_get_int(ini_find_section(config, "KairoX86"), name, def);\n}\n',
+     '    return ini_section_get_int(ini_find_section(config, "KairoX86"), name, def);\n}\n\n/* The free machine\'s boot order (kairo_pc.h): a setting of the [KairoX86] section, def when it has none */\nconst char *\nconfig_kairo_string(const char *name, const char *def)\n{\n    return ini_section_get_string(ini_find_section(config, "KairoX86"), name, (char *) def);\n}\n'),
+    ('86box/src/include/86box/nvr.h',
+     'extern void  nvr_init(nvr_t *);\nextern int   nvr_load(void);\n',
+     'extern void  nvr_init(nvr_t *);\nextern nvr_t *nvr_get_current(void);\nextern int   nvr_load(void);\n'),
+    ('86box/src/nvr.c',
+     '    (void) nvr_load();\n}\n',
+     '    (void) nvr_load();\n}\n\n/* The machine\'s NVR, its saved contents loaded (the free machine fills its CMOS bytes, kairo_pc.h). */\nnvr_t *\nnvr_get_current(void)\n{\n    if (saved_nvr == NULL)\n        fatal("NVR: the machine has no NVR yet\\n");\n    return saved_nvr;\n}\n'),
+    ('86box/src/include/86box/machine.h',
+     'extern int             machine_at_tx97xv_init(const machine_t *);\n#ifdef EMU_DEVICE_H\n',
+     "extern int             machine_at_tx97xv_init(const machine_t *);\n\n/* KairoX86's free machine (kairo_pc.h) */\nextern int             machine_at_kairo_pc_init(const machine_t *);\n#ifdef EMU_DEVICE_H\n"),
+    ('86box/src/machine/CMakeLists.txt',
+     '    m_at_misc.c\n    tandy_vis/m_at_tandy_vis.c\n',
+     '    m_at_misc.c\n    m_kairo_pc.c\n    kairo_pc_acpi.c\n    kairo_pc_smbios.c\n    tandy_vis/m_at_tandy_vis.c\n'),
+    ('86box/src/device/CMakeLists.txt',
+     '    kairo_cassette.c\n    clock_ics9xxx.c\n',
+     '    kairo_cassette.c\n    kairo_fw_cfg.c\n    clock_ics9xxx.c\n'),
+    ('86box/src/machine/machine_table.c',
+     '        .aliases                  = { "" }\n    },\n\n    {\n',
+     '        .aliases                  = { "" }\n    },\n    /* KairoX86\'s free machine (kairo_pc.h): a 440FX and PIIX4 booting SeaBIOS, which the app ships,\n       taking any processor from the 486 to the Pentium II. */\n    {\n        .name              = "[i440FX] KairoX86 PC",\n        .internal_name     = "kairo_pc",\n        .type              = MACHINE_TYPE_MISC,\n        .chipset           = MACHINE_CHIPSET_INTEL_440FX,\n        .init              = machine_at_kairo_pc_init,\n        .p1_handler        = machine_generic_p1_handler,\n        .gpio_handler      = NULL,\n        .available_flag    = MACHINE_AVAILABLE,\n        .gpio_acpi_handler = NULL,\n        .cpu               = {\n            .package     = CPU_PKG_SOCKET1 | CPU_PKG_SOCKET3 | CPU_PKG_SOCKET4 | CPU_PKG_SOCKET5_7 |\n                           CPU_PKG_SOCKET8 | CPU_PKG_SLOT1 | CPU_PKG_SOCKET370,\n            .block       = CPU_BLOCK_NONE,\n            .min_bus     = 0,\n            .max_bus     = 0,\n            .min_voltage = 0,\n            .max_voltage = 0,\n            .min_multi   = 0,\n            .max_multi   = 0\n        },\n        .bus_flags = MACHINE_PS2_PCI | MACHINE_BUS_USB,\n        .flags     = MACHINE_IDE_DUAL | MACHINE_APM | MACHINE_ACPI | MACHINE_USB,\n        .ram       = {\n            .min  = 4096,\n            .max  = 1048576,\n            .step = 4096\n        },\n        .nvrmask                  = 255,\n        .jumpered_ecp_dma         = 0,\n        .default_jumpered_ecp_dma = -1,\n        .kbc_device               = &kbc_at_device,\n        .kbc_params               = KBC_VEN_GENERIC,\n        .nvr_device               = NULL,\n        .nvr_params               = 0x00000000,\n        .sio_device               = NULL,\n        .sio_params               = 0x00000000,\n        .kbc_p1                   = 0x00000cf0,\n        .gpio                     = 0xffffffff,\n        .gpio_acpi                = 0xffffffff,\n        .device                   = NULL,\n        .kbd_device               = NULL,\n        .fdc_device               = NULL,\n        .vid_device               = NULL,\n        .snd_device               = NULL,\n        .net_device               = NULL,\n        .aliases                  = { "" }\n    },\n\n    {\n'),
+    ('86box/src/chipset/intel_4x0.c',
+     '            dev->drb_unit = 8;\n            dev->drb_default = 0x02;\n            break;\n        case INTEL_440LX:\n',
+     "            dev->drb_unit = 8;\n            dev->drb_default = 0x02;\n            /* KairoX86's free machine: QEMU's subsystem ID (1AF4:1100), by which SeaBIOS knows the\n               board it boots on (kairo_pc.h); the real 82441FX leaves these registers zero. */\n            if (machines[machine].init == machine_at_kairo_pc_init) {\n                regs[0x2c] = 0xf4;\n                regs[0x2d] = 0x1a;\n                regs[0x2e] = 0x00;\n                regs[0x2f] = 0x11;\n            }\n            break;\n        case INTEL_440LX:\n"),
+    ('86box/src/acpi.c',
+     '                dev->regs.glbsts |= 0x20;\n            acpi_raise_smi(dev, dev->apm->do_smi);\n',
+     "                dev->regs.glbsts |= 0x20;\n            /* KairoX86's free machine (kairo_pc.h): its firmware has no SMI handler, so, as on\n               QEMU's PIIX4, the FADT's ACPI_ENABLE (F1h) and ACPI_DISABLE (F0h) set and clear\n               SCI_EN themselves. */\n            if ((dev->vendor == VEN_INTEL) && (machines[machine].init == machine_at_kairo_pc_init)) {\n                if (val == 0xf1)\n                    dev->regs.pmcntrl |= 0x0001;\n                else if (val == 0xf0)\n                    dev->regs.pmcntrl &= ~0x0001;\n            }\n            acpi_raise_smi(dev, dev->apm->do_smi);\n"),
+]
+
+# The free machine's video card: the GD5446 with SeaVGABIOS's Cirrus build (64 KB, which the app ships) as a
+# BIOS variant; its ROM BAR maps the ROM's own size (32 KB for every other variant, as before).
+KAIROX86_GD5446_FREE_BIOS = [
+    ('86box/src/video/vid_cl54xx.c',
+     '#define BIOS_GD5446_STB_PATH            "roms/video/cirruslogic/stb nitro64v.BIN"\n#define BIOS_GD5480_PATH                "roms/video/cirruslogic/clgd5480.rom"\n',
+     '#define BIOS_GD5446_STB_PATH            "roms/video/cirruslogic/stb nitro64v.BIN"\n/* KairoX86: SeaVGABIOS\'s Cirrus build, which the app ships (kairo_pc.h); 64 KB */\n#define BIOS_GD5446_FREE_PATH           "roms/video/kairo/seavgabios_cirrus.bin"\n#define BIOS_GD5480_PATH                "roms/video/cirruslogic/clgd5480.rom"\n'),
+    ('86box/src/video/vid_cl54xx.c',
+     '                mem_mapping_set_addr(&gd54xx->bios_rom.mapping, biosaddr, 0x8000);\n',
+     '                mem_mapping_set_addr(&gd54xx->bios_rom.mapping, biosaddr, gd54xx->bios_rom.mask + 1);\n'),
+    ('86box/src/video/vid_cl54xx.c',
+     '                mem_mapping_set_addr(&gd54xx->bios_rom.mapping, vbiosaddr, 0x8000);\n',
+     '                mem_mapping_set_addr(&gd54xx->bios_rom.mapping, vbiosaddr, gd54xx->bios_rom.mask + 1);\n'),
+    ('86box/src/video/vid_cl54xx.c',
+     '        case CIRRUS_ID_CLGD5446:\n            if (local & 0x100)\n                romfn = BIOS_GD5446_STB_PATH;\n',
+     '        case CIRRUS_ID_CLGD5446:\n            if (local & 0x800)\n                romfn = BIOS_GD5446_FREE_PATH;\n            else if (local & 0x100)\n                romfn = BIOS_GD5446_STB_PATH;\n'),
+    ('86box/src/video/vid_cl54xx.c',
+     '    if (romfn)\n',
+     '    if (romfn && (local & 0x800) && (id == CIRRUS_ID_CLGD5446))\n        /* SeaVGABIOS (KairoX86) is larger than 32 KB: a 64 KB ROM, at C0000h and behind the ROM BAR */\n        rom_init(&gd54xx->bios_rom, romfn, 0xc0000, 0x10000, 0xffff, 0, MEM_MAPPING_EXTERNAL);\n    else if (romfn)\n'),
+    ('86box/src/video/vid_cl54xx.c',
+     '                .files         = { BIOS_GD5446_STB_PATH, "" }\n            },\n            { .files_no = 0 }\n        },\n',
+     '                .files         = { BIOS_GD5446_STB_PATH, "" }\n            },\n            {\n                .name          = "SeaVGABIOS (free)",\n                .internal_name = "cl_gd5446_free_pci",\n                .bios_type     = BIOS_NORMAL,\n                .files_no      = 1,\n                .local         = CIRRUS_ID_CLGD5446 | 0x800,\n                .size          = 65536,\n                .flags         = 0,\n                .files         = { BIOS_GD5446_FREE_PATH, "" }\n            },\n            { .files_no = 0 }\n        },\n'),
+]
+
+# SeaBIOS 1.17.0 (third_party/seabios), built by tools/seabios/build.sh: its version script reads the Windows
+# toolchain's CRLF output, and I/O BARs are sized within x86's 64 KB I/O space, since the PIIX4's implement only
+# their low 16 bits.
+KAIROX86_SEABIOS = [
+    ('seabios/scripts/buildversion.py',
+     '        verstr = check_output("%s --version" % (tool,)).split(\'\\n\')[0]\n',
+     '        verstr = check_output("%s --version" % (tool,)).split(\'\\n\')[0].rstrip(\'\\r\')\n'),
+    ('seabios/src/fw/pciinit.c',
+     '        *psize = (~(val & mask)) + 1;\n    } else {\n',
+     "        *psize = (~(val & mask)) + 1;\n    } else if (type == PCI_REGION_TYPE_IO) {\n        // KairoX86: x86 I/O space is 64 KB, and an I/O BAR may implement\n        // only its low 16 bits (the PIIX4's do), so size it within them.\n        *psize = ((~(val & mask)) + 1) & 0xffff;\n    } else {\n"),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -6652,9 +6724,17 @@ PATCHES = {
     'kairox86-link-cr0-known': KAIROX86_LINK_CR0_KNOWN,
     'kairox86-unlink-on-write': KAIROX86_UNLINK_ON_WRITE,
     'kairox86-rom-probe': KAIROX86_ROM_PROBE,
+    'kairox86-free-machine': KAIROX86_FREE_MACHINE,
+    'kairox86-gd5446-free-bios': KAIROX86_GD5446_FREE_BIOS,
+    'kairox86-seabios': KAIROX86_SEABIOS,
 }
 
 ADDED = [
+    '86box/src/include/86box/kairo_pc.h',
+    '86box/src/device/kairo_fw_cfg.c',
+    '86box/src/machine/m_kairo_pc.c',
+    '86box/src/machine/kairo_pc_acpi.c',
+    '86box/src/machine/kairo_pc_smbios.c',
     '86box/src/include/86box/vid_ati_rage128_gpu_spv_kairo.h',
     '86box/src/device/kairo_cassette.c',
     '86box/src/include/86box/kairo_gpu.h',
