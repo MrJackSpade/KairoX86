@@ -388,6 +388,22 @@ void svga_overlay_patch_put(svga_t *svga, uint32_t *p, uint32_t value);
 void svga_overlay_patch_and(svga_t *svga, uint32_t *p, uint32_t mask);
 void svga_overlay_patch_put_keyed(svga_t *svga, uint32_t *p, uint32_t value, uint32_t key, uint32_t key_mask);
 
+/* KairoX86#441: the [len] bytes (2 or 4) of [val] at [addr], the address svga_writew/l_common's fast path reaches
+   (masked by the decode mask, no address translation): dropped past the card's memory, else stored, their page marked
+   changed */
+static inline void
+svga_vram_store_plain(svga_t *svga, uint32_t addr, uint32_t val, int len)
+{
+    if (addr >= svga->vram_max)
+        return;
+    addr &= svga->vram_mask;
+    svga->changedvram[addr >> 12] = svga->monitor->mon_changeframecount;
+    if (len == 2)
+        *(uint16_t *) &svga->vram[addr] = (uint16_t) val;
+    else
+        *(uint32_t *) &svga->vram[addr] = val;
+}
+
 /* The pixel becomes value */
 static inline void
 svga_overlay_put(svga_t *svga, uint32_t *p, uint32_t value)

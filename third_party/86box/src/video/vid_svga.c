@@ -2966,12 +2966,7 @@ svga_writew_common(uint32_t addr, uint16_t val, uint8_t linear, void *priv)
         }
         return;
     }
-    if (addr >= svga->vram_max)
-        return;
-    addr &= svga->vram_mask;
-
-    svga->changedvram[addr >> 12]   = svga->monitor->mon_changeframecount;
-    *(uint16_t *) &svga->vram[addr] = val;
+    svga_vram_store_plain(svga, addr, val, 2); /* KairoX86#441 */
 }
 
 void
@@ -3045,13 +3040,7 @@ svga_writel_common(uint32_t addr, uint32_t val, uint8_t linear, void *priv)
         }
         return;
     }
-    if (addr >= svga->vram_max)
-        return;
-
-    addr &= svga->vram_mask;
-
-    svga->changedvram[addr >> 12]   = svga->monitor->mon_changeframecount;
-    *(uint32_t *) &svga->vram[addr] = val;
+    svga_vram_store_plain(svga, addr, val, 4); /* KairoX86#441 */
 }
 
 void

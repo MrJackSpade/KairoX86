@@ -6938,6 +6938,23 @@ KAIROX86_REP_SLOW_RUNS = [
      '    /*The loop body stepped the guest registers and charged the cycles, and\n      the call does not keep R8-R11: both are read back*/\n    rx_load_regs(block, is_stos, a32);\n    rx_rr(block, 0, 0, 0x85, REG_RAX, REG_RAX);\n    to_abort = rx_jcc(block, RX_CC_NZ);\n    rx_rr(block, 0, 0, 0x39, RX_END, RX_CYCLES);'),
 ]
 
+
+# KairoX86#441: the Rage 128 aperture's plain word and dword writes straight to the store.
+KAIROX86_RAGE128_APERTURE_PLAIN = [
+    ('86box/src/include/86box/vid_svga.h', '/* The pixel becomes value */\nstatic inline void\nsvga_overlay_put(svga_t *svga, uint32_t *p, uint32_t value)',
+     "/* KairoX86#441: the [len] bytes (2 or 4) of [val] at [addr], the address svga_writew/l_common's fast path reaches\n   (masked by the decode mask, no address translation): dropped past the card's memory, else stored, their page marked\n   changed */\nstatic inline void\nsvga_vram_store_plain(svga_t *svga, uint32_t addr, uint32_t val, int len)\n{\n    if (addr >= svga->vram_max)\n        return;\n    addr &= svga->vram_mask;\n    svga->changedvram[addr >> 12] = svga->monitor->mon_changeframecount;\n    if (len == 2)\n        *(uint16_t *) &svga->vram[addr] = (uint16_t) val;\n    else\n        *(uint32_t *) &svga->vram[addr] = val;\n}\n\n/* The pixel becomes value */\nstatic inline void\nsvga_overlay_put(svga_t *svga, uint32_t *p, uint32_t value)"),
+    ('86box/src/video/vid_svga.c', '        addr2 = svga->translate_address(addr + 1, priv);\n        if (addr2 < svga->vram_max) {\n            svga->vram[addr2 & svga->vram_mask] = (val >> 8) & 0xff;\n            svga->changedvram[addr2 >> 12]      = svga->monitor->mon_changeframecount;\n        }\n        return;\n    }\n    if (addr >= svga->vram_max)\n        return;\n    addr &= svga->vram_mask;\n\n    svga->changedvram[addr >> 12]   = svga->monitor->mon_changeframecount;\n    *(uint16_t *) &svga->vram[addr] = val;\n}',
+     '        addr2 = svga->translate_address(addr + 1, priv);\n        if (addr2 < svga->vram_max) {\n            svga->vram[addr2 & svga->vram_mask] = (val >> 8) & 0xff;\n            svga->changedvram[addr2 >> 12]      = svga->monitor->mon_changeframecount;\n        }\n        return;\n    }\n    svga_vram_store_plain(svga, addr, val, 2); /* KairoX86#441 */\n}'),
+    ('86box/src/video/vid_svga.c', '        addr2 = svga->translate_address(addr + 3, priv);\n        if (addr2 < svga->vram_max) {\n            svga->vram[addr2 & svga->vram_mask] = (val >> 24) & 0xff;\n            svga->changedvram[addr2 >> 12]      = svga->monitor->mon_changeframecount;\n        }\n        return;\n    }\n    if (addr >= svga->vram_max)\n        return;\n\n    addr &= svga->vram_mask;\n\n    svga->changedvram[addr >> 12]   = svga->monitor->mon_changeframecount;\n    *(uint32_t *) &svga->vram[addr] = val;\n}',
+     '        addr2 = svga->translate_address(addr + 3, priv);\n        if (addr2 < svga->vram_max) {\n            svga->vram[addr2 & svga->vram_mask] = (val >> 24) & 0xff;\n            svga->changedvram[addr2 >> 12]      = svga->monitor->mon_changeframecount;\n        }\n        return;\n    }\n    svga_vram_store_plain(svga, addr, val, 4); /* KairoX86#441 */\n}'),
+    ('86box/src/video/vid_ati_rage128_vga.c', 'static void\nrage128_aper_writew(uint32_t addr, uint16_t val, void *priv)\n{',
+     "/* KairoX86#441: the aperture's word or dword write when the card writes it plainly (svga->fast, no GPU touch, no address\n   translation): svga_writew/l_linear's fast path, the bus timing and the store. Returns 0, having done nothing,\n   otherwise. */\nstatic inline int\nrage128_aper_write_plain(rage128_t *dev, uint32_t addr, uint32_t val, int len)\n{\n    svga_t *svga = &dev->svga;\n\n    if (!svga->fast || (svga->kairo_touch != NULL) || (svga->translate_address != NULL))\n        return 0;\n    cycles -= (len == 2) ? svga->monitor->mon_video_timing_write_w : svga->monitor->mon_video_timing_write_l;\n    svga_vram_store_plain(svga, addr & svga->decode_mask, val, len);\n    return 1;\n}\n\nstatic void\nrage128_aper_writew(uint32_t addr, uint16_t val, void *priv)\n{"),
+    ('86box/src/video/vid_ati_rage128_vga.c', '    if (dev->gpu)\n        rage128_gpu_cpu_barrier(dev, addr, 2, 1);\n    svga_writew_linear(addr, val, &dev->svga);',
+     '    if (dev->gpu)\n        rage128_gpu_cpu_barrier(dev, addr, 2, 1);\n    if (!rage128_aper_write_plain(dev, addr, val, 2))\n        svga_writew_linear(addr, val, &dev->svga);'),
+    ('86box/src/video/vid_ati_rage128_vga.c', '    if (dev->gpu)\n        rage128_gpu_cpu_barrier(dev, addr, 4, 1);\n    svga_writel_linear(addr, val, &dev->svga);',
+     '    if (dev->gpu)\n        rage128_gpu_cpu_barrier(dev, addr, 4, 1);\n    if (!rage128_aper_write_plain(dev, addr, val, 4))\n        svga_writel_linear(addr, val, &dev->svga);'),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -7118,6 +7135,7 @@ PATCHES = {
     'kairox86-packed-byte-writes': KAIROX86_PACKED_BYTE_WRITES,
     'kairox86-packed-wide-writes': KAIROX86_PACKED_WIDE_WRITES,
     'kairox86-rep-slow-runs': KAIROX86_REP_SLOW_RUNS,
+    'kairox86-rage128-aperture-plain': KAIROX86_RAGE128_APERTURE_PLAIN,
 }
 
 ADDED = [
