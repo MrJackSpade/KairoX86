@@ -6,7 +6,7 @@ compiled with llvm-mingw's clang for 16-bit real mode (-m16), linked at 0x8000, 
 floppy image (compare.py runs those tests on those machines only). The IBM 5550's test (epoch86.S) is booted by its
 own IPL, which takes no PC boot sector: it is that IPL's load module on a 720 KB image (ipl_5550_image).
 
-  make_tests.py <out folder> [test ...]     every test (each .c but runtime.c) when none is named
+  make_tests.py <out folder> [test ...]     every test (each .c but runtime.c and the WORKLOADS) when none is named
 """
 import subprocess
 import sys
@@ -28,6 +28,8 @@ LINK = """SECTIONS {
 """
 # The program runs from 0x8000 up to the 64 KB its code segment (0) reaches
 MAX_BYTES = 0x10000 - 0x8000
+# Workloads, not tests: they never reach TEST_END, so they're built only when named (KairoX86#133's s3loop)
+WORKLOADS = ('s3loop',)
 # The 8086 machines' tests: a 360 KB floppy, 9 sectors a track
 FLOPPY_360K = 368640
 SOURCES_8086 = ('loader.S', 'rt86.S')
@@ -95,7 +97,7 @@ def main():
         raise SystemExit(__doc__)
     out = Path(sys.argv[1])
     out.mkdir(parents=True, exist_ok=True)
-    names = sys.argv[2:] or sorted([p.stem for p in HERE.glob('*.c') if p.stem != 'runtime']
+    names = sys.argv[2:] or sorted([p.stem for p in HERE.glob('*.c') if p.stem not in ('runtime',) + WORKLOADS]
                                    + [p.stem for p in HERE.glob('*.S') if p.name not in SOURCES_8086])
     for name in names:
         (out / f'{name}.img').write_bytes(build(name, out / 'build'))
