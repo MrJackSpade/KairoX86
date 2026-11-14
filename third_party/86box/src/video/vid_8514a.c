@@ -1410,6 +1410,121 @@ ibm8514_draw(ibm8514_t *dev, svga_t *svga, const ibm8514_k_px_t *px, uint32_t ad
 
 static void ibm8514_accel_start_walk(int count, int cpu_input, uint32_t mix_dat, uint32_t cpu_dat, svga_t *svga);
 
+/* KairoX86#440: a word of host data (cpu_input) for a plain rectangle fill: CMD 2, a normal rectangle (not vectored),
+   pixel mode (bit 1 clear), writing (the CPU is the source), every pixel of a row drawn (LAST_PIXEL, bit 2, clear) and
+   PIX_CNTL not the pattern. The walk's loop for that form (its "Normal Rectangle" with CPU data), the same pixels,
+   state and order, without the walk's setup or its per-pixel tests of CMD bits this form has clear; the pixels skip
+   the colour compare where neither PIX_CNTL nor DEST_CMP_FN can keep one (recorded with it, as before, on the GPU).
+   Returns 0, having done nothing, for any other start. */
+static int
+ibm8514_rect_host_word(ibm8514_t *dev, svga_t *svga, int count, uint32_t mix_dat, uint32_t cpu_dat)
+{
+    const uint16_t cmd_reg = dev->accel.cmd;
+    const int      pixcntl = (dev->accel.multifunc[0x0a] >> 6) & 3;
+
+    if (((cmd_reg >> 13) != 2) || ((cmd_reg & 0x0f) != 0x01) || dev->accel.cmd_back || (pixcntl == 1))
+        return 0;
+
+    mach_t        *ati_mach     = ATI_GRAPHICS_ULTRA ? (mach_t *) (svga->ext8514 ? svga->ext8514 : svga->priv) : NULL;
+    const uint16_t ati_cmp_fn   = ati_mach ? ati_mach->accel.dest_cmp_fn : 0;
+    const int      compare_mode = dev->accel.multifunc[0x0a] & 0x38;
+    const int16_t  clip_t       = dev->accel.clip_top;
+    const int16_t  clip_l       = dev->accel.clip_left;
+    const uint16_t clip_b       = dev->accel.clip_bottom;
+    const uint16_t clip_r       = dev->accel.clip_right;
+    const uint16_t mix_mask     = dev->bpp ? 0x8000 : 0x80;
+    const int      x_mask       = dev->accel.x_wrap ? 0x3ff : -1;
+    const int      frgd_mix     = dev->accel.frgd_sel;
+    const int      bkgd_mix     = dev->accel.bkgd_sel;
+    uint16_t       compare      = dev->accel.color_cmp;
+    uint16_t       frgd_color   = dev->accel.frgd_color;
+    uint16_t       bkgd_color   = dev->accel.bkgd_color;
+    uint16_t       src_dat      = 0;
+
+    if (!dev->bpp) {
+        compare &= 0xff;
+        frgd_color &= 0xff;
+        bkgd_color &= 0xff;
+    }
+    /* No compare keeps a pixel: PIX_CNTL's off, DEST_CMP_FN's off with no nibble test */
+    const int                cmp = (dev->k_gpu != NULL) || (compare_mode != 0) || (ati_cmp_fn & 0x78);
+    const ibm8514_k_px_t     px  = { dev->accel.wrt_mask, compare, ati_cmp_fn, compare_mode, 0 };
+
+    count >>= 3;
+    if (dev->bpp && (cmd_reg & 0x200) && (count == 2))
+        count >>= 1;
+
+    while (count-- && (dev->accel.sy >= 0)) {
+        if ((dev->accel.cx >= clip_l) && (dev->accel.cx <= clip_r) && (dev->accel.cy >= clip_t) && (dev->accel.cy <= clip_b)) {
+            dev->subsys_stat |= INT_GE_BSY;
+            switch ((mix_dat & mix_mask) ? frgd_mix : bkgd_mix) {
+                case 0:
+                    src_dat = bkgd_color;
+                    break;
+                case 1:
+                    src_dat = frgd_color;
+                    break;
+                case 2:
+                    src_dat = cpu_dat;
+                    break;
+                case 3:
+                    src_dat = 0;
+                    break;
+
+                default:
+                    break;
+            }
+            ibm8514_draw(dev, svga, &px, dev->accel.dest + (dev->accel.cx & x_mask), mix_dat & mix_mask, src_dat, cmp);
+        }
+        if (cmd_reg & 0x20)
+            dev->accel.cx++;
+        else
+            dev->accel.cx--;
+
+        mix_dat <<= 1;
+        mix_dat |= 1;
+
+        if (dev->bpp)
+            cpu_dat >>= 16;
+        else
+            cpu_dat >>= 8;
+
+        dev->accel.sx--;
+        if (dev->accel.sx < 0) {
+            dev->accel.sx      = ibm8514_rect_width(dev);
+            dev->accel.x_count = 0;
+            if (dev->accel.input)
+                dev->accel.odd_in = 1;
+
+            if (dev->accel.output || dev->accel.input2)
+                dev->accel.sx -= 2;
+
+            if (cmd_reg & 0x20)
+                dev->accel.cx -= (dev->accel.sx + 1);
+            else
+                dev->accel.cx += (dev->accel.sx + 1);
+
+            if (cmd_reg & 0x80)
+                dev->accel.cy++;
+            else
+                dev->accel.cy--;
+
+            dev->accel.dest = dev->accel.ge_offset + (dev->accel.cy * dev->pitch);
+
+            dev->accel.sy--;
+
+            if (dev->accel.sy < 0) {
+                dev->fifo_idx       = 0;
+                dev->accel.cmd_back = 1;
+            }
+            dev->force_busy  = 0;
+            dev->force_busy2 = 0;
+            return 1;
+        }
+    }
+    return 1;
+}
+
 void
 ibm8514_accel_start(int count, int cpu_input, uint32_t mix_dat, uint32_t cpu_dat, svga_t *svga, UNUSED(int len))
 {
@@ -1420,6 +1535,8 @@ ibm8514_accel_start(int count, int cpu_input, uint32_t mix_dat, uint32_t cpu_dat
 static void
 ibm8514_accel_start_walk(int count, int cpu_input, uint32_t mix_dat, uint32_t cpu_dat, svga_t *svga)
 {
+    if (cpu_input && ibm8514_rect_host_word((ibm8514_t *) svga->dev8514, svga, count, mix_dat, cpu_dat)) /* KairoX86#440 */
+        return;
     ibm8514_t *dev     = (ibm8514_t *) svga->dev8514;
     uint16_t  *vga_vram_w = (uint16_t *) svga->vram;
     uint16_t   src_dat = 0;
