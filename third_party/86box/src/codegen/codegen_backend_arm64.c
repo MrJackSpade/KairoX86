@@ -734,6 +734,24 @@ rep_writeback(codeblock_t *block, int is_stos, int a32)
     host_arm64_STR_IMM_W(block, REP_CYCLES, REG_CPUSTATE, rep_state_offset(&cpu_state._cycles));
 }
 
+/*KairoX86#441: the guest registers and the cycle count read back from cpu_state, where the loop body keeps them*/
+static void
+rep_reload(codeblock_t *block, int is_stos, int a32)
+{
+    if (a32) {
+        host_arm64_LDR_IMM_W(block, REP_CNT, REG_CPUSTATE, rep_state_offset(&ECX));
+        if (!is_stos)
+            host_arm64_LDR_IMM_W(block, REP_SRC, REG_CPUSTATE, rep_state_offset(&ESI));
+        host_arm64_LDR_IMM_W(block, REP_DST, REG_CPUSTATE, rep_state_offset(&EDI));
+    } else {
+        host_arm64_LDRH_IMM(block, REP_CNT, REG_CPUSTATE, rep_state_offset(&CX));
+        if (!is_stos)
+            host_arm64_LDRH_IMM(block, REP_SRC, REG_CPUSTATE, rep_state_offset(&SI));
+        host_arm64_LDRH_IMM(block, REP_DST, REG_CPUSTATE, rep_state_offset(&DI));
+    }
+    host_arm64_LDR_IMM_W(block, REP_CYCLES, REG_CPUSTATE, rep_state_offset(&cpu_state._cycles));
+}
+
 /*Sets W6 to 1 if the segment at base_reg + offset would fail the interpreter's
   null selector or not-present check, using W2 = (msw & 1) && !(eflags & VM)*/
 static void
@@ -881,10 +899,12 @@ rep_step_offset(codeblock_t *block, int off_reg, int delta_reg, int a32)
   runs that stay inside one source page and one destination page, both with
   direct lookups, inside both segment limits and inside the cycle budget, so a
   run does exactly what the interpreter's fast path does for each element.
-  Any other element goes through elem_func, which is the interpreter's loop
-  body for one element.*/
+  Any other element goes through elem_func, the interpreter's loop body, which
+  goes on with the elements after it until one of the routine's runs can take
+  them (KairoX86#441), keeping the guest registers and the cycle count in
+  cpu_state.*/
 static void
-build_rep_routine(codeblock_t *block, int is_stos, int shift, int a32, int (*elem_func)(x86seg *seg))
+build_rep_routine(codeblock_t *block, int is_stos, int shift, int a32, int (*elem_func)(x86seg *seg, int cycles_end, int elem_cycles))
 {
     int       size = 1 << shift;
     int       es_offset = rep_state_offset(&cpu_state.seg_es);
@@ -1149,7 +1169,7 @@ build_rep_routine(codeblock_t *block, int is_stos, int shift, int a32, int (*ele
     to_break[0] = host_arm64_BLT_(block);
     host_arm64_B(block, loop);
 
-    /*One element through the interpreter's loop body*/
+    /*Elements through the interpreter's loop body*/
     rep_patch_list(slow, nr_slow, &block_write_data[block_pos]);
     rep_writeback(block, is_stos, a32);
     host_arm64_STP_PREIDX_X(block, REG_X29, REG_X30, REG_XSP, -16);
@@ -1160,6 +1180,8 @@ build_rep_routine(codeblock_t *block, int is_stos, int shift, int a32, int (*ele
     host_arm64_STP_PREIDX_X(block, REG_X14, REG_X15, REG_XSP, -16);
     host_arm64_STP_PREIDX_X(block, REG_X17, REG_X1, REG_XSP, -16);
     host_arm64_MOVX_REG(block, REG_X0, REP_SEG, 0);
+    host_arm64_MOV_REG(block, REG_W1, REP_END, 0);
+    host_arm64_MOV_REG(block, REG_W2, REP_ELEMCYC, 0);
     host_arm64_call(block, (void *) elem_func);
     host_arm64_LDP_POSTIDX_X(block, REG_X17, REG_X1, REG_XSP, 16);
     host_arm64_LDP_POSTIDX_X(block, REG_X14, REG_X15, REG_XSP, 16);
@@ -1168,15 +1190,10 @@ build_rep_routine(codeblock_t *block, int is_stos, int shift, int a32, int (*ele
     host_arm64_LDP_POSTIDX_X(block, REG_X8, REG_X9, REG_XSP, 16);
     host_arm64_LDP_POSTIDX_X(block, REG_X3, REG_X4, REG_XSP, 16);
     host_arm64_LDP_POSTIDX_X(block, REG_X29, REG_X30, REG_XSP, 16);
-    /*A misaligned access charges extra cycles*/
-    host_arm64_LDR_IMM_W(block, REP_CYCLES, REG_CPUSTATE, rep_state_offset(&cpu_state._cycles));
+    /*The loop body stepped the guest registers and charged the cycles*/
+    rep_reload(block, is_stos, a32);
     host_arm64_CMP_IMM(block, REG_W0, 0);
     to_abort = host_arm64_BNE_(block);
-    if (!is_stos)
-        rep_step_offset(block, REP_SRC, REP_STEP, a32);
-    rep_step_offset(block, REP_DST, REP_STEP, a32);
-    host_arm64_SUB_IMM(block, REP_CNT, REP_CNT, 1);
-    host_arm64_SUB_REG(block, REP_CYCLES, REP_CYCLES, REP_ELEMCYC, 0);
     host_arm64_CMP_REG(block, REP_CYCLES, REP_END);
     to_break[1] = host_arm64_BLT_(block);
     host_arm64_B(block, loop);

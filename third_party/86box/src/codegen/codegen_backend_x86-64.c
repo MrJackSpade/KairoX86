@@ -928,7 +928,7 @@ rx_epilogue(codeblock_t *block)
   copying one element at a time, overlaps included. Any other element goes
   through elem_func, which is the interpreter's loop body for one element.*/
 static void
-build_rep_routine(codeblock_t *block, int is_stos, int shift, int a32, int (*elem_func)(x86seg *seg))
+build_rep_routine(codeblock_t *block, int is_stos, int shift, int a32, int (*elem_func)(x86seg *seg, int cycles_end, int elem_cycles))
 {
     int      size      = 1 << shift;
     int32_t  es_disp   = rx_state(&cpu_state.seg_es);
@@ -1129,27 +1129,26 @@ build_rep_routine(codeblock_t *block, int is_stos, int shift, int a32, int (*ele
     to_break[0] = rx_jcc(block, RX_CC_L);
     rx_patch(rx_jmp(block), loop);
 
-    /*One element through the interpreter's loop body*/
+    /*Elements through the interpreter's loop body (KairoX86#441: it goes on until one of the runs can take them)*/
     for (int c = 0; c < nr_slow; c++)
         rx_patch(slow[c], rx_here());
     rx_writeback(block, is_stos, a32);
 #    if _WIN64
     rx_rr(block, 0, 1, 0x89, RX_SEG, REG_RCX);
+    rx_rr(block, 0, 0, 0x89, RX_END, REG_RDX);
+    rx_rr(block, 0, 0, 0x89, RX_ELEMCYC, REG_R8);
 #    else
     rx_rr(block, 0, 1, 0x89, RX_SEG, REG_RDI);
+    rx_rr(block, 0, 0, 0x89, RX_END, REG_RSI);
+    rx_rr(block, 0, 0, 0x89, RX_ELEMCYC, REG_RDX);
 #    endif
     rx_mov_ri64(block, REG_RAX, (uint64_t) (uintptr_t) elem_func);
     rx_rr(block, 0, 0, 0xff, 2, REG_RAX); /*CALL RAX*/
-    /*The call does not keep R8-R11, and a misaligned access charges extra
-      cycles, so the guest registers and the cycle count are read back*/
+    /*The loop body stepped the guest registers and charged the cycles, and
+      the call does not keep R8-R11: both are read back*/
     rx_load_regs(block, is_stos, a32);
     rx_rr(block, 0, 0, 0x85, REG_RAX, REG_RAX);
     to_abort = rx_jcc(block, RX_CC_NZ);
-    if (!is_stos)
-        rx_step_offset(block, RX_SRC, RX_STEP, a32);
-    rx_step_offset(block, RX_DST, RX_STEP, a32);
-    rx_alu_ri(block, 0, 5, RX_CNT, 1);
-    rx_rr(block, 0, 0, 0x29, RX_ELEMCYC, RX_CYCLES);
     rx_rr(block, 0, 0, 0x39, RX_END, RX_CYCLES);
     to_break[1] = rx_jcc(block, RX_CC_L);
     rx_patch(rx_jmp(block), loop);

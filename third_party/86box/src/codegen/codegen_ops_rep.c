@@ -15,122 +15,187 @@
 #include "codegen_ops_helpers.h"
 #include "codegen_ops_rep.h"
 
-/*One element of each REP MOVS/STOS form, written as the loop body of the
-  interpreter's REP handlers in x86_ops_rep_dyn.h. The compiled REP routines
-  call these for any element they do not copy directly, and step the
-  registers and charge the cycles themselves. Returns non-zero if the element
-  faulted.*/
-#define REP_ELEM_OPS(size, SRC_REG, DEST_REG)                                                  \
-    static int rep_movsb_##size(x86seg *seg)                                                    \
+/*KairoX86#441: the elements of each REP MOVS/STOS form that the compiled REP routines do not copy directly, through
+  the interpreter's loop body in x86_ops_rep_dyn.h: element after element, each stepping the guest registers and
+  charging the routine's cycles per element, until the count runs out, an element takes the cycle count below the
+  routine's end, an element faults (the registers left at it), or the next element's pages have direct lookups, which
+  the routine's own runs take (they do exactly what the loop body does for each element). Returns non-zero if an
+  element faulted.*/
+#define REP_ELEM_STEP(reg, n)                                                                   \
+    do {                                                                                        \
+        if (cpu_state.flags & D_FLAG)                                                           \
+            reg -= (n);                                                                         \
+        else                                                                                    \
+            reg += (n);                                                                         \
+    } while (0)
+#define REP_ELEM_DIRECT_R(lin) (readlookup2[(uint32_t) (lin) >> 12] != (uintptr_t) LOOKUP_INV)
+#define REP_ELEM_DIRECT_W(lin) (writelookup2[(uint32_t) (lin) >> 12] != (uintptr_t) LOOKUP_INV)
+
+#define REP_ELEM_OPS(size, SRC_REG, DEST_REG, CNT_REG)                                          \
+    static int rep_movsb_##size(x86seg *seg, int cycles_end, int elem_cycles)                   \
     {                                                                                           \
-        addr64 = addr64_2 = 0x00000000;                                                         \
-        do {                                                                                    \
-            uint8_t temp;                                                                       \
+        for (;;) {                                                                              \
+            addr64 = addr64_2 = 0x00000000;                                                     \
+            do {                                                                                \
+                uint8_t temp;                                                                   \
                                                                                                 \
-            SEG_CHECK_READ_REP(seg);                                                            \
-            CHECK_READ_REP(seg, SRC_REG, SRC_REG);                                              \
-            high_page = 0;                                                                      \
-            do_mmut_rb(seg->base, SRC_REG, &addr64);                                            \
+                SEG_CHECK_READ_REP(seg);                                                        \
+                CHECK_READ_REP(seg, SRC_REG, SRC_REG);                                          \
+                high_page = 0;                                                                  \
+                do_mmut_rb(seg->base, SRC_REG, &addr64);                                        \
+                if (cpu_state.abrt)                                                             \
+                    break;                                                                      \
+                                                                                                \
+                SEG_CHECK_WRITE_REP(&cpu_state.seg_es);                                         \
+                CHECK_WRITE_REP(&cpu_state.seg_es, DEST_REG, DEST_REG);                         \
+                high_page = 0;                                                                  \
+                do_mmut_wb(es, DEST_REG, &addr64_2);                                            \
+                if (cpu_state.abrt)                                                             \
+                    break;                                                                      \
+                                                                                                \
+                temp = readmemb_n(seg->base, SRC_REG, addr64);                                  \
+                writememb_n(es, DEST_REG, addr64_2, temp);                                      \
+            } while (0);                                                                        \
             if (cpu_state.abrt)                                                                 \
-                break;                                                                          \
-                                                                                                \
-            SEG_CHECK_WRITE_REP(&cpu_state.seg_es);                                             \
-            CHECK_WRITE_REP(&cpu_state.seg_es, DEST_REG, DEST_REG);                             \
-            high_page = 0;                                                                      \
-            do_mmut_wb(es, DEST_REG, &addr64_2);                                                \
-            if (cpu_state.abrt)                                                                 \
-                break;                                                                          \
-                                                                                                \
-            temp = readmemb_n(seg->base, SRC_REG, addr64);                                      \
-            writememb_n(es, DEST_REG, addr64_2, temp);                                          \
-        } while (0);                                                                            \
-        return cpu_state.abrt;                                                                  \
+                return cpu_state.abrt;                                                          \
+            REP_ELEM_STEP(SRC_REG, 1);                                                          \
+            REP_ELEM_STEP(DEST_REG, 1);                                                         \
+            CNT_REG--;                                                                          \
+            cycles -= elem_cycles;                                                              \
+            if ((cycles < cycles_end) || !CNT_REG ||                                            \
+                (REP_ELEM_DIRECT_R(seg->base + SRC_REG) && REP_ELEM_DIRECT_W(es + DEST_REG)))   \
+                return 0;                                                                       \
+        }                                                                                       \
     }                                                                                           \
-    static int rep_movsw_##size(x86seg *seg)                                                    \
+    static int rep_movsw_##size(x86seg *seg, int cycles_end, int elem_cycles)                   \
     {                                                                                           \
-        addr64a[0] = addr64a[1] = 0x00000000;                                                   \
-        addr64a_2[0] = addr64a_2[1] = 0x00000000;                                               \
-        do {                                                                                    \
-            uint16_t temp;                                                                      \
+        for (;;) {                                                                              \
+            addr64a[0] = addr64a[1] = 0x00000000;                                               \
+            addr64a_2[0] = addr64a_2[1] = 0x00000000;                                           \
+            do {                                                                                \
+                uint16_t temp;                                                                  \
                                                                                                 \
-            SEG_CHECK_READ_REP(seg);                                                            \
-            CHECK_READ_REP(seg, SRC_REG, SRC_REG + 1UL);                                        \
-            high_page = 0;                                                                      \
-            do_mmut_rw(seg->base, SRC_REG, addr64a);                                            \
+                SEG_CHECK_READ_REP(seg);                                                        \
+                CHECK_READ_REP(seg, SRC_REG, SRC_REG + 1UL);                                    \
+                high_page = 0;                                                                  \
+                do_mmut_rw(seg->base, SRC_REG, addr64a);                                        \
+                if (cpu_state.abrt)                                                             \
+                    break;                                                                      \
+                                                                                                \
+                SEG_CHECK_WRITE_REP(&cpu_state.seg_es);                                         \
+                CHECK_WRITE_REP(&cpu_state.seg_es, DEST_REG, DEST_REG + 1UL);                   \
+                high_page = 0;                                                                  \
+                do_mmut_ww(es, DEST_REG, addr64a_2);                                            \
+                if (cpu_state.abrt)                                                             \
+                    break;                                                                      \
+                                                                                                \
+                temp = readmemw_n(seg->base, SRC_REG, addr64a);                                 \
+                writememw_n(es, DEST_REG, addr64a_2, temp);                                     \
+            } while (0);                                                                        \
             if (cpu_state.abrt)                                                                 \
-                break;                                                                          \
+                return cpu_state.abrt;                                                          \
+            REP_ELEM_STEP(SRC_REG, 2);                                                          \
+            REP_ELEM_STEP(DEST_REG, 2);                                                         \
+            CNT_REG--;                                                                          \
+            cycles -= elem_cycles;                                                              \
+            if ((cycles < cycles_end) || !CNT_REG ||                                            \
+                (REP_ELEM_DIRECT_R(seg->base + SRC_REG) && REP_ELEM_DIRECT_W(es + DEST_REG)))   \
+                return 0;                                                                       \
+        }                                                                                       \
+    }                                                                                           \
+    static int rep_movsl_##size(x86seg *seg, int cycles_end, int elem_cycles)                   \
+    {                                                                                           \
+        for (;;) {                                                                              \
+            addr64a[0] = addr64a[1] = addr64a[2] = addr64a[3] = 0x00000000;                     \
+            addr64a_2[0] = addr64a_2[1] = addr64a_2[2] = addr64a_2[3] = 0x00000000;             \
+            do {                                                                                \
+                uint32_t temp;                                                                  \
                                                                                                 \
-            SEG_CHECK_WRITE_REP(&cpu_state.seg_es);                                             \
-            CHECK_WRITE_REP(&cpu_state.seg_es, DEST_REG, DEST_REG + 1UL);                       \
-            high_page = 0;                                                                      \
-            do_mmut_ww(es, DEST_REG, addr64a_2);                                                \
+                SEG_CHECK_READ_REP(seg);                                                        \
+                CHECK_READ_REP(seg, SRC_REG, SRC_REG + 3UL);                                    \
+                high_page = 0;                                                                  \
+                do_mmut_rl(seg->base, SRC_REG, addr64a);                                        \
+                if (cpu_state.abrt)                                                             \
+                    break;                                                                      \
+                                                                                                \
+                SEG_CHECK_WRITE_REP(&cpu_state.seg_es);                                         \
+                CHECK_WRITE_REP(&cpu_state.seg_es, DEST_REG, DEST_REG + 3UL);                   \
+                high_page = 0;                                                                  \
+                do_mmut_wl(es, DEST_REG, addr64a_2);                                            \
+                if (cpu_state.abrt)                                                             \
+                    break;                                                                      \
+                                                                                                \
+                temp = readmeml_n(seg->base, SRC_REG, addr64a);                                 \
+                writememl_n(es, DEST_REG, addr64a_2, temp);                                     \
+            } while (0);                                                                        \
             if (cpu_state.abrt)                                                                 \
-                break;                                                                          \
-                                                                                                \
-            temp = readmemw_n(seg->base, SRC_REG, addr64a);                                     \
-            writememw_n(es, DEST_REG, addr64a_2, temp);                                         \
-        } while (0);                                                                            \
-        return cpu_state.abrt;                                                                  \
+                return cpu_state.abrt;                                                          \
+            REP_ELEM_STEP(SRC_REG, 4);                                                          \
+            REP_ELEM_STEP(DEST_REG, 4);                                                         \
+            CNT_REG--;                                                                          \
+            cycles -= elem_cycles;                                                              \
+            if ((cycles < cycles_end) || !CNT_REG ||                                            \
+                (REP_ELEM_DIRECT_R(seg->base + SRC_REG) && REP_ELEM_DIRECT_W(es + DEST_REG)))   \
+                return 0;                                                                       \
+        }                                                                                       \
     }                                                                                           \
-    static int rep_movsl_##size(x86seg *seg)                                                    \
-    {                                                                                           \
-        addr64a[0] = addr64a[1] = addr64a[2] = addr64a[3] = 0x00000000;                        \
-        addr64a_2[0] = addr64a_2[1] = addr64a_2[2] = addr64a_2[3] = 0x00000000;                \
-        do {                                                                                    \
-            uint32_t temp;                                                                      \
                                                                                                 \
-            SEG_CHECK_READ_REP(seg);                                                            \
-            CHECK_READ_REP(seg, SRC_REG, SRC_REG + 3UL);                                        \
-            high_page = 0;                                                                      \
-            do_mmut_rl(seg->base, SRC_REG, addr64a);                                            \
+    static int rep_stosb_##size(UNUSED(x86seg *seg), int cycles_end, int elem_cycles)           \
+    {                                                                                           \
+        for (;;) {                                                                              \
+            do {                                                                                \
+                SEG_CHECK_WRITE_REP(&cpu_state.seg_es);                                         \
+                CHECK_WRITE_REP(&cpu_state.seg_es, DEST_REG, DEST_REG);                         \
+                writememb(es, DEST_REG, AL);                                                    \
+            } while (0);                                                                        \
             if (cpu_state.abrt)                                                                 \
-                break;                                                                          \
-                                                                                                \
-            SEG_CHECK_WRITE_REP(&cpu_state.seg_es);                                             \
-            CHECK_WRITE_REP(&cpu_state.seg_es, DEST_REG, DEST_REG + 3UL);                       \
-            high_page = 0;                                                                      \
-            do_mmut_wl(es, DEST_REG, addr64a_2);                                                \
+                return cpu_state.abrt;                                                          \
+            REP_ELEM_STEP(DEST_REG, 1);                                                         \
+            CNT_REG--;                                                                          \
+            cycles -= elem_cycles;                                                              \
+            if ((cycles < cycles_end) || !CNT_REG || REP_ELEM_DIRECT_W(es + DEST_REG))          \
+                return 0;                                                                       \
+        }                                                                                       \
+    }                                                                                           \
+    static int rep_stosw_##size(UNUSED(x86seg *seg), int cycles_end, int elem_cycles)           \
+    {                                                                                           \
+        for (;;) {                                                                              \
+            do {                                                                                \
+                SEG_CHECK_WRITE_REP(&cpu_state.seg_es);                                         \
+                CHECK_WRITE_REP(&cpu_state.seg_es, DEST_REG, DEST_REG + 1UL);                   \
+                writememw(es, DEST_REG, AX);                                                    \
+            } while (0);                                                                        \
             if (cpu_state.abrt)                                                                 \
-                break;                                                                          \
-                                                                                                \
-            temp = readmeml_n(seg->base, SRC_REG, addr64a);                                     \
-            writememl_n(es, DEST_REG, addr64a_2, temp);                                         \
-        } while (0);                                                                            \
-        return cpu_state.abrt;                                                                  \
+                return cpu_state.abrt;                                                          \
+            REP_ELEM_STEP(DEST_REG, 2);                                                         \
+            CNT_REG--;                                                                          \
+            cycles -= elem_cycles;                                                              \
+            if ((cycles < cycles_end) || !CNT_REG || REP_ELEM_DIRECT_W(es + DEST_REG))          \
+                return 0;                                                                       \
+        }                                                                                       \
     }                                                                                           \
-                                                                                                \
-    static int rep_stosb_##size(UNUSED(x86seg *seg))                                            \
+    static int rep_stosl_##size(UNUSED(x86seg *seg), int cycles_end, int elem_cycles)           \
     {                                                                                           \
-        do {                                                                                    \
-            SEG_CHECK_WRITE_REP(&cpu_state.seg_es);                                             \
-            CHECK_WRITE_REP(&cpu_state.seg_es, DEST_REG, DEST_REG);                             \
-            writememb(es, DEST_REG, AL);                                                        \
-        } while (0);                                                                            \
-        return cpu_state.abrt;                                                                  \
-    }                                                                                           \
-    static int rep_stosw_##size(UNUSED(x86seg *seg))                                            \
-    {                                                                                           \
-        do {                                                                                    \
-            SEG_CHECK_WRITE_REP(&cpu_state.seg_es);                                             \
-            CHECK_WRITE_REP(&cpu_state.seg_es, DEST_REG, DEST_REG + 1UL);                       \
-            writememw(es, DEST_REG, AX);                                                        \
-        } while (0);                                                                            \
-        return cpu_state.abrt;                                                                  \
-    }                                                                                           \
-    static int rep_stosl_##size(UNUSED(x86seg *seg))                                            \
-    {                                                                                           \
-        do {                                                                                    \
-            SEG_CHECK_WRITE_REP(&cpu_state.seg_es);                                             \
-            CHECK_WRITE_REP(&cpu_state.seg_es, DEST_REG, DEST_REG + 3UL);                       \
-            writememl(es, DEST_REG, EAX);                                                       \
-        } while (0);                                                                            \
-        return cpu_state.abrt;                                                                  \
+        for (;;) {                                                                              \
+            do {                                                                                \
+                SEG_CHECK_WRITE_REP(&cpu_state.seg_es);                                         \
+                CHECK_WRITE_REP(&cpu_state.seg_es, DEST_REG, DEST_REG + 3UL);                   \
+                writememl(es, DEST_REG, EAX);                                                   \
+            } while (0);                                                                        \
+            if (cpu_state.abrt)                                                                 \
+                return cpu_state.abrt;                                                          \
+            REP_ELEM_STEP(DEST_REG, 4);                                                         \
+            CNT_REG--;                                                                          \
+            cycles -= elem_cycles;                                                              \
+            if ((cycles < cycles_end) || !CNT_REG || REP_ELEM_DIRECT_W(es + DEST_REG))          \
+                return 0;                                                                       \
+        }                                                                                       \
     }
 
-REP_ELEM_OPS(a16, SI, DI)
-REP_ELEM_OPS(a32, ESI, EDI)
+REP_ELEM_OPS(a16, SI, DI, CX)
+REP_ELEM_OPS(a32, ESI, EDI, ECX)
 
-int (*const codegen_rep_elem[2][3][2])(x86seg *seg) = {
+int (*const codegen_rep_elem[2][3][2])(x86seg *seg, int cycles_end, int elem_cycles) = {
     {
         { rep_movsb_a16, rep_movsb_a32 },
         { rep_movsw_a16, rep_movsw_a32 },
