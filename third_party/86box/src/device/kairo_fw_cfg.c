@@ -19,6 +19,7 @@
 #include <86box/device.h>
 #include <86box/io.h>
 #include <86box/config.h>
+#include <86box/plat.h>
 #include <86box/plat_unused.h>
 #include <86box/kairo_pc.h>
 
@@ -44,6 +45,7 @@ struct kairo_fw_cfg_t {
     int            files;
     uint16_t       selected;
     uint32_t       offset;
+    FILE          *log;      /* firmware.log, while [KairoX86] firmware_log is 1 */
 };
 
 void
@@ -212,13 +214,16 @@ fw_cfg_data(UNUSED(uint16_t port), void *priv)
     return item->data[cfg->offset++];
 }
 
-/* SeaBIOS's log (its debug port, 402h), on stderr, when 86box.cfg's [KairoX86] firmware_log is 1. */
+/* SeaBIOS's log (its debug port, 402h), when 86box.cfg's [KairoX86] firmware_log is 1: written to
+   firmware.log in the machine's folder, on the PC and the device alike. */
 static void
-fw_cfg_debug_out(UNUSED(uint16_t port), uint8_t val, UNUSED(void *priv))
+fw_cfg_debug_out(UNUSED(uint16_t port), uint8_t val, void *priv)
 {
-    fputc(val, stderr);
+    kairo_fw_cfg_t *cfg = (kairo_fw_cfg_t *) priv;
+
+    fputc(val, cfg->log);
     if (val == '\n')
-        fflush(stderr);
+        fflush(cfg->log);
 }
 
 /* Reads of the debug port give E9h, which SeaBIOS checks before it writes there. */
@@ -238,8 +243,14 @@ fw_cfg_init(UNUSED(const device_t *info))
     kairo_fw_cfg_add(cfg, FW_CFG_ID, &id, sizeof(id));
     io_sethandler(FW_CFG_PORT_SEL, 1, NULL, NULL, NULL, NULL, fw_cfg_select, NULL, cfg);
     io_sethandler(FW_CFG_PORT_DATA, 1, fw_cfg_data, NULL, NULL, NULL, NULL, NULL, cfg);
-    if (config_kairo_int("firmware_log", 0))
+    if (config_kairo_int("firmware_log", 0)) {
+        char path[1024];
+        snprintf(path, sizeof(path), "%sfirmware.log", usr_path);
+        cfg->log = plat_fopen(path, "ab");
+        if (cfg->log == NULL)
+            fatal("KairoX86 PC: could not open %s for the firmware log\n", path);
         io_sethandler(0x0402, 1, fw_cfg_debug_in, NULL, NULL, fw_cfg_debug_out, NULL, NULL, cfg);
+    }
     return cfg;
 }
 
@@ -248,6 +259,8 @@ fw_cfg_close(void *priv)
 {
     kairo_fw_cfg_t *cfg = (kairo_fw_cfg_t *) priv;
 
+    if (cfg->log != NULL)
+        fclose(cfg->log);
     for (int i = 0; i < cfg->count; i++)
         free(cfg->items[i].data);
     free(cfg->items);

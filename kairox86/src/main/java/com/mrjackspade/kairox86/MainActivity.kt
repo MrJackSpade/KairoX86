@@ -416,8 +416,14 @@ class MainActivity : MachineActivity<X86Entry>() {
     /** The player's 86Box ROM set, imported by content into [firmwareFolder] (KairoX86#67). */
     override val firmwareSets by lazy { listOf(UiText.res(R.string.firmware_rom_set) to X86Firmware.set(this, firmwareFolder)) }
 
-    /** The hardware 86Box offers is asked again: whose firmware is there changed (KairoX86#438). */
-    override fun firmwareFilesChanged() = X86Hardware.firmwareChanged()
+    /**
+     * The hardware 86Box offers is asked again: whose firmware is there changed (KairoX86#438). A removed set
+     * can take the free firmware with it: it goes back first.
+     */
+    override fun firmwareFilesChanged() {
+        installFreeFirmware()
+        X86Hardware.firmwareChanged()
+    }
 
     override fun startGame(entry: X86Entry, game: CatalogGame, cancelled: AtomicBoolean, progress: (String) -> Unit) =
         start(entry, X86Catalog.startupCommands.value(game, emptyMap()), cancelled, progress)
@@ -438,6 +444,7 @@ class MainActivity : MachineActivity<X86Entry>() {
         // Each step's time, for the start's measure (KairoX86#42) and player reports.
         val began = SystemClock.elapsedRealtime()
         installFreeFirmware(progress)
+        ShippedAssets.install(this, "free-firmware/${X86SoundFonts.SHIPPED}", File(firmwareFolder, X86SoundFonts.SHIPPED), progress)
         val firmwareReady = SystemClock.elapsedRealtime()
         // An eXoWin9x game's machine folder, made from its collection the first time (KairoX86#219)
         if (entry.exo) machines.makeExoDisks(entry, tree, cancelled, progress)
@@ -467,9 +474,10 @@ class MainActivity : MachineActivity<X86Entry>() {
     /**
      * The free firmware the app ships (assets/free-firmware, X86Firmware.FREE), each file installed at its
      * place in the ROM folder beside the player's own, with the shared install, which writes a file again
-     * only when the app changed.
+     * only when the app changed or the file is gone. Small: it runs as the app starts, before 86Box is
+     * asked what hardware it has (KairoX86#446).
      */
-    private fun installFreeFirmware(progress: (String) -> Unit) {
+    private fun installFreeFirmware(progress: (String) -> Unit = {}) {
         for (file in X86Firmware.FREE) ShippedAssets.install(this, "free-firmware/$file", File(firmwareFolder, file), progress)
     }
 
@@ -488,6 +496,7 @@ class MainActivity : MachineActivity<X86Entry>() {
     override fun onCreate(savedInstanceState: Bundle?) {
         // The machine settings' hardware choices come from the player's ROM set (Kairo#143).
         X86Hardware.roms = firmwareFolder
+        installFreeFirmware()
         X86SoundFonts.files = X86SoundFonts.library(this)
         super.onCreate(savedInstanceState)
     }

@@ -49,11 +49,12 @@ object X86Firmware {
 
     /**
      * The free firmware the app ships, at its places in the ROM set (kairox86/build.gradle.kts stages it into
-     * assets/free-firmware): GLaBIOS, the MDA character ROM, the free machine's SeaBIOS and its GD5446's
-     * SeaVGABIOS (KairoX86#446), and FluidSynth's default SoundFont.
+     * assets/free-firmware): GLaBIOS, the MDA character ROM, and the free machine's SeaBIOS and its GD5446's
+     * SeaVGABIOS (KairoX86#446). It is in the ROM folder before 86Box is asked what hardware it has, so the
+     * hardware that runs on it counts as available from the first start (MainActivity.installFreeFirmware).
      */
     val FREE = listOf("machines/glabios/GLABIOS_0.4.0_8P.ROM", "machines/glabios/GLABIOS_0.4.0_VP.ROM",
-        "video/mda/mda.rom", "machines/kairo_pc/seabios.bin", "video/kairo/seavgabios_cirrus.bin", X86SoundFonts.SHIPPED)
+        "video/mda/mda.rom", "machines/kairo_pc/seabios.bin", "video/kairo/seavgabios_cirrus.bin")
 
     /**
      * 86Box's source, linked beside the firmware (KairoX86#438): the project, never its ROM repository, whose
