@@ -257,6 +257,7 @@ extern uint32_t    *video_16to32;
 extern uint8_t      video_16to32_channels[128];
 extern uint8_t      video_15to32_channels[96]; /* KairoX86#443 */
 extern void         video_15to32_run(uint32_t *dst, const uint16_t *src, int n, const uint8_t *channels);
+extern void         video_15to32_run_doubled(uint32_t *dst, const uint16_t *src, int n, const uint8_t *channels);
 /* KairoX86#424: [n] (a multiple of 8) 16-bit pixels at [src] to [dst] through [channels] (video.c) */
 extern void         video_16to32_run(uint32_t *dst, const uint16_t *src, int n, const uint8_t *channels);
 extern int          enable_overscan;

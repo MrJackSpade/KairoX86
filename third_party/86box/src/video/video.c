@@ -1059,6 +1059,38 @@ video_15to32_run(uint32_t *dst, const uint16_t *src, int n, const uint8_t *chann
 #endif
 }
 
+/* KairoX86#443: as video_15to32_run, each pixel written twice ([dst] takes 2 * [n]); [n] a multiple of 4 */
+void
+video_15to32_run_doubled(uint32_t *dst, const uint16_t *src, int n, const uint8_t *channels)
+{
+    int i = 0;
+#if defined(__aarch64__) || defined(_M_ARM64)
+    const uint8x16x2_t blue  = { { vld1q_u8(&channels[0]), vld1q_u8(&channels[16]) } };
+    const uint8x16x2_t green = { { vld1q_u8(&channels[32]), vld1q_u8(&channels[48]) } };
+    const uint8x16x2_t red   = { { vld1q_u8(&channels[64]), vld1q_u8(&channels[80]) } };
+    const uint8x8_t    alpha = vdup_n_u8(0xff);
+    for (; (i + 8) <= n; i += 8) {
+        const uint16x8_t px = vld1q_u16(&src[i]);
+        const uint8x8_t  b  = vqtbl2_u8(blue, vmovn_u16(vandq_u16(px, vdupq_n_u16(31))));
+        const uint8x8_t  g  = vqtbl2_u8(green, vmovn_u16(vandq_u16(vshrq_n_u16(px, 5), vdupq_n_u16(31))));
+        const uint8x8_t  r  = vqtbl2_u8(red, vmovn_u16(vandq_u16(vshrq_n_u16(px, 10), vdupq_n_u16(31))));
+        const uint8x8x2_t zb = vzip_u8(b, b);
+        const uint8x8x2_t zg = vzip_u8(g, g);
+        const uint8x8x2_t zr = vzip_u8(r, r);
+        const uint8x8x4_t lo = { { zb.val[0], zg.val[0], zr.val[0], alpha } };
+        const uint8x8x4_t hi = { { zb.val[1], zg.val[1], zr.val[1], alpha } };
+        vst4_u8((uint8_t *) &dst[2 * i], lo);
+        vst4_u8((uint8_t *) &dst[2 * i + 8], hi);
+    }
+#endif
+    for (; i < n; i++) {
+        uint16_t c;
+        memcpy(&c, &src[i], 2);
+        dst[2 * i] = dst[2 * i + 1] = 0xff000000 | ((uint32_t) channels[64 + ((c >> 10) & 31)] << 16) |
+                                      ((uint32_t) channels[32 + ((c >> 5) & 31)] << 8) | channels[c & 31];
+    }
+}
+
 void
 video_close(void)
 {

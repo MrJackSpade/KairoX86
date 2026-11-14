@@ -6876,6 +6876,21 @@ KAIROX86_15BPP_LINES = [
      '                x = render_gpu_direct(svga, p, 15, (svga->render == svga_render_15bpp_highres) && (svga->conv_16to32 == svga_conv_16to32));\n                if (x == 0) /* KairoX86#443 */\n                    x = render_15bpp_default(svga, p, 0);\n                p += x;'),
 ]
 
+
+# KairoX86#443: the low-resolution 15 bpp lines through the same per-channel tables, each pixel doubled.
+KAIROX86_15BPP_LOWRES_LINES = [
+    ('86box/src/video/video.c', 'void\nvideo_close(void)\n{',
+     '/* KairoX86#443: as video_15to32_run, each pixel written twice ([dst] takes 2 * [n]); [n] a multiple of 4 */\nvoid\nvideo_15to32_run_doubled(uint32_t *dst, const uint16_t *src, int n, const uint8_t *channels)\n{\n    int i = 0;\n#if defined(__aarch64__) || defined(_M_ARM64)\n    const uint8x16x2_t blue  = { { vld1q_u8(&channels[0]), vld1q_u8(&channels[16]) } };\n    const uint8x16x2_t green = { { vld1q_u8(&channels[32]), vld1q_u8(&channels[48]) } };\n    const uint8x16x2_t red   = { { vld1q_u8(&channels[64]), vld1q_u8(&channels[80]) } };\n    const uint8x8_t    alpha = vdup_n_u8(0xff);\n    for (; (i + 8) <= n; i += 8) {\n        const uint16x8_t px = vld1q_u16(&src[i]);\n        const uint8x8_t  b  = vqtbl2_u8(blue, vmovn_u16(vandq_u16(px, vdupq_n_u16(31))));\n        const uint8x8_t  g  = vqtbl2_u8(green, vmovn_u16(vandq_u16(vshrq_n_u16(px, 5), vdupq_n_u16(31))));\n        const uint8x8_t  r  = vqtbl2_u8(red, vmovn_u16(vandq_u16(vshrq_n_u16(px, 10), vdupq_n_u16(31))));\n        const uint8x8x2_t zb = vzip_u8(b, b);\n        const uint8x8x2_t zg = vzip_u8(g, g);\n        const uint8x8x2_t zr = vzip_u8(r, r);\n        const uint8x8x4_t lo = { { zb.val[0], zg.val[0], zr.val[0], alpha } };\n        const uint8x8x4_t hi = { { zb.val[1], zg.val[1], zr.val[1], alpha } };\n        vst4_u8((uint8_t *) &dst[2 * i], lo);\n        vst4_u8((uint8_t *) &dst[2 * i + 8], hi);\n    }\n#endif\n    for (; i < n; i++) {\n        uint16_t c;\n        memcpy(&c, &src[i], 2);\n        dst[2 * i] = dst[2 * i + 1] = 0xff000000 | ((uint32_t) channels[64 + ((c >> 10) & 31)] << 16) |\n                                      ((uint32_t) channels[32 + ((c >> 5) & 31)] << 8) | channels[c & 31];\n    }\n}\n\nvoid\nvideo_close(void)\n{'),
+    ('86box/src/include/86box/video.h', 'extern void         video_15to32_run(uint32_t *dst, const uint16_t *src, int n, const uint8_t *channels);',
+     'extern void         video_15to32_run(uint32_t *dst, const uint16_t *src, int n, const uint8_t *channels);\nextern void         video_15to32_run_doubled(uint32_t *dst, const uint16_t *src, int n, const uint8_t *channels);'),
+    ('86box/src/video/vid_svga_render.c', 'void\nsvga_render_15bpp_lowres(svga_t *svga)\n{',
+     "/* KairoX86#443: the low-resolution line's source pixels from x on, each drawn twice at p[2 * x] on, as\n   svga_render_15bpp_lowres's loop draws them (four a step while x is at most hdisp + scrollcache), on the conditions\n   render_15bpp_default takes. Returns where the loop goes on from: x itself when this draws nothing. */\nstatic int\nrender_15bpp_lowres_default(svga_t *svga, uint32_t *p, int x)\n{\n    const int      end  = svga->hdisp + svga->scrollcache;\n    const uint32_t mask = svga->vram_display_mask;\n\n    uint8_t        scratch[96];\n    const uint8_t *channels = (svga->conv_16to32 == svga_conv_16to32) ? video_15to32_channels\n                              : (svga->conv_16to32 == tvp3026_conv_16to32) ? tvp3026_15to32_channels(svga, scratch) : NULL;\n\n    if ((channels == NULL) || (x > end) || ((mask + 1) & mask))\n        return x;\n    const int      n    = (((end - x) >> 2) + 1) << 2;\n    const uint32_t from = (svga->memaddr + ((uint32_t) x << 1)) & mask;\n    if ((from + (uint32_t) n * 2) > (mask + 1))\n        return x;\n    video_15to32_run_doubled(&p[x << 1], (const uint16_t *) &svga->vram[from], n, channels);\n    return x + n;\n}\n\nvoid\nsvga_render_15bpp_lowres(svga_t *svga)\n{"),
+    ('86box/src/video/vid_svga_render.c', '            x = render_gpu_wide(svga, p, 15, (svga->render == svga_render_15bpp_lowres) && (svga->conv_16to32 == svga_conv_16to32));\n            for (; x <= (svga->hdisp + svga->scrollcache); x += 4) {',
+     '            x = render_gpu_wide(svga, p, 15, (svga->render == svga_render_15bpp_lowres) && (svga->conv_16to32 == svga_conv_16to32));\n            if (x == 0) /* KairoX86#443 */\n                x = render_15bpp_lowres_default(svga, p, 0);\n            for (; x <= (svga->hdisp + svga->scrollcache); x += 4) {'),
+    ('86box/src/video/vid_svga_render.c', '                x = render_gpu_wide(svga, p, 15, (svga->render == svga_render_15bpp_lowres) && (svga->conv_16to32 == svga_conv_16to32));\n                p += 2 * x;',
+     '                x = render_gpu_wide(svga, p, 15, (svga->render == svga_render_15bpp_lowres) && (svga->conv_16to32 == svga_conv_16to32));\n                if (x == 0) /* KairoX86#443 */\n                    x = render_15bpp_lowres_default(svga, p, 0);\n                p += 2 * x;'),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -7052,6 +7067,7 @@ PATCHES = {
     'kairox86-compiled-popf': KAIROX86_COMPILED_POPF,
     'kairox86-chips69000-srccopy': KAIROX86_CHIPS69000_SRCCOPY,
     'kairox86-15bpp-lines': KAIROX86_15BPP_LINES,
+    'kairox86-15bpp-lowres-lines': KAIROX86_15BPP_LOWRES_LINES,
 }
 
 ADDED = [

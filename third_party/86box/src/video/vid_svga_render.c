@@ -1968,6 +1968,29 @@ svga_render_8bpp_tseng_highres(svga_t *svga)
     }
 }
 
+/* KairoX86#443: the low-resolution line's source pixels from x on, each drawn twice at p[2 * x] on, as
+   svga_render_15bpp_lowres's loop draws them (four a step while x is at most hdisp + scrollcache), on the conditions
+   render_15bpp_default takes. Returns where the loop goes on from: x itself when this draws nothing. */
+static int
+render_15bpp_lowres_default(svga_t *svga, uint32_t *p, int x)
+{
+    const int      end  = svga->hdisp + svga->scrollcache;
+    const uint32_t mask = svga->vram_display_mask;
+
+    uint8_t        scratch[96];
+    const uint8_t *channels = (svga->conv_16to32 == svga_conv_16to32) ? video_15to32_channels
+                              : (svga->conv_16to32 == tvp3026_conv_16to32) ? tvp3026_15to32_channels(svga, scratch) : NULL;
+
+    if ((channels == NULL) || (x > end) || ((mask + 1) & mask))
+        return x;
+    const int      n    = (((end - x) >> 2) + 1) << 2;
+    const uint32_t from = (svga->memaddr + ((uint32_t) x << 1)) & mask;
+    if ((from + (uint32_t) n * 2) > (mask + 1))
+        return x;
+    video_15to32_run_doubled(&p[x << 1], (const uint16_t *) &svga->vram[from], n, channels);
+    return x + n;
+}
+
 void
 svga_render_15bpp_lowres(svga_t *svga)
 {
@@ -1992,6 +2015,8 @@ svga_render_15bpp_lowres(svga_t *svga)
 
             /* KairoX86#233: the pixels left of hdisp to the GPU */
             x = render_gpu_wide(svga, p, 15, (svga->render == svga_render_15bpp_lowres) && (svga->conv_16to32 == svga_conv_16to32));
+            if (x == 0) /* KairoX86#443 */
+                x = render_15bpp_lowres_default(svga, p, 0);
             for (; x <= (svga->hdisp + svga->scrollcache); x += 4) {
                 dat = *(uint32_t *) (&svga->vram[(svga->memaddr + (x << 1)) & svga->vram_display_mask]);
 
@@ -2019,6 +2044,8 @@ svga_render_15bpp_lowres(svga_t *svga)
             if (!svga->remap_required) {
                 /* KairoX86#233: the pixels left of hdisp to the GPU */
                 x = render_gpu_wide(svga, p, 15, (svga->render == svga_render_15bpp_lowres) && (svga->conv_16to32 == svga_conv_16to32));
+                if (x == 0) /* KairoX86#443 */
+                    x = render_15bpp_lowres_default(svga, p, 0);
                 p += 2 * x;
                 for (; x <= (svga->hdisp + svga->scrollcache); x += 4) {
                     dat = *(uint32_t *) (&svga->vram[(svga->memaddr + (x << 1)) & svga->vram_display_mask]);
