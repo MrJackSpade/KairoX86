@@ -2885,6 +2885,42 @@ svga_writeb_linear(uint32_t addr, uint8_t val, void *priv)
     svga->vram[addr]              = val;
 }
 
+/* KairoX86#442: the [len] bytes (2 or 4) of [val] from [addr] in one go, as [len] byte writes through
+   svga_write_common make them on the plain packed path (their touches are the caller's): when they all take that path,
+   land in one dword of video memory and every plane they land in is enabled. Returns 0, having done nothing, otherwise. */
+static __inline int
+svga_packed_whole(svga_t *svga, uint32_t addr, uint32_t val, uint8_t linear, uint32_t len)
+{
+    if (!svga_packed_plain(svga) || (((addr & 3) + len) > 4))
+        return 0;
+    /* Each byte's decode is the first's plus its offset: the window's bounds are dword aligned */
+    const uint32_t to = linear ? addr : svga_decode_addr(svga, addr, 1);
+    if (to != 0xffffffff) {
+        const uint32_t planes = ((1u << len) - 1) << (to & 3);
+        if ((((to & 3) + len) > 4) || ((svga->writemask & planes) != planes))
+            return 0;
+    }
+    if (!linear) {
+        for (uint32_t i = 0; i < len; i++)
+            xga_write_test(addr + i, (uint8_t) (val >> (i << 3)), svga);
+        if (to == 0xffffffff)
+            return 1;
+    }
+    if (!(svga->gdcreg[6] & 1))
+        svga->fullchange = 2;
+    uint32_t dword = (to & ~3) & svga->decode_mask;
+    if (dword >= svga->vram_max)
+        return 1;
+    dword &= svga->vram_mask;
+    svga->changedvram[dword >> 12] = svga->monitor->mon_changeframecount;
+    const int rot = svga->gdcreg[3] & 7;
+    for (uint32_t i = 0; i < len; i++) {
+        const uint8_t b                         = (uint8_t) (val >> (i << 3));
+        svga->vram[dword | ((to & 3) + i)] = (b >> rot) | (b << (8 - rot));
+    }
+    return 1;
+}
+
 void
 svga_writew_common(uint32_t addr, uint16_t val, uint8_t linear, void *priv)
 {
@@ -2897,8 +2933,10 @@ svga_writew_common(uint32_t addr, uint16_t val, uint8_t linear, void *priv)
            Keep the byte-wise VRAM behavior but charge the bus timing once. */
     if (!svga->fast) {
         int bus_cycles = cycles - svga->monitor->mon_video_timing_write_w;
-        svga_write_common(addr, val, linear, priv);
-        svga_write_common(addr + 1, val >> 8, linear, priv);
+        if (!svga_packed_whole(svga, addr, val, linear, 2)) { /* KairoX86#442 */
+            svga_write_common(addr, val, linear, priv);
+            svga_write_common(addr + 1, val >> 8, linear, priv);
+        }
         cycles = bus_cycles;
         return;
     }
@@ -2960,10 +2998,12 @@ svga_writel_common(uint32_t addr, uint32_t val, uint8_t linear, void *priv)
            Keep the byte-wise VRAM behavior but charge the bus timing once. */
     if (!svga->fast) {
         int bus_cycles = cycles - svga->monitor->mon_video_timing_write_l;
-        svga_write_common(addr, val, linear, priv);
-        svga_write_common(addr + 1, val >> 8, linear, priv);
-        svga_write_common(addr + 2, val >> 16, linear, priv);
-        svga_write_common(addr + 3, val >> 24, linear, priv);
+        if (!svga_packed_whole(svga, addr, val, linear, 4)) { /* KairoX86#442 */
+            svga_write_common(addr, val, linear, priv);
+            svga_write_common(addr + 1, val >> 8, linear, priv);
+            svga_write_common(addr + 2, val >> 16, linear, priv);
+            svga_write_common(addr + 3, val >> 24, linear, priv);
+        }
         cycles = bus_cycles;
         return;
     }

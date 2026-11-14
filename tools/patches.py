@@ -6900,6 +6900,17 @@ KAIROX86_PACKED_BYTE_WRITES = [
      '        return;\n    }\n\n    /* KairoX86#442: the plain packed write, as the general path below makes it */\n    if (svga_packed_plain(svga)) {\n        if (!linear) {\n            xga_write_test(addr, val, svga);\n            addr = svga_decode_addr(svga, addr, 1);\n            if (addr == 0xffffffff)\n                return;\n        }\n        if (!(svga->gdcreg[6] & 1))\n            svga->fullchange = 2;\n        const uint32_t plane = addr & 3;\n        if (!(writemask2 & (1 << plane)))\n            return;\n        addr = (addr & ~3) & svga->decode_mask;\n        if (addr >= svga->vram_max)\n            return;\n        addr &= svga->vram_mask;\n        svga->changedvram[addr >> 12] = svga->monitor->mon_changeframecount;\n        svga->vram[addr | plane]      = (val >> (svga->gdcreg[3] & 7)) | (val << (8 - (svga->gdcreg[3] & 7)));\n        return;\n    }\n\n    if (!linear) {\n        xga_write_test(addr, val, svga);\n        addr = svga_decode_addr(svga, addr, 1);\n        if (addr == 0xffffffff) {'),
 ]
 
+
+# KairoX86#442: word and dword writes on the plain packed path taken whole, not as byte writes.
+KAIROX86_PACKED_WIDE_WRITES = [
+    ('86box/src/video/vid_svga.c', 'void\nsvga_writew_common(uint32_t addr, uint16_t val, uint8_t linear, void *priv)\n{',
+     "/* KairoX86#442: the [len] bytes (2 or 4) of [val] from [addr] in one go, as [len] byte writes through\n   svga_write_common make them on the plain packed path (their touches are the caller's): when they all take that path,\n   land in one dword of video memory and every plane they land in is enabled. Returns 0, having done nothing, otherwise. */\nstatic __inline int\nsvga_packed_whole(svga_t *svga, uint32_t addr, uint32_t val, uint8_t linear, uint32_t len)\n{\n    if (!svga_packed_plain(svga) || (((addr & 3) + len) > 4))\n        return 0;\n    /* Each byte's decode is the first's plus its offset: the window's bounds are dword aligned */\n    const uint32_t to = linear ? addr : svga_decode_addr(svga, addr, 1);\n    if (to != 0xffffffff) {\n        const uint32_t planes = ((1u << len) - 1) << (to & 3);\n        if ((((to & 3) + len) > 4) || ((svga->writemask & planes) != planes))\n            return 0;\n    }\n    if (!linear) {\n        for (uint32_t i = 0; i < len; i++)\n            xga_write_test(addr + i, (uint8_t) (val >> (i << 3)), svga);\n        if (to == 0xffffffff)\n            return 1;\n    }\n    if (!(svga->gdcreg[6] & 1))\n        svga->fullchange = 2;\n    uint32_t dword = (to & ~3) & svga->decode_mask;\n    if (dword >= svga->vram_max)\n        return 1;\n    dword &= svga->vram_mask;\n    svga->changedvram[dword >> 12] = svga->monitor->mon_changeframecount;\n    const int rot = svga->gdcreg[3] & 7;\n    for (uint32_t i = 0; i < len; i++) {\n        const uint8_t b                         = (uint8_t) (val >> (i << 3));\n        svga->vram[dword | ((to & 3) + i)] = (b >> rot) | (b << (8 - rot));\n    }\n    return 1;\n}\n\nvoid\nsvga_writew_common(uint32_t addr, uint16_t val, uint8_t linear, void *priv)\n{"),
+    ('86box/src/video/vid_svga.c', '        int bus_cycles = cycles - svga->monitor->mon_video_timing_write_w;\n        svga_write_common(addr, val, linear, priv);\n        svga_write_common(addr + 1, val >> 8, linear, priv);\n        cycles = bus_cycles;',
+     '        int bus_cycles = cycles - svga->monitor->mon_video_timing_write_w;\n        if (!svga_packed_whole(svga, addr, val, linear, 2)) { /* KairoX86#442 */\n            svga_write_common(addr, val, linear, priv);\n            svga_write_common(addr + 1, val >> 8, linear, priv);\n        }\n        cycles = bus_cycles;'),
+    ('86box/src/video/vid_svga.c', '        int bus_cycles = cycles - svga->monitor->mon_video_timing_write_l;\n        svga_write_common(addr, val, linear, priv);\n        svga_write_common(addr + 1, val >> 8, linear, priv);\n        svga_write_common(addr + 2, val >> 16, linear, priv);\n        svga_write_common(addr + 3, val >> 24, linear, priv);\n        cycles = bus_cycles;',
+     '        int bus_cycles = cycles - svga->monitor->mon_video_timing_write_l;\n        if (!svga_packed_whole(svga, addr, val, linear, 4)) { /* KairoX86#442 */\n            svga_write_common(addr, val, linear, priv);\n            svga_write_common(addr + 1, val >> 8, linear, priv);\n            svga_write_common(addr + 2, val >> 16, linear, priv);\n            svga_write_common(addr + 3, val >> 24, linear, priv);\n        }\n        cycles = bus_cycles;'),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -7078,6 +7089,7 @@ PATCHES = {
     'kairox86-15bpp-lines': KAIROX86_15BPP_LINES,
     'kairox86-15bpp-lowres-lines': KAIROX86_15BPP_LOWRES_LINES,
     'kairox86-packed-byte-writes': KAIROX86_PACKED_BYTE_WRITES,
+    'kairox86-packed-wide-writes': KAIROX86_PACKED_WIDE_WRITES,
 }
 
 ADDED = [
