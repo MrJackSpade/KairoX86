@@ -26,9 +26,9 @@ import com.mrjackspade.kairo.frontend.R as FrontendR
  * 6. The name (the shared engine's page).
  *
  * Create writes the machine folder: its `86box.cfg` (the preset's, or a new one, with every choice
- * made), the preset's CMOS while its machine and hard disk controller are the preset's own, with the
- * hard disk the player chose in it (KairoX86#341: [X86Cmos]), the blank disk, and the drives'
- * images, copied in (unpacked from an archive).
+ * made), the blank disk, and the drives' images, copied in (unpacked from an archive). No CMOS: each
+ * board starts on its BIOS's defaults, and the presets' free machine (KairoX86#446) detects its disks
+ * and takes its boot order from 86box.cfg at every start.
  */
 object X86NewGame {
     private const val CUSTOM = "custom"
@@ -308,17 +308,6 @@ object X86NewGame {
         config[X86Library.HARD_DISKS, "hdd_01_parameters"] = geometry?.let { "${it.sectors}, ${it.heads}, ${it.cylinders}, 0, $bus" }
         config[X86Library.HARD_DISKS, "hdd_01_ide_channel"] = geometry?.takeIf { bus == "ide" }?.let { "0:0" }
         val files = mutableListOf(BlankDisk.File("86box.cfg") { output -> output.write(config.toString().toByteArray()) })
-        // The preset's CMOS holds its board's settings (its boot order among them) and its disk: kept
-        // while the board and its hard disk controller are the preset's, the chosen disk written in
-        // (KairoX86#341). Another board, or a disk on another controller, starts on its BIOS's defaults.
-        if (preset != null && values[X86Settings.machine.option.id] == preset.machine &&
-            values[X86Settings.hdc.option.id] == (X86Settings.hdc.read(presetConfig ?: config) ?: X86Settings.hdc.option.default(values))) {
-            for (path in preset.files.filter { it != "86box.cfg" }) files += BlankDisk.File(path) { output ->
-                val stored = context.assets.open("presets/${preset.id}/$path").use { it.readBytes() }
-                output.write(if (path != preset.cmosFile) stored
-                    else checkNotNull(preset.cmos).withDriveC(stored, geometry?.let { X86Cmos.Disk(it.cylinders, it.heads, it.sectors) }))
-            }
-        }
         geometry?.let { files += BlankDisk.File(X86Presets.HARD_DISK) { output -> X86BlankDisk(it.cylinders, it.heads, it.sectors).write(output) } }
         // Each drive's image, with the files it is made of, copied in by their own names (one image in two
         // drives, once), and named in 86box.cfg; two different files of one name cannot both be there.

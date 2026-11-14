@@ -465,12 +465,12 @@ class MainActivity : MachineActivity<X86Entry>() {
     override val keyboardNamed: (String) -> GuestKeyboardLayout = X86Keys::layoutFor
 
     /**
-     * The free firmware the app ships (assets/free-firmware: GLaBIOS, the character ROM), each file
-     * installed at its place in the ROM folder beside the player's own, with the shared install, which
-     * writes a file again only when the app changed.
+     * The free firmware the app ships (assets/free-firmware, X86Firmware.FREE), each file installed at its
+     * place in the ROM folder beside the player's own, with the shared install, which writes a file again
+     * only when the app changed.
      */
     private fun installFreeFirmware(progress: (String) -> Unit) {
-        for (file in FREE_FIRMWARE) ShippedAssets.install(this, "free-firmware/$file", File(firmwareFolder, file), progress)
+        for (file in X86Firmware.FREE) ShippedAssets.install(this, "free-firmware/$file", File(firmwareFolder, file), progress)
     }
 
     /** The guest's MIDI can go to a MIDI port of the device: the MIDI out device "MIDI port" (KairoX86#305). */
@@ -517,10 +517,6 @@ class MainActivity : MachineActivity<X86Entry>() {
     private companion object {
         /** The wordmark's accent: the icon's (shared tools/app_icon/presets/kairox86.json). */
         const val BRAND_ACCENT = 0xff1FD6E8.toInt()
-
-        /** The free firmware's files, at their places in the ROM set (kairox86/build.gradle.kts). */
-        val FREE_FIRMWARE = listOf("machines/glabios/GLABIOS_0.4.0_8P.ROM", "machines/glabios/GLABIOS_0.4.0_VP.ROM",
-            "video/mda/mda.rom", "machines/kairo_pc/seabios.bin", "video/kairo/seavgabios_cirrus.bin", X86SoundFonts.SHIPPED)
 
         /** The picker of a SoundFont for a game's FluidSynth (soundFontImport). */
         private const val SOUND_FONT_IMPORT_REQUEST = FIRST_PRODUCT_REQUEST

@@ -12,7 +12,8 @@ apply(from = rootProject.file("shared/gradle/kairo-app.gradle"))
 android.defaultConfig.externalNativeBuild.cmake.targets.add("86Box")
 
 // The free firmware the app ships (docs/licensing.md), in assets/free-firmware at its place in the
-// ROM set (machines/glabios/..., video/mda/...); MainActivity installs each file into the ROM folder.
+// ROM set (machines/glabios/..., video/mda/...); MainActivity installs each file of X86Firmware.FREE
+// into the ROM folder.
 // Not under roms/: the release audit forbids the ROM set's own layout in a package.
 val freeFirmwareAssets = layout.buildDirectory.dir("generated/free-firmware-assets")
 val stageFreeFirmware = tasks.register<Copy>("stageFreeFirmware") {
