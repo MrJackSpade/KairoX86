@@ -6571,6 +6571,53 @@ KAIROX86_SEABIOS = [
      "        *psize = (~(val & mask)) + 1;\n    } else if (type == PCI_REGION_TYPE_IO) {\n        // KairoX86: x86 I/O space is 64 KB, and an I/O BAR may implement\n        // only its low 16 bits (the PIIX4's do), so size it within them.\n        *psize = ((~(val & mask)) + 1) & 0xffff;\n    } else {\n"),
 ]
 
+# KairoX86#447: on Android a machine's disks reach 86Box as session links to the descriptors the app opened through
+# the Storage Access Framework (/proc/self/fd/N), and opening such a link reopens the file by its path, which shared
+# storage refuses an app without storage permission. plat_held_fd gives a duplicate of the descriptor a path links to
+# (-1 on every other host and path); plat_fopen reads and writes through it with its own position, and minivhd, the
+# Aaru loader, CD audio tracks (sf_open_fd) and CHD images (libchdr's callbacks) go through it too.
+KAIROX86_HELD_DESCRIPTORS = [
+    ('86box/src/include/86box/plat.h',
+     'extern FILE    *plat_fopen64(const char *path, const char *mode);\nextern void     plat_remove(char *path);\n',
+     'extern FILE    *plat_fopen64(const char *path, const char *mode);\n/* KairoX86#447: a duplicate of the descriptor the app holds for path, -1 for any other path */\nextern int      plat_held_fd(const char *path);\nextern void     plat_remove(char *path);\n'),
+    ('86box/src/unix/sdl_plat.c',
+     '\n#include <stdbool.h>\n#include <stdlib.h>\n',
+     '\n#include <errno.h>\n#include <stdbool.h>\n#include <stdio.h>\n#include <stdlib.h>\n'),
+    ('86box/src/unix/sdl_plat.c',
+     '}\n\nFILE *\nplat_fopen(const char *path, const char *mode)\n{\n    return fopen(path, mode);\n}\n',
+     '}\n\n/* KairoX86#447: on Android a machine\'s disks reach 86Box as links in its session folder to the\n   descriptors the app opened through the Storage Access Framework (/proc/self/fd/N). Opening such\n   a link reopens the file by its path, which shared storage refuses an app without storage\n   permission; the descriptor itself the app may use. plat_held_fd gives a duplicate of the\n   descriptor a path links to, -1 for any other path (and on every other host). */\nint\nplat_held_fd(const char *path)\n{\n#ifdef __ANDROID__\n    static const char prefix[] = "/proc/self/fd/";\n    char              target[64];\n    const ssize_t     len = readlink(path, target, sizeof(target) - 1);\n\n    if ((len <= (ssize_t) (sizeof(prefix) - 1)) || strncmp(target, prefix, sizeof(prefix) - 1))\n        return -1;\n    target[len] = 0;\n    char      *end;\n    const long fd = strtol(target + sizeof(prefix) - 1, &end, 10);\n    if ((*end != 0) || (fd < 0))\n        return -1;\n    return dup((int) fd);\n#else\n    (void) path;\n    return -1;\n#endif\n}\n\n#ifdef __ANDROID__\n/* A stream over a held descriptor, with its own position (pread/pwrite), so two streams over one\n   file never move each other\'s. */\ntypedef struct held_file_t {\n    int   fd;\n    off_t pos;\n    bool  append;\n} held_file_t;\n\nstatic int\nheld_read(void *cookie, char *buf, int size)\n{\n    held_file_t  *f = (held_file_t *) cookie;\n    const ssize_t n = pread(f->fd, buf, (size_t) size, f->pos);\n\n    if (n > 0)\n        f->pos += n;\n    return (int) n;\n}\n\nstatic int\nheld_write(void *cookie, const char *buf, int size)\n{\n    held_file_t *f = (held_file_t *) cookie;\n    struct stat  st;\n\n    if (f->append) {\n        if (fstat(f->fd, &st) != 0)\n            return -1;\n        f->pos = st.st_size;\n    }\n    const ssize_t n = pwrite(f->fd, buf, (size_t) size, f->pos);\n    if (n > 0)\n        f->pos += n;\n    return (int) n;\n}\n\nstatic fpos_t\nheld_seek(void *cookie, fpos_t offset, int whence)\n{\n    held_file_t *f = (held_file_t *) cookie;\n    struct stat  st;\n    off_t        base;\n\n    switch (whence) {\n        case SEEK_SET:\n            base = 0;\n            break;\n        case SEEK_CUR:\n            base = f->pos;\n            break;\n        case SEEK_END:\n            if (fstat(f->fd, &st) != 0)\n                return -1;\n            base = st.st_size;\n            break;\n        default:\n            errno = EINVAL;\n            return -1;\n    }\n    if ((base + offset) < 0) {\n        errno = EINVAL;\n        return -1;\n    }\n    f->pos = base + offset;\n    return f->pos;\n}\n\nstatic int\nheld_close(void *cookie)\n{\n    held_file_t *f = (held_file_t *) cookie;\n    const int    ret = close(f->fd);\n\n    free(f);\n    return ret;\n}\n\nstatic FILE *\nheld_fopen(int fd, const char *mode)\n{\n    const bool   writes = (strchr(mode, \'w\') != NULL) || (strchr(mode, \'a\') != NULL) || (strchr(mode, \'+\') != NULL);\n    held_file_t *f      = (held_file_t *) calloc(1, sizeof(held_file_t));\n\n    if (f == NULL) {\n        close(fd);\n        return NULL;\n    }\n    f->fd     = fd;\n    f->append = (strchr(mode, \'a\') != NULL);\n    if ((strchr(mode, \'w\') != NULL) && (ftruncate(fd, 0) != 0)) {\n        held_close(f);\n        return NULL;\n    }\n    FILE *fp = funopen(f, held_read, writes ? held_write : NULL, held_seek, held_close);\n    if (fp == NULL)\n        held_close(f);\n    return fp;\n}\n#endif\n\nFILE *\nplat_fopen(const char *path, const char *mode)\n{\n#ifdef __ANDROID__\n    const int fd = plat_held_fd(path);\n    if (fd >= 0)\n        return held_fopen(fd, mode);\n#endif\n    return fopen(path, mode);\n}\n'),
+    ('86box/src/unix/sdl_plat.c',
+     'plat_fopen64(const char *path, const char *mode)\n{\n    return fopen(path, mode);\n}\n\n',
+     'plat_fopen64(const char *path, const char *mode)\n{\n    return plat_fopen(path, mode);\n}\n\n'),
+    ('86box/src/unix/CMakeLists.txt',
+     'target_include_directories(plat PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/headless_sdl)\n\n',
+     "target_include_directories(plat PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/headless_sdl)\n# KairoX86#447: bionic declares funopen (sdl_plat.c's streams over held descriptors) for BSD sources\nif(ANDROID)\n    set_source_files_properties(sdl_plat.c PROPERTIES COMPILE_DEFINITIONS _BSD_SOURCE)\nendif()\n\n"),
+    ('86box/src/disk/minivhd/minivhd_util.c',
+     '\nFILE*\n',
+     "\n#ifndef _WIN32\n/* KairoX86#447: 86Box's own open, which on Android reaches the disks the app holds */\nextern FILE *plat_fopen(const char *path, const char *mode);\n#endif\n\nFILE*\n"),
+    ('86box/src/disk/minivhd/minivhd_util.c',
+     '    f = fopen(path, mode);\n',
+     '    f = plat_fopen(path, mode);\n'),
+    ('86box/src/cdrom/cdrom_image.c',
+     '        audio->file = sf_open(filename, SFM_READ, &audio->info);\n',
+     '    {\n        /* KairoX86#447: an audio track the app holds is read through its descriptor */\n        const int held = plat_held_fd(filename);\n        audio->file    = (held >= 0) ? sf_open_fd(held, SFM_READ, &audio->info, 1) : sf_open(filename, SFM_READ, &audio->info);\n    }\n'),
+    ('86box/src/cdrom/cdrom_chd.c',
+     '#include <string.h>\n#include <wchar.h>\n',
+     '#include <string.h>\n#include <unistd.h>\n#include <wchar.h>\n'),
+    ('86box/src/cdrom/cdrom_chd.c',
+     'typedef struct chd_image_t chd_image_t;\n\n',
+     'typedef struct chd_image_t chd_image_t;\n\n/* KairoX86#447: a CHD the app holds (plat_held_fd) is read through 86Box\'s own stream over its\n   descriptor, which libchdr owns and closes; any other by its path. */\nstatic uint64_t\nheld_chd_size(void *fp)\n{\n    if (fseeko((FILE *) fp, 0, SEEK_END) != 0)\n        return (uint64_t) -1;\n    const off_t size = ftello((FILE *) fp);\n    return (size < 0) ? (uint64_t) -1 : (uint64_t) size;\n}\n\nstatic size_t\nheld_chd_read(void *buf, size_t size, size_t count, void *fp)\n{\n    return fread(buf, size, count, (FILE *) fp);\n}\n\nstatic int\nheld_chd_close(void *fp)\n{\n    return fclose((FILE *) fp);\n}\n\nstatic int\nheld_chd_seek(void *fp, int64_t offset, int whence)\n{\n    return fseeko((FILE *) fp, (off_t) offset, whence);\n}\n\nstatic const core_file_callbacks held_chd_callbacks = { held_chd_size, held_chd_read, held_chd_close, held_chd_seek };\n\nstatic void\nchd_open_any(const char *path, chd_file **file)\n{\n    const int held = plat_held_fd(path);\n\n    if (held < 0) {\n        chd_open(path, CHD_OPEN_READ, NULL, file);\n        return;\n    }\n    close(held);\n    FILE *fp = plat_fopen(path, "rb");\n    if (fp == NULL) {\n        *file = NULL;\n        return;\n    }\n    if (chd_open_core_file_callbacks(&held_chd_callbacks, fp, CHD_OPEN_READ, NULL, file) != CHDERR_NONE)\n        *file = NULL;\n}\n\n'),
+    ('86box/src/cdrom/cdrom_chd.c',
+     '    chd_open(path, CHD_OPEN_READ, NULL, &file);\n',
+     '    chd_open_any(path, &file);\n'),
+    ('86box/src/cdrom/cdrom_chd.c',
+     '    chd_open(fn, CHD_OPEN_READ, NULL, &file);\n',
+     '    chd_open_any(fn, &file);\n'),
+    ('86box/src/cdrom/cdrom_aaru.c',
+     '    stream = fopen(filename, "rb");\n',
+     '    /* KairoX86#447: 86Box\'s own open, which on Android reaches the images the app holds */\n    stream = plat_fopen(filename, "rb");\n'),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -6727,6 +6774,7 @@ PATCHES = {
     'kairox86-free-machine': KAIROX86_FREE_MACHINE,
     'kairox86-gd5446-free-bios': KAIROX86_GD5446_FREE_BIOS,
     'kairox86-seabios': KAIROX86_SEABIOS,
+    'kairox86-held-descriptors': KAIROX86_HELD_DESCRIPTORS,
 }
 
 ADDED = [

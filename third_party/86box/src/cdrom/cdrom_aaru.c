@@ -993,7 +993,8 @@ static int aaruf_identify_local(const char *filename)
 
     FILE *stream = NULL;
 
-    stream = fopen(filename, "rb");
+    /* KairoX86#447: 86Box's own open, which on Android reaches the images the app holds */
+    stream = plat_fopen(filename, "rb");
 
     if (stream == NULL)
         return errno;

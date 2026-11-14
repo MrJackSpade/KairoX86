@@ -201,6 +201,11 @@ vhd_get_created_time(MVHDMeta *vhdm)
 }
 
 
+#ifndef _WIN32
+/* KairoX86#447: 86Box's own open, which on Android reaches the disks the app holds */
+extern FILE *plat_fopen(const char *path, const char *mode);
+#endif
+
 FILE*
 mvhd_fopen(const char* path, const char* mode, int* err)
 {
@@ -229,7 +234,7 @@ mvhd_fopen(const char* path, const char* mode, int* err)
         }
     }
 #else
-    f = fopen(path, mode);
+    f = plat_fopen(path, mode);
     if (f == NULL) {
         mvhd_errno = errno;
         *err = MVHD_ERR_FILE;

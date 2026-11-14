@@ -4,7 +4,9 @@
 #include <SDL3/SDL.h>
 #endif
 
+#include <errno.h>
 #include <stdbool.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -45,16 +47,149 @@ plat_chdir(char *str)
     return chdir(str);
 }
 
+/* KairoX86#447: on Android a machine's disks reach 86Box as links in its session folder to the
+   descriptors the app opened through the Storage Access Framework (/proc/self/fd/N). Opening such
+   a link reopens the file by its path, which shared storage refuses an app without storage
+   permission; the descriptor itself the app may use. plat_held_fd gives a duplicate of the
+   descriptor a path links to, -1 for any other path (and on every other host). */
+int
+plat_held_fd(const char *path)
+{
+#ifdef __ANDROID__
+    static const char prefix[] = "/proc/self/fd/";
+    char              target[64];
+    const ssize_t     len = readlink(path, target, sizeof(target) - 1);
+
+    if ((len <= (ssize_t) (sizeof(prefix) - 1)) || strncmp(target, prefix, sizeof(prefix) - 1))
+        return -1;
+    target[len] = 0;
+    char      *end;
+    const long fd = strtol(target + sizeof(prefix) - 1, &end, 10);
+    if ((*end != 0) || (fd < 0))
+        return -1;
+    return dup((int) fd);
+#else
+    (void) path;
+    return -1;
+#endif
+}
+
+#ifdef __ANDROID__
+/* A stream over a held descriptor, with its own position (pread/pwrite), so two streams over one
+   file never move each other's. */
+typedef struct held_file_t {
+    int   fd;
+    off_t pos;
+    bool  append;
+} held_file_t;
+
+static int
+held_read(void *cookie, char *buf, int size)
+{
+    held_file_t  *f = (held_file_t *) cookie;
+    const ssize_t n = pread(f->fd, buf, (size_t) size, f->pos);
+
+    if (n > 0)
+        f->pos += n;
+    return (int) n;
+}
+
+static int
+held_write(void *cookie, const char *buf, int size)
+{
+    held_file_t *f = (held_file_t *) cookie;
+    struct stat  st;
+
+    if (f->append) {
+        if (fstat(f->fd, &st) != 0)
+            return -1;
+        f->pos = st.st_size;
+    }
+    const ssize_t n = pwrite(f->fd, buf, (size_t) size, f->pos);
+    if (n > 0)
+        f->pos += n;
+    return (int) n;
+}
+
+static fpos_t
+held_seek(void *cookie, fpos_t offset, int whence)
+{
+    held_file_t *f = (held_file_t *) cookie;
+    struct stat  st;
+    off_t        base;
+
+    switch (whence) {
+        case SEEK_SET:
+            base = 0;
+            break;
+        case SEEK_CUR:
+            base = f->pos;
+            break;
+        case SEEK_END:
+            if (fstat(f->fd, &st) != 0)
+                return -1;
+            base = st.st_size;
+            break;
+        default:
+            errno = EINVAL;
+            return -1;
+    }
+    if ((base + offset) < 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    f->pos = base + offset;
+    return f->pos;
+}
+
+static int
+held_close(void *cookie)
+{
+    held_file_t *f = (held_file_t *) cookie;
+    const int    ret = close(f->fd);
+
+    free(f);
+    return ret;
+}
+
+static FILE *
+held_fopen(int fd, const char *mode)
+{
+    const bool   writes = (strchr(mode, 'w') != NULL) || (strchr(mode, 'a') != NULL) || (strchr(mode, '+') != NULL);
+    held_file_t *f      = (held_file_t *) calloc(1, sizeof(held_file_t));
+
+    if (f == NULL) {
+        close(fd);
+        return NULL;
+    }
+    f->fd     = fd;
+    f->append = (strchr(mode, 'a') != NULL);
+    if ((strchr(mode, 'w') != NULL) && (ftruncate(fd, 0) != 0)) {
+        held_close(f);
+        return NULL;
+    }
+    FILE *fp = funopen(f, held_read, writes ? held_write : NULL, held_seek, held_close);
+    if (fp == NULL)
+        held_close(f);
+    return fp;
+}
+#endif
+
 FILE *
 plat_fopen(const char *path, const char *mode)
 {
+#ifdef __ANDROID__
+    const int fd = plat_held_fd(path);
+    if (fd >= 0)
+        return held_fopen(fd, mode);
+#endif
     return fopen(path, mode);
 }
 
 FILE *
 plat_fopen64(const char *path, const char *mode)
 {
-    return fopen(path, mode);
+    return plat_fopen(path, mode);
 }
 
 int
