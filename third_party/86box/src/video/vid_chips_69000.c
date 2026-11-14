@@ -1493,6 +1493,30 @@ chips_69000_process_pixel_at(chips_69000_t* chips, uint32_t pixel, uint32_t src_
         }
     }
 
+    {
+        /* KairoX86#444: the source copy (ROP 0xCC) with no colour key and no transparent mono pattern stores the
+           source pixel whatever the destination and the pattern are: they aren't read */
+        const uint32_t ctrl = chips->bitblt_running.bitblt.bitblt_control;
+
+        if (((ctrl & 0xff) == 0xcc) && !(ctrl & (1 << 14)) && ((ctrl & ((1 << 18) | (1 << 17))) != ((1 << 18) | (1 << 17)))) {
+            switch (chips->bitblt_running.bytes_per_pixel) {
+                case 1:
+                    chips_69000_writeb_linear(dest_addr, pixel & 0xFF, chips);
+                    break;
+                case 2:
+                    chips_69000_writeb_linear(dest_addr, pixel & 0xFF, chips);
+                    chips_69000_writeb_linear(dest_addr + 1, (pixel >> 8) & 0xFF, chips);
+                    break;
+                case 3:
+                    chips_69000_writeb_linear(dest_addr, pixel & 0xFF, chips);
+                    chips_69000_writeb_linear(dest_addr + 1, (pixel >> 8) & 0xFF, chips);
+                    chips_69000_writeb_linear(dest_addr + 2, (pixel >> 16) & 0xFF, chips);
+                    break;
+            }
+            return;
+        }
+    }
+
     switch (chips->bitblt_running.bytes_per_pixel) {
         case 1: /* 8 bits-per-pixel. */
             {

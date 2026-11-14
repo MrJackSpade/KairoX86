@@ -6846,6 +6846,13 @@ KAIROX86_COMPILED_POPF = [
      'ropCWDE,        ropCDQ,         NULL,           ropWAIT,        ropPUSHFD,      ropPOPFD,       ropSAHF,'),
 ]
 
+
+# KairoX86#444: the B69000's per-pixel BitBLT stores a plain source copy without reading the destination or pattern.
+KAIROX86_CHIPS69000_SRCCOPY = [
+    ('86box/src/video/vid_chips_69000.c', '            if (chips->bitblt_running.bytes_per_pixel >= 3)\n                pixel |= chips_69000_readb_linear(src_at + 2, chips) << 16;\n        }\n    }\n\n    switch (chips->bitblt_running.bytes_per_pixel) {\n        case 1: /* 8 bits-per-pixel. */\n            {\n                dest_pixel = chips_69000_readb_linear(dest_addr, chips);\n                break;\n            }',
+     "            if (chips->bitblt_running.bytes_per_pixel >= 3)\n                pixel |= chips_69000_readb_linear(src_at + 2, chips) << 16;\n        }\n    }\n\n    {\n        /* KairoX86#444: the source copy (ROP 0xCC) with no colour key and no transparent mono pattern stores the\n           source pixel whatever the destination and the pattern are: they aren't read */\n        const uint32_t ctrl = chips->bitblt_running.bitblt.bitblt_control;\n\n        if (((ctrl & 0xff) == 0xcc) && !(ctrl & (1 << 14)) && ((ctrl & ((1 << 18) | (1 << 17))) != ((1 << 18) | (1 << 17)))) {\n            switch (chips->bitblt_running.bytes_per_pixel) {\n                case 1:\n                    chips_69000_writeb_linear(dest_addr, pixel & 0xFF, chips);\n                    break;\n                case 2:\n                    chips_69000_writeb_linear(dest_addr, pixel & 0xFF, chips);\n                    chips_69000_writeb_linear(dest_addr + 1, (pixel >> 8) & 0xFF, chips);\n                    break;\n                case 3:\n                    chips_69000_writeb_linear(dest_addr, pixel & 0xFF, chips);\n                    chips_69000_writeb_linear(dest_addr + 1, (pixel >> 8) & 0xFF, chips);\n                    chips_69000_writeb_linear(dest_addr + 2, (pixel >> 16) & 0xFF, chips);\n                    break;\n            }\n            return;\n        }\n    }\n\n    switch (chips->bitblt_running.bytes_per_pixel) {\n        case 1: /* 8 bits-per-pixel. */\n            {\n                dest_pixel = chips_69000_readb_linear(dest_addr, chips);\n                break;\n            }"),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -7020,6 +7027,7 @@ PATCHES = {
     'kairox86-mmx-enter-once-unrolled': KAIROX86_MMX_ENTER_ONCE_UNROLLED,
     'kairox86-diag-unrolled-ins': KAIROX86_DIAG_UNROLLED_INS,
     'kairox86-compiled-popf': KAIROX86_COMPILED_POPF,
+    'kairox86-chips69000-srccopy': KAIROX86_CHIPS69000_SRCCOPY,
 }
 
 ADDED = [
