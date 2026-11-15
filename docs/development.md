@@ -27,6 +27,19 @@ Every change to the core's code is exact or it does not go in. The standard is `
 
 `tools/exact.ps1 -Local` runs the same standard on the PC: both cores built with llvm-mingw, each machine under `shared\tools\run-limited.ps1`, the reference disks in `.build\exact-ref\<machine>` (the same `base.vhd` and `nvr/`). It is the check for a change that is not about the device's speed or its recompiler: what the guest does is the same, but the PC's recompiler generates x86-64 code, so a change to the ARM64 code generation still goes through `-Device`. What each change gained, and what was tried and dropped, is in [the core's speed record](core-performance.md).
 
+The standard's free-machine entries (`free-486`, `free-pentium`) boot the app's own firmware: `tools/exact.ps1` gives the core the ROM set with `firmware/` laid over it, as the app installs its free firmware beside the player's (`-Local` mirrors the set into `.build\exact\romset`; `-Device` pushes `firmware/` into the device's set).
+
+### The free machine
+
+The presets' board, `kairo_pc` (KairoX86#446, [source import](source-import.md#the-free-machine)), boots SeaBIOS and SeaVGABIOS, which `tools/seabios/build.sh` builds from `third_party/seabios` into `firmware/` (Git Bash, with the toolchain its header names; `--check` fails unless a rebuild matches the committed files byte for byte). A machine folder's `86box.cfg` sets its boot order in `[KairoX86]` `boot_order` (`a`, `c` and `cd`, comma-separated; `a,cd,c` when it names none), and `firmware_log = 1` there writes SeaBIOS's log to `firmware.log` in the machine's folder, on the PC and the device alike. A SeaBIOS built with `CONFIG_DEBUG_LEVEL=8` added to `tools/seabios/seabios.config` logs every step.
+
+`core/test/free/check_free.py` proves the machine on the PC with small guest programs, each against a reference board (the 486AP4 with an S3 Trio64V2/DX and their own BIOSes): every BIOS video mode's picture and VESA mode 101h pixel for pixel, the boot order across floppy, hard disk and El Torito CD, and a Sound Blaster 16 tone. Run it with the `game_profile` build and the ROM set `tools/exact.ps1 -Local` lays the free firmware over; name groups (`modes`, `vbe`, `boot`, `sb16`) to run part of it:
+
+```powershell
+python core\test\free\check_free.py .build\dev\out\game_profile.exe .build\exact\romset <work folder> [group ...]
+omset <work folder> [group ...]
+```
+
 ## Host tests
 
 The core builds for the host with llvm-mingw (`shared\tools\test-core.ps1` configures `.build\host`). `core/test/boot_test` runs machine folders in turn in one process, as the app runs one machine after another, and checks each leaves no thread behind and gives its memory back (each run ends within 32 MB of where the first ended, KairoX86#186); run it under `shared\tools\run-limited.ps1`:
@@ -63,7 +76,7 @@ It runs a fresh copy of the folder each time (86Box writes the CMOS and `86box.c
 
 ### Hardware queries
 
-`hardware_query <ROM set> <query>` prints the core's answer to a query of the machine settings (Kairo#143, `core/kairo/hardware.h`): `machines` lists every machine 86Box has, with whether the ROM set has its firmware; `machine <id>` lists what that machine takes, from 86Box's own eligibility functions: its processor families and speeds, its memory range, and its video, sound, network, hard disk, SCSI and floppy controllers.
+`hardware_query <ROM set> <query>` prints the core's answer to a query of the machine settings (Kairo#143, `core/kairo/hardware.h`): `machines` lists every machine 86Box has, with whether the ROM set has its firmware; `machine <id>` lists what that machine takes, from 86Box's own eligibility functions: its processor families and speeds, its memory range, and its video, sound, network, hard disk, SCSI and floppy controllers; `files <kind> <id> [<BIOS>]` lists the firmware files a board (`machine`) or card reads, its chosen or default firmware version's where it has a list of them, else each file 86Box's availability check asks about, with whether the ROM set has it (KairoX86#438: New game's firmware page).
 
 ### The mouse test
 

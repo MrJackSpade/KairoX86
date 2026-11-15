@@ -118,6 +118,9 @@ int mem_a20_key     = 0;
 int mem_a20_alt     = 0;
 int mem_a20_chipset = 0;
 int mem_a20_state   = 0;
+/* KairoX86's free machine (kairo_pc.h): one A20 state, which the keyboard controller and port 92h
+   both set, the last write winning, as on QEMU's PC, the hardware SeaBIOS is written for. */
+int mem_a20_single  = 0;
 
 int mmuflush        = 0;
 int is_compare      = 0;

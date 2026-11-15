@@ -6964,6 +6964,204 @@ KAIROX86_8514_HOST_RECT = [
      'static void\nibm8514_accel_start_walk(int count, int cpu_input, uint32_t mix_dat, uint32_t cpu_dat, svga_t *svga)\n{\n    if (cpu_input && ibm8514_rect_host_word((ibm8514_t *) svga->dev8514, svga, count, mix_dat, cpu_dat)) /* KairoX86#440 */\n        return;\n    ibm8514_t *dev     = (ibm8514_t *) svga->dev8514;'),
 ]
 
+# KairoX86#438: rom_present answers through a probe while the hardware query lists the files a machine or card reads
+# (core/kairo/hardware.c's "files"): each file its availability check asks about, and whether it is there.
+KAIROX86_ROM_PROBE = [
+    ('86box/src/mem/rom.c',
+     'int\nrom_present(const char *fn)\n{\n',
+     'static int\nrom_on_disk(const char *fn)\n{\n'),
+    ('86box/src/mem/rom.c',
+     '        return plat_file_check(fn);\n    }\n}\n\nint\nasset_present(const char *fn)\n',
+     '        return plat_file_check(fn);\n    }\n}\n\n'
+     '/* KairoX86#438: set while the hardware query lists the files a machine or card reads: given each file asked\n'
+     '   about and whether it is there, it answers in its place. NULL otherwise. */\n'
+     'int (*rom_present_probe)(const char *fn, int present) = NULL;\n\n'
+     'int\nrom_present(const char *fn)\n{\n'
+     '    const int present = rom_on_disk(fn);\n\n'
+     '    return (rom_present_probe != NULL) ? rom_present_probe(fn, present) : present;\n}\n\n'
+     'int\nasset_present(const char *fn)\n'),
+    ('86box/src/include/86box/rom.h',
+     'extern int   rom_present(const char *fn);\n',
+     'extern int   rom_present(const char *fn);\n'
+     '/* KairoX86#438: rom_present answers through it while set (mem/rom.c) */\n'
+     'extern int (*rom_present_probe)(const char *fn, int present);\n'),
+]
+
+# KairoX86's free machine (kairo_pc.h, docs/source-import.md "The free machine"): a 440FX and PIIX4 board that
+# boots SeaBIOS, which the app ships. The machine itself, its fw_cfg device and its ACPI and SMBIOS tables are
+# KairoX86's own files (ADDED); these changes register it, give its 440FX QEMU's subsystem ID, let its APM port
+# set SCI_EN as QEMU's PIIX4 does, read its boot order ([KairoX86] boot_order) and fill its CMOS bytes.
+KAIROX86_FREE_MACHINE = [
+    ('86box/src/include/86box/config.h',
+     'extern int config_kairo_int(const char *name, int def);\nextern int  config_load(void);\n',
+     "extern int config_kairo_int(const char *name, int def);\n/* The free machine's boot order (kairo_pc.h): a string setting of the [KairoX86] section */\nextern const char *config_kairo_string(const char *name, const char *def);\nextern int  config_load(void);\n"),
+    ('86box/src/config.c',
+     '    return ini_section_get_int(ini_find_section(config, "KairoX86"), name, def);\n}\n',
+     '    return ini_section_get_int(ini_find_section(config, "KairoX86"), name, def);\n}\n\n/* The free machine\'s boot order (kairo_pc.h): a setting of the [KairoX86] section, def when it has none */\nconst char *\nconfig_kairo_string(const char *name, const char *def)\n{\n    return ini_section_get_string(ini_find_section(config, "KairoX86"), name, (char *) def);\n}\n'),
+    ('86box/src/include/86box/nvr.h',
+     'extern void  nvr_init(nvr_t *);\nextern int   nvr_load(void);\n',
+     'extern void  nvr_init(nvr_t *);\nextern nvr_t *nvr_get_current(void);\nextern int   nvr_load(void);\n'),
+    ('86box/src/nvr.c',
+     '    (void) nvr_load();\n}\n',
+     '    (void) nvr_load();\n}\n\n/* The machine\'s NVR, its saved contents loaded (the free machine fills its CMOS bytes, kairo_pc.h). */\nnvr_t *\nnvr_get_current(void)\n{\n    if (saved_nvr == NULL)\n        fatal("NVR: the machine has no NVR yet\\n");\n    return saved_nvr;\n}\n'),
+    ('86box/src/include/86box/machine.h',
+     'extern int             machine_at_tx97xv_init(const machine_t *);\n#ifdef EMU_DEVICE_H\n',
+     "extern int             machine_at_tx97xv_init(const machine_t *);\n\n/* KairoX86's free machine (kairo_pc.h) */\nextern int             machine_at_kairo_pc_init(const machine_t *);\n#ifdef EMU_DEVICE_H\n"),
+    ('86box/src/machine/CMakeLists.txt',
+     '    m_at_misc.c\n    tandy_vis/m_at_tandy_vis.c\n',
+     '    m_at_misc.c\n    m_kairo_pc.c\n    kairo_pc_acpi.c\n    kairo_pc_smbios.c\n    tandy_vis/m_at_tandy_vis.c\n'),
+    ('86box/src/device/CMakeLists.txt',
+     '    kairo_cassette.c\n    clock_ics9xxx.c\n',
+     '    kairo_cassette.c\n    kairo_fw_cfg.c\n    clock_ics9xxx.c\n'),
+    ('86box/src/machine/machine_table.c',
+     '        .aliases                  = { "" }\n    },\n\n    {\n',
+     '        .aliases                  = { "" }\n    },\n    /* KairoX86\'s free machine (kairo_pc.h): a 440FX and PIIX4 booting SeaBIOS, which the app ships,\n       taking any processor from the 486 to the Pentium II. */\n    {\n        .name              = "[i440FX] KairoX86 PC",\n        .internal_name     = "kairo_pc",\n        .type              = MACHINE_TYPE_MISC,\n        .chipset           = MACHINE_CHIPSET_INTEL_440FX,\n        .init              = machine_at_kairo_pc_init,\n        .p1_handler        = machine_generic_p1_handler,\n        .gpio_handler      = NULL,\n        .available_flag    = MACHINE_AVAILABLE,\n        .gpio_acpi_handler = NULL,\n        .cpu               = {\n            .package     = CPU_PKG_SOCKET1 | CPU_PKG_SOCKET3 | CPU_PKG_SOCKET4 | CPU_PKG_SOCKET5_7 |\n                           CPU_PKG_SOCKET8 | CPU_PKG_SLOT1 | CPU_PKG_SOCKET370,\n            .block       = CPU_BLOCK_NONE,\n            .min_bus     = 0,\n            .max_bus     = 0,\n            .min_voltage = 0,\n            .max_voltage = 0,\n            .min_multi   = 0,\n            .max_multi   = 0\n        },\n        .bus_flags = MACHINE_PS2_PCI | MACHINE_BUS_USB,\n        .flags     = MACHINE_IDE_DUAL | MACHINE_APM | MACHINE_ACPI | MACHINE_USB,\n        .ram       = {\n            .min  = 4096,\n            .max  = 1048576,\n            .step = 4096\n        },\n        .nvrmask                  = 255,\n        .jumpered_ecp_dma         = 0,\n        .default_jumpered_ecp_dma = -1,\n        .kbc_device               = &kbc_at_device,\n        .kbc_params               = KBC_VEN_GENERIC,\n        .nvr_device               = NULL,\n        .nvr_params               = 0x00000000,\n        .sio_device               = NULL,\n        .sio_params               = 0x00000000,\n        .kbc_p1                   = 0x00000cf0,\n        .gpio                     = 0xffffffff,\n        .gpio_acpi                = 0xffffffff,\n        .device                   = NULL,\n        .kbd_device               = NULL,\n        .fdc_device               = NULL,\n        .vid_device               = NULL,\n        .snd_device               = NULL,\n        .net_device               = NULL,\n        .aliases                  = { "" }\n    },\n\n    {\n'),
+    ('86box/src/chipset/intel_4x0.c',
+     '            dev->drb_unit = 8;\n            dev->drb_default = 0x02;\n            break;\n        case INTEL_440LX:\n',
+     "            dev->drb_unit = 8;\n            dev->drb_default = 0x02;\n            /* KairoX86's free machine: QEMU's subsystem ID (1AF4:1100), by which SeaBIOS knows the\n               board it boots on (kairo_pc.h); the real 82441FX leaves these registers zero. */\n            if (machines[machine].init == machine_at_kairo_pc_init) {\n                regs[0x2c] = 0xf4;\n                regs[0x2d] = 0x1a;\n                regs[0x2e] = 0x00;\n                regs[0x2f] = 0x11;\n            }\n            break;\n        case INTEL_440LX:\n"),
+    ('86box/src/acpi.c',
+     '                dev->regs.glbsts |= 0x20;\n            acpi_raise_smi(dev, dev->apm->do_smi);\n',
+     "                dev->regs.glbsts |= 0x20;\n            /* KairoX86's free machine (kairo_pc.h): its firmware has no SMI handler, so, as on\n               QEMU's PIIX4, the FADT's ACPI_ENABLE (F1h) and ACPI_DISABLE (F0h) set and clear\n               SCI_EN themselves. */\n            if ((dev->vendor == VEN_INTEL) && (machines[machine].init == machine_at_kairo_pc_init)) {\n                if (val == 0xf1)\n                    dev->regs.pmcntrl |= 0x0001;\n                else if (val == 0xf0)\n                    dev->regs.pmcntrl &= ~0x0001;\n            }\n            acpi_raise_smi(dev, dev->apm->do_smi);\n"),
+]
+
+# The free machine's video card: the GD5446 with SeaVGABIOS's Cirrus build (64 KB, which the app ships) as a
+# BIOS variant; its ROM BAR maps the ROM's own size (32 KB for every other variant, as before).
+KAIROX86_GD5446_FREE_BIOS = [
+    ('86box/src/video/vid_cl54xx.c',
+     '#define BIOS_GD5446_STB_PATH            "roms/video/cirruslogic/stb nitro64v.BIN"\n#define BIOS_GD5480_PATH                "roms/video/cirruslogic/clgd5480.rom"\n',
+     '#define BIOS_GD5446_STB_PATH            "roms/video/cirruslogic/stb nitro64v.BIN"\n/* KairoX86: SeaVGABIOS\'s Cirrus build, which the app ships (kairo_pc.h); 64 KB */\n#define BIOS_GD5446_FREE_PATH           "roms/video/kairo/seavgabios_cirrus.bin"\n#define BIOS_GD5480_PATH                "roms/video/cirruslogic/clgd5480.rom"\n'),
+    ('86box/src/video/vid_cl54xx.c',
+     '                mem_mapping_set_addr(&gd54xx->bios_rom.mapping, biosaddr, 0x8000);\n',
+     '                mem_mapping_set_addr(&gd54xx->bios_rom.mapping, biosaddr, gd54xx->bios_rom.mask + 1);\n'),
+    ('86box/src/video/vid_cl54xx.c',
+     '                mem_mapping_set_addr(&gd54xx->bios_rom.mapping, vbiosaddr, 0x8000);\n',
+     '                mem_mapping_set_addr(&gd54xx->bios_rom.mapping, vbiosaddr, gd54xx->bios_rom.mask + 1);\n'),
+    ('86box/src/video/vid_cl54xx.c',
+     '        case CIRRUS_ID_CLGD5446:\n            if (local & 0x100)\n                romfn = BIOS_GD5446_STB_PATH;\n',
+     '        case CIRRUS_ID_CLGD5446:\n            if (local & 0x800)\n                romfn = BIOS_GD5446_FREE_PATH;\n            else if (local & 0x100)\n                romfn = BIOS_GD5446_STB_PATH;\n'),
+    ('86box/src/video/vid_cl54xx.c',
+     '    if (romfn)\n',
+     '    if (romfn && (local & 0x800) && (id == CIRRUS_ID_CLGD5446))\n        /* SeaVGABIOS (KairoX86) is larger than 32 KB: a 64 KB ROM, at C0000h and behind the ROM BAR */\n        rom_init(&gd54xx->bios_rom, romfn, 0xc0000, 0x10000, 0xffff, 0, MEM_MAPPING_EXTERNAL);\n    else if (romfn)\n'),
+    ('86box/src/video/vid_cl54xx.c',
+     '                .files         = { BIOS_GD5446_STB_PATH, "" }\n            },\n            { .files_no = 0 }\n        },\n',
+     '                .files         = { BIOS_GD5446_STB_PATH, "" }\n            },\n            {\n                .name          = "SeaVGABIOS",\n                .internal_name = "cl_gd5446_free_pci",\n                .bios_type     = BIOS_NORMAL,\n                .files_no      = 1,\n                .local         = CIRRUS_ID_CLGD5446 | 0x800,\n                .size          = 65536,\n                .flags         = 0,\n                .files         = { BIOS_GD5446_FREE_PATH, "" }\n            },\n            { .files_no = 0 }\n        },\n'),
+]
+
+# SeaBIOS 1.17.0 (third_party/seabios), built by tools/seabios/build.sh for the free machine (KairoX86#446). Most of
+# these are hardware QEMU, the PC SeaBIOS is written for, ignores and a real board or card (and 86Box's) honours:
+# - its version script reads the Windows toolchain's CRLF output;
+# - I/O BARs are sized within x86's 64 KB I/O space, since the PIIX4's implement only their low 16 bits;
+# - PIT timer 1 counts the DRAM refresh as on every AT: 86Box, as real boards, toggles port 61h's refresh bit by it
+#   (QEMU by its clock), and DOS drivers time delays by that bit (the Windows 98 boot disk's ASPI managers);
+# - SeaVGABIOS's Cirrus mode set turns the screen back on (its tables leave SR1's screen-off bit set), keeps SR7's
+#   linear-aperture bits clear in banked modes (set, they close the A0000 window), and sets AR10, AR13 and CR14 as
+#   Cirrus's own BIOS does (8-bit pixels, no panning, byte addressing);
+# - SeaVGABIOS writes a planar pixel (INT 10h AH=0Ch) through write mode 2 and the bit mask, as a VGA BIOS does,
+#   not by rewriting all four planes in turn;
+# - the BIOS date is 12/31/99, after the 12/01/1999 from which Windows 98 SE runs on the BIOS's ACPI tables.
+KAIROX86_SEABIOS = [
+    ('seabios/scripts/buildversion.py',
+     '        verstr = check_output("%s --version" % (tool,)).split(\'\\n\')[0]\n',
+     '        verstr = check_output("%s --version" % (tool,)).split(\'\\n\')[0].rstrip(\'\\r\')\n'),
+    ('seabios/src/fw/pciinit.c',
+     '        *psize = (~(val & mask)) + 1;\n    } else {\n',
+     "        *psize = (~(val & mask)) + 1;\n    } else if (type == PCI_REGION_TYPE_IO) {\n        // KairoX86: x86 I/O space is 64 KB, and an I/O BAR may implement\n        // only its low 16 bits (the PIIX4's do), so size it within them.\n        *psize = ((~(val & mask)) + 1) & 0xffff;\n    } else {\n"),
+    ('seabios/src/hw/timer.c',
+     '    outb(0x0, PORT_PIT_COUNTER0);\n}\n',
+     "    outb(0x0, PORT_PIT_COUNTER0);\n    // KairoX86: timer1, the DRAM refresh request, as every AT BIOS sets it:\n    // binary count, low byte, mode 2, 18 counts (15.08us), so port 61h\n    // bit 4 toggles. DOS drivers time their delays by that bit (Adaptec's\n    // ASPI managers on the Windows 98 boot disk wait on it forever without).\n    outb(PM_SEL_TIMER1|PM_ACCESS_LOBYTE|PM_MODE2|PM_CNT_BINARY, PORT_PIT_MODE);\n    outb(18, PORT_PIT_COUNTER1);\n}\n"),
+    ('seabios/src/misc.c',
+     'char BiosDate[] VARFSEGFIXED(0xfff5) = "06/23/99";\n',
+     '// KairoX86: after 12/01/1999, the date from which Windows 98 SE (and\n// 2000 and XP, from 01/01/1999) runs on the BIOS\'s ACPI tables.\nchar BiosDate[] VARFSEGFIXED(0xfff5) = "12/31/99";\n'),
+    ('seabios/vgasrc/clext.c',
+     '    stdvga_attr_mask(0x10, 0x01, on);\n    stdvga_attrindex_write(0x20);\n}\n',
+     "    if (memmodel == MM_PACKED || memmodel == MM_DIRECT) {\n        // KairoX86: as Cirrus's own BIOS sets its modes: 8-bit pixels past\n        // the attribute palette and no blink (AR10), no pixel panning (AR13,\n        // which text mode leaves at 8) and byte, not doubleword, display\n        // addressing (CR14, which the tables set to 40h). A real GD5446\n        // (86Box's too) honours all three; QEMU's ignores them.\n        stdvga_attr_write(0x10, 0x41);\n        stdvga_attr_write(0x13, 0x00);\n        stdvga_crtc_write(stdvga_get_crtc(), 0x14, 0x00);\n    } else\n        stdvga_attr_mask(0x10, 0x01, on);\n    stdvga_attrindex_write(0x20);\n    // KairoX86: the mode tables write SR1 with its screen-off bit (5) set;\n    // turn the screen back on, as a VGA BIOS ends a mode set. A real\n    // Cirrus chip (and 86Box's) blanks the screen while the bit is set.\n    stdvga_sequ_mask(0x01, 0x20, 0x00);\n}\n"),
+    ('seabios/vgasrc/clext.c',
+     '    cirrus_switch_mode(table_g);\n    if (GET_GLOBAL(vmode_g->memmodel) == MM_PACKED && !(flags & MF_NOPALETTE))\n',
+     "    cirrus_switch_mode(table_g);\n    // KairoX86: SR7 bits 7:4 turn on the linear aperture, and a real\n    // GD5446 (86Box's too) then stops decoding the A0000 window. A banked\n    // mode keeps them clear, as Cirrus's own BIOS does; a linear mode sets\n    // them once its memory is cleared through the window.\n    u8 sr7 = stdvga_sequ_read(0x07);\n    stdvga_sequ_write(0x07, sr7 & 0x0f);\n    if (GET_GLOBAL(vmode_g->memmodel) == MM_PACKED && !(flags & MF_NOPALETTE))\n"),
+    ('seabios/vgasrc/clext.c',
+     '        cirrus_clear_vram(flags & MF_LEGACY ? 0xffff : 0x0000);\n    return 0;\n',
+     '        cirrus_clear_vram(flags & MF_LEGACY ? 0xffff : 0x0000);\n    if (flags & MF_LINEARFB)\n        stdvga_sequ_write(0x07, sr7);\n    return 0;\n'),
+    ('seabios/vgasrc/vgafb.c',
+     '        return;\n\n    struct gfx_op op;\n    init_gfx_op(&op, curmode_g);\n',
+     '        return;\n\n    if (CONFIG_VGA_STDVGA_PORTS && GET_GLOBAL(curmode_g->memmodel) == MM_PLANAR) {\n        // KairoX86: one pixel as a VGA BIOS writes it: the bit mask selects\n        // it, a read loads the latches, write mode 2 puts the colour in every\n        // plane (XORed with the latches for bit 7), instead of reading and\n        // writing all four planes in turn. The registers end in the planar\n        // defaults the plane-by-plane path also leaves.\n        void *dest_far = (void*)(y * vgahw_get_linelength(curmode_g) + x / 8);\n        stdvga_sequ_write(0x02, 0x0f);\n        stdvga_grdc_write(0x08, 0x80 >> (x & 0x07));\n        stdvga_grdc_write(0x05, 0x02);\n        if (color & 0x80)\n            stdvga_grdc_write(0x03, 0x18);\n        u8 latch = GET_FARVAR(SEG_GRAPH, *(u8*)dest_far);\n        asm volatile("" : : "r"(latch));\n        SET_FARVAR(SEG_GRAPH, *(u8*)dest_far, color);\n        stdvga_grdc_write(0x03, 0x00);\n        stdvga_grdc_write(0x05, 0x00);\n        stdvga_grdc_write(0x08, 0xff);\n        stdvga_grdc_write(0x04, 0x00);\n        return;\n    }\n\n    struct gfx_op op;\n    init_gfx_op(&op, curmode_g);\n'),
+]
+
+# KairoX86#447: on Android a machine's disks reach 86Box as session links to the descriptors the app opened through
+# the Storage Access Framework (/proc/self/fd/N), and opening such a link reopens the file by its path, which shared
+# storage refuses an app without storage permission. plat_held_fd gives a duplicate of the descriptor a path links to
+# (-1 on every other host and path); plat_fopen reads and writes through it with its own position, and minivhd, the
+# Aaru loader, CD audio tracks (sf_open_fd) and CHD images (libchdr's callbacks) go through it too.
+KAIROX86_HELD_DESCRIPTORS = [
+    ('86box/src/include/86box/plat.h',
+     'extern FILE    *plat_fopen64(const char *path, const char *mode);\nextern void     plat_remove(char *path);\n',
+     'extern FILE    *plat_fopen64(const char *path, const char *mode);\n/* KairoX86#447: a duplicate of the descriptor the app holds for path, -1 for any other path */\nextern int      plat_held_fd(const char *path);\nextern void     plat_remove(char *path);\n'),
+    ('86box/src/unix/sdl_plat.c',
+     '\n#include <stdbool.h>\n#include <stdlib.h>\n',
+     '\n#include <errno.h>\n#include <stdbool.h>\n#include <stdio.h>\n#include <stdlib.h>\n'),
+    ('86box/src/unix/sdl_plat.c',
+     '}\n\nFILE *\nplat_fopen(const char *path, const char *mode)\n{\n    return fopen(path, mode);\n}\n',
+     '}\n\n/* KairoX86#447: on Android a machine\'s disks reach 86Box as links in its session folder to the\n   descriptors the app opened through the Storage Access Framework (/proc/self/fd/N). Opening such\n   a link reopens the file by its path, which shared storage refuses an app without storage\n   permission; the descriptor itself the app may use. plat_held_fd gives a duplicate of the\n   descriptor a path links to, -1 for any other path (and on every other host). */\nint\nplat_held_fd(const char *path)\n{\n#ifdef __ANDROID__\n    static const char prefix[] = "/proc/self/fd/";\n    char              target[64];\n    const ssize_t     len = readlink(path, target, sizeof(target) - 1);\n\n    if ((len <= (ssize_t) (sizeof(prefix) - 1)) || strncmp(target, prefix, sizeof(prefix) - 1))\n        return -1;\n    target[len] = 0;\n    char      *end;\n    const long fd = strtol(target + sizeof(prefix) - 1, &end, 10);\n    if ((*end != 0) || (fd < 0))\n        return -1;\n    return dup((int) fd);\n#else\n    (void) path;\n    return -1;\n#endif\n}\n\n#ifdef __ANDROID__\n/* A stream over a held descriptor, with its own position (pread/pwrite), so two streams over one\n   file never move each other\'s. */\ntypedef struct held_file_t {\n    int   fd;\n    off_t pos;\n    bool  append;\n} held_file_t;\n\nstatic int\nheld_read(void *cookie, char *buf, int size)\n{\n    held_file_t  *f = (held_file_t *) cookie;\n    const ssize_t n = pread(f->fd, buf, (size_t) size, f->pos);\n\n    if (n > 0)\n        f->pos += n;\n    return (int) n;\n}\n\nstatic int\nheld_write(void *cookie, const char *buf, int size)\n{\n    held_file_t *f = (held_file_t *) cookie;\n    struct stat  st;\n\n    if (f->append) {\n        if (fstat(f->fd, &st) != 0)\n            return -1;\n        f->pos = st.st_size;\n    }\n    const ssize_t n = pwrite(f->fd, buf, (size_t) size, f->pos);\n    if (n > 0)\n        f->pos += n;\n    return (int) n;\n}\n\nstatic fpos_t\nheld_seek(void *cookie, fpos_t offset, int whence)\n{\n    held_file_t *f = (held_file_t *) cookie;\n    struct stat  st;\n    off_t        base;\n\n    switch (whence) {\n        case SEEK_SET:\n            base = 0;\n            break;\n        case SEEK_CUR:\n            base = f->pos;\n            break;\n        case SEEK_END:\n            if (fstat(f->fd, &st) != 0)\n                return -1;\n            base = st.st_size;\n            break;\n        default:\n            errno = EINVAL;\n            return -1;\n    }\n    if ((base + offset) < 0) {\n        errno = EINVAL;\n        return -1;\n    }\n    f->pos = base + offset;\n    return f->pos;\n}\n\nstatic int\nheld_close(void *cookie)\n{\n    held_file_t *f = (held_file_t *) cookie;\n    const int    ret = close(f->fd);\n\n    free(f);\n    return ret;\n}\n\nstatic FILE *\nheld_fopen(int fd, const char *mode)\n{\n    const bool   writes = (strchr(mode, \'w\') != NULL) || (strchr(mode, \'a\') != NULL) || (strchr(mode, \'+\') != NULL);\n    held_file_t *f      = (held_file_t *) calloc(1, sizeof(held_file_t));\n\n    if (f == NULL) {\n        close(fd);\n        return NULL;\n    }\n    f->fd     = fd;\n    f->append = (strchr(mode, \'a\') != NULL);\n    if ((strchr(mode, \'w\') != NULL) && (ftruncate(fd, 0) != 0)) {\n        held_close(f);\n        return NULL;\n    }\n    FILE *fp = funopen(f, held_read, writes ? held_write : NULL, held_seek, held_close);\n    if (fp == NULL)\n        held_close(f);\n    return fp;\n}\n#endif\n\nFILE *\nplat_fopen(const char *path, const char *mode)\n{\n#ifdef __ANDROID__\n    const int fd = plat_held_fd(path);\n    if (fd >= 0)\n        return held_fopen(fd, mode);\n#endif\n    return fopen(path, mode);\n}\n'),
+    ('86box/src/unix/sdl_plat.c',
+     'plat_fopen64(const char *path, const char *mode)\n{\n    return fopen(path, mode);\n}\n\n',
+     'plat_fopen64(const char *path, const char *mode)\n{\n    return plat_fopen(path, mode);\n}\n\n'),
+    ('86box/src/unix/CMakeLists.txt',
+     'target_include_directories(plat PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/headless_sdl)\n\n',
+     "target_include_directories(plat PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/headless_sdl)\n# KairoX86#447: bionic declares funopen (sdl_plat.c's streams over held descriptors) for BSD sources\nif(ANDROID)\n    set_source_files_properties(sdl_plat.c PROPERTIES COMPILE_DEFINITIONS _BSD_SOURCE)\nendif()\n\n"),
+    ('86box/src/disk/minivhd/minivhd_util.c',
+     '\nFILE*\n',
+     "\n#ifndef _WIN32\n/* KairoX86#447: 86Box's own open, which on Android reaches the disks the app holds */\nextern FILE *plat_fopen(const char *path, const char *mode);\n#endif\n\nFILE*\n"),
+    ('86box/src/disk/minivhd/minivhd_util.c',
+     '    f = fopen(path, mode);\n',
+     '    f = plat_fopen(path, mode);\n'),
+    ('86box/src/cdrom/cdrom_image.c',
+     '        audio->file = sf_open(filename, SFM_READ, &audio->info);\n',
+     '    {\n        /* KairoX86#447: an audio track the app holds is read through its descriptor */\n        const int held = plat_held_fd(filename);\n        audio->file    = (held >= 0) ? sf_open_fd(held, SFM_READ, &audio->info, 1) : sf_open(filename, SFM_READ, &audio->info);\n    }\n'),
+    ('86box/src/cdrom/cdrom_chd.c',
+     '#include <string.h>\n#include <wchar.h>\n',
+     '#include <string.h>\n#include <unistd.h>\n#include <wchar.h>\n'),
+    ('86box/src/cdrom/cdrom_chd.c',
+     'typedef struct chd_image_t chd_image_t;\n\n',
+     'typedef struct chd_image_t chd_image_t;\n\n/* KairoX86#447: a CHD the app holds (plat_held_fd) is read through 86Box\'s own stream over its\n   descriptor, which libchdr owns and closes; any other by its path. */\nstatic uint64_t\nheld_chd_size(void *fp)\n{\n    if (fseeko((FILE *) fp, 0, SEEK_END) != 0)\n        return (uint64_t) -1;\n    const off_t size = ftello((FILE *) fp);\n    return (size < 0) ? (uint64_t) -1 : (uint64_t) size;\n}\n\nstatic size_t\nheld_chd_read(void *buf, size_t size, size_t count, void *fp)\n{\n    return fread(buf, size, count, (FILE *) fp);\n}\n\nstatic int\nheld_chd_close(void *fp)\n{\n    return fclose((FILE *) fp);\n}\n\nstatic int\nheld_chd_seek(void *fp, int64_t offset, int whence)\n{\n    return fseeko((FILE *) fp, (off_t) offset, whence);\n}\n\nstatic const core_file_callbacks held_chd_callbacks = { held_chd_size, held_chd_read, held_chd_close, held_chd_seek };\n\nstatic void\nchd_open_any(const char *path, chd_file **file)\n{\n    const int held = plat_held_fd(path);\n\n    if (held < 0) {\n        chd_open(path, CHD_OPEN_READ, NULL, file);\n        return;\n    }\n    close(held);\n    FILE *fp = plat_fopen(path, "rb");\n    if (fp == NULL) {\n        *file = NULL;\n        return;\n    }\n    if (chd_open_core_file_callbacks(&held_chd_callbacks, fp, CHD_OPEN_READ, NULL, file) != CHDERR_NONE)\n        *file = NULL;\n}\n\n'),
+    ('86box/src/cdrom/cdrom_chd.c',
+     '    chd_open(path, CHD_OPEN_READ, NULL, &file);\n',
+     '    chd_open_any(path, &file);\n'),
+    ('86box/src/cdrom/cdrom_chd.c',
+     '    chd_open(fn, CHD_OPEN_READ, NULL, &file);\n',
+     '    chd_open_any(fn, &file);\n'),
+    ('86box/src/cdrom/cdrom_aaru.c',
+     '    stream = fopen(filename, "rb");\n',
+     '    /* KairoX86#447: 86Box\'s own open, which on Android reaches the images the app holds */\n    stream = plat_fopen(filename, "rb");\n'),
+]
+
+# KairoX86#446: the free machine keeps one A20 state, as QEMU's PC does: a keyboard-controller output-port
+# write and a port 92h write each set it, the last write winning. SeaBIOS turns A20 on through port 92h
+# (romlayout.S's transition32) and leaves it on at boot; with 86Box's two gates OR'd, as a real PIIX4 does,
+# a DOS memory manager could then never turn it off through the keyboard controller. Other machines keep
+# their own gates (machine_common_init clears mem_a20_single; m_kairo_pc.c sets it).
+KAIROX86_A20_SINGLE = [
+    ('86box/src/mem/mem.c',
+     'int mem_a20_state   = 0;\n\n',
+     "int mem_a20_state   = 0;\n/* KairoX86's free machine (kairo_pc.h): one A20 state, which the keyboard controller and port 92h\n   both set, the last write winning, as on QEMU's PC, the hardware SeaBIOS is written for. */\nint mem_a20_single  = 0;\n\n"),
+    ('86box/src/include/86box/mem.h',
+     'extern int mem_a20_key;\nextern void (*mem_a20_trap)(int state, void *priv);\n',
+     'extern int mem_a20_key;\nextern int mem_a20_single;\nextern void (*mem_a20_trap)(int state, void *priv);\n'),
+    ('86box/src/machine/machine.c',
+     '\n    /* System devices first. */\n',
+     '\n    /* The A20 gates are each their own, unless the machine says otherwise (the free machine). */\n    mem_a20_single = 0;\n\n    /* System devices first. */\n'),
+    ('86box/src/port_92.c',
+     '        if (dev->flags & PORT_92_ONE)\n',
+     '        if ((dev->flags & PORT_92_ONE) || mem_a20_single)\n'),
+    ('86box/src/port_92.c',
+     '    if (dev->flags & PORT_92_ONE) {\n',
+     '    if ((dev->flags & PORT_92_ONE) || mem_a20_single) {\n'),
+    ('86box/src/device/kbc_at.c',
+     '    if ((mem_a20_key ^ val) & 0x02) { /* A20 enable change */\n',
+     '    if (mem_a20_single) {\n        /* One A20 state (the free machine): this write sets it whichever way it was set. */\n        mem_a20_key = val & 0x02;\n        mem_a20_alt = (mem_a20_alt & 0xfd) | (val & 0x02);\n        mem_a20_recalc();\n        flushmmucache();\n    } else if ((mem_a20_key ^ val) & 0x02) { /* A20 enable change */\n'),
+    ('86box/src/device/kbc_at.c',
+     '    if ((old ^ val) & 0x02) { /* A20 enable change */\n',
+     '    if (mem_a20_single) {\n        /* One A20 state (the free machine): this write sets it whichever way it was set. */\n        mem_a20_key = val & 0x02;\n        mem_a20_alt = (mem_a20_alt & 0xfd) | (val & 0x02);\n        mem_a20_recalc();\n        flushmmucache();\n    } else if ((old ^ val) & 0x02) { /* A20 enable change */\n'),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -7146,9 +7344,20 @@ PATCHES = {
     'kairox86-rep-slow-runs': KAIROX86_REP_SLOW_RUNS,
     'kairox86-rage128-aperture-plain': KAIROX86_RAGE128_APERTURE_PLAIN,
     'kairox86-8514-host-rect': KAIROX86_8514_HOST_RECT,
+    'kairox86-rom-probe': KAIROX86_ROM_PROBE,
+    'kairox86-free-machine': KAIROX86_FREE_MACHINE,
+    'kairox86-gd5446-free-bios': KAIROX86_GD5446_FREE_BIOS,
+    'kairox86-seabios': KAIROX86_SEABIOS,
+    'kairox86-held-descriptors': KAIROX86_HELD_DESCRIPTORS,
+    'kairox86-a20-single': KAIROX86_A20_SINGLE,
 }
 
 ADDED = [
+    '86box/src/include/86box/kairo_pc.h',
+    '86box/src/device/kairo_fw_cfg.c',
+    '86box/src/machine/m_kairo_pc.c',
+    '86box/src/machine/kairo_pc_acpi.c',
+    '86box/src/machine/kairo_pc_smbios.c',
     '86box/src/include/86box/vid_ati_rage128_gpu_spv_kairo.h',
     '86box/src/device/kairo_cassette.c',
     '86box/src/include/86box/kairo_gpu.h',

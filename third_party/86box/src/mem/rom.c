@@ -282,8 +282,8 @@ asset_getfile(const char *fn, char *s, int size)
     }
 }
 
-int
-rom_present(const char *fn)
+static int
+rom_on_disk(const char *fn)
 {
     char temp[1024];
 
@@ -304,6 +304,18 @@ rom_present(const char *fn)
         /* Absolute path */
         return plat_file_check(fn);
     }
+}
+
+/* KairoX86#438: set while the hardware query lists the files a machine or card reads: given each file asked
+   about and whether it is there, it answers in its place. NULL otherwise. */
+int (*rom_present_probe)(const char *fn, int present) = NULL;
+
+int
+rom_present(const char *fn)
+{
+    const int present = rom_on_disk(fn);
+
+    return (rom_present_probe != NULL) ? rom_present_probe(fn, present) : present;
 }
 
 int

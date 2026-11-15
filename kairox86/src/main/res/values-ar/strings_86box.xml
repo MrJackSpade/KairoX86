@@ -163,7 +163,7 @@
     <string name="d86_dither_subtraction_6f6adf">طرح التنقيط</string>
     <!-- EN: Dithering -->
     <string name="d86_dithering_67c0f2">التنقيط</string>
-    <!-- EN: DMA -->
+    <!-- SAME: DMA -->
     <string name="d86_dma_1ba799">DMA</string>
     <!-- EN: Dot spacing -->
     <string name="d86_dot_spacing_23d5da">تباعد النقاط</string>
@@ -245,7 +245,7 @@
     <string name="d86_initial_ram_size_7018b9">حجم الذاكرة الأولي</string>
     <!-- EN: Interpolation Method -->
     <string name="d86_interpolation_method_e7ec55">طريقة الاستيفاء</string>
-    <!-- EN: IRQ -->
+    <!-- SAME: IRQ -->
     <string name="d86_irq_6dcf08">IRQ</string>
     <!-- EN: Korean (Kasan Hangulmadang-16 VGA) -->
     <string name="d86_korean_kasan_hangulmadang_16_vga_2b3a56">الكورية (Kasan Hangulmadang-16 VGA)</string>

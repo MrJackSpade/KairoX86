@@ -33,6 +33,7 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <string.h>
+#include <unistd.h>
 #include <wchar.h>
 #include <zlib.h>
 #include <limits.h>
@@ -124,6 +125,56 @@ typedef struct chd_image_t {
 } chd_image_t;
 
 typedef struct chd_image_t chd_image_t;
+
+/* KairoX86#447: a CHD the app holds (plat_held_fd) is read through 86Box's own stream over its
+   descriptor, which libchdr owns and closes; any other by its path. */
+static uint64_t
+held_chd_size(void *fp)
+{
+    if (fseeko((FILE *) fp, 0, SEEK_END) != 0)
+        return (uint64_t) -1;
+    const off_t size = ftello((FILE *) fp);
+    return (size < 0) ? (uint64_t) -1 : (uint64_t) size;
+}
+
+static size_t
+held_chd_read(void *buf, size_t size, size_t count, void *fp)
+{
+    return fread(buf, size, count, (FILE *) fp);
+}
+
+static int
+held_chd_close(void *fp)
+{
+    return fclose((FILE *) fp);
+}
+
+static int
+held_chd_seek(void *fp, int64_t offset, int whence)
+{
+    return fseeko((FILE *) fp, (off_t) offset, whence);
+}
+
+static const core_file_callbacks held_chd_callbacks = { held_chd_size, held_chd_read, held_chd_close, held_chd_seek };
+
+static void
+chd_open_any(const char *path, chd_file **file)
+{
+    const int held = plat_held_fd(path);
+
+    if (held < 0) {
+        chd_open(path, CHD_OPEN_READ, NULL, file);
+        return;
+    }
+    close(held);
+    FILE *fp = plat_fopen(path, "rb");
+    if (fp == NULL) {
+        *file = NULL;
+        return;
+    }
+    if (chd_open_core_file_callbacks(&held_chd_callbacks, fp, CHD_OPEN_READ, NULL, file) != CHDERR_NONE)
+        *file = NULL;
+}
 
 static void
 chd_image_get_raw_track_info(UNUSED(const void *local), int *num, uint8_t *rti)
@@ -764,7 +815,7 @@ chd_image_open(cdrom_t *dev, const char *path)
     chd_file *file = NULL;
     chd_image_t *img = (chd_image_t*)calloc(1, sizeof(chd_image_t));
 
-    chd_open(path, CHD_OPEN_READ, NULL, &file);
+    chd_open_any(path, &file);
     if (file) {
         uint64_t chd_offset = 0;
         uint64_t sector_offset = 0;
@@ -1015,7 +1066,7 @@ cdrom_image_is_chd(const char *fn)
 {
     chd_file *file = NULL;
 
-    chd_open(fn, CHD_OPEN_READ, NULL, &file);
+    chd_open_any(fn, &file);
     if (file) {
         chd_close(file);
         return 1;

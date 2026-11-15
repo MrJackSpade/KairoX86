@@ -73,6 +73,8 @@
 #define BIOS_GD5440_PATH                "roms/video/cirruslogic/BIOS.BIN"
 #define BIOS_GD5446_PATH                "roms/video/cirruslogic/5446bv.vbi"
 #define BIOS_GD5446_STB_PATH            "roms/video/cirruslogic/stb nitro64v.BIN"
+/* KairoX86: SeaVGABIOS's Cirrus build, which the app ships (kairo_pc.h); 64 KB */
+#define BIOS_GD5446_FREE_PATH           "roms/video/kairo/seavgabios_cirrus.bin"
 #define BIOS_GD5480_PATH                "roms/video/cirruslogic/clgd5480.rom"
 
 #define CIRRUS_ID_CLGD5401              0x88
@@ -4968,7 +4970,7 @@ cl_pci_write(UNUSED(int func), int addr, UNUSED(int len), uint8_t val, void *pri
                 mem_mapping_set_addr(&gd54xx->vgablt_mapping, gd54xx->vgablt_base, 0x1000);
             if ((gd54xx->pci_regs[PCI_REG_COMMAND] & PCI_COMMAND_MEM) && (gd54xx->pci_regs[0x30] & 0x01)) {
                 uint32_t biosaddr = (gd54xx->pci_regs[0x32] << 16) | (gd54xx->pci_regs[0x33] << 24);
-                mem_mapping_set_addr(&gd54xx->bios_rom.mapping, biosaddr, 0x8000);
+                mem_mapping_set_addr(&gd54xx->bios_rom.mapping, biosaddr, gd54xx->bios_rom.mask + 1);
             } else
                 mem_mapping_disable(&gd54xx->bios_rom.mapping);
 
@@ -5009,7 +5011,7 @@ cl_pci_write(UNUSED(int func), int addr, UNUSED(int len), uint8_t val, void *pri
             gd54xx->pci_regs[addr] = val;
             if ((gd54xx->pci_regs[PCI_REG_COMMAND] & PCI_COMMAND_MEM) && (gd54xx->pci_regs[0x30] & 0x01)) {
                 uint32_t vbiosaddr = (gd54xx->pci_regs[0x32] << 16) | (gd54xx->pci_regs[0x33] << 24);
-                mem_mapping_set_addr(&gd54xx->bios_rom.mapping, vbiosaddr, 0x8000);
+                mem_mapping_set_addr(&gd54xx->bios_rom.mapping, vbiosaddr, gd54xx->bios_rom.mask + 1);
             } else
                 mem_mapping_disable(&gd54xx->bios_rom.mapping);
             return;
@@ -5306,7 +5308,9 @@ gd54xx_init(const device_t *info)
             break;
 
         case CIRRUS_ID_CLGD5446:
-            if (local & 0x100)
+            if (local & 0x800)
+                romfn = BIOS_GD5446_FREE_PATH;
+            else if (local & 0x100)
                 romfn = BIOS_GD5446_STB_PATH;
             else
                 romfn = BIOS_GD5446_PATH;
@@ -5358,7 +5362,10 @@ gd54xx_init(const device_t *info)
     }
     gd54xx->vram_mask = gd54xx->vram_size - 1;
 
-    if (romfn)
+    if (romfn && (local & 0x800) && (id == CIRRUS_ID_CLGD5446))
+        /* SeaVGABIOS (KairoX86) is larger than 32 KB: a 64 KB ROM, at C0000h and behind the ROM BAR */
+        rom_init(&gd54xx->bios_rom, romfn, 0xc0000, 0x10000, 0xffff, 0, MEM_MAPPING_EXTERNAL);
+    else if (romfn)
         rom_init(&gd54xx->bios_rom, romfn, 0xc0000, 0x8000, 0x7fff, 0, MEM_MAPPING_EXTERNAL);
     else if (romfn1 && romfn2)
         rom_init_interleaved(&gd54xx->bios_rom, BIOS_GD5422_BOCA_ISA_PATH_1, BIOS_GD5422_BOCA_ISA_PATH_2, 0xc0000,
@@ -6148,6 +6155,16 @@ static const device_config_t gd5446_pci_config[] = {
                 .size          = 32768,
                 .flags         = 0,
                 .files         = { BIOS_GD5446_STB_PATH, "" }
+            },
+            {
+                .name          = "SeaVGABIOS",
+                .internal_name = "cl_gd5446_free_pci",
+                .bios_type     = BIOS_NORMAL,
+                .files_no      = 1,
+                .local         = CIRRUS_ID_CLGD5446 | 0x800,
+                .size          = 65536,
+                .flags         = 0,
+                .files         = { BIOS_GD5446_FREE_PATH, "" }
             },
             { .files_no = 0 }
         },

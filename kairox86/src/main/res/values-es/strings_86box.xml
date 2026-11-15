@@ -1,57 +1,57 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Spanish (es): the translation of values/strings_86box.xml. Each EN comment is the English a string translates; update it with the translation. Check with shared/tools/translations.py check. -->
 <resources>
-    <!-- EN: 128 KB -->
+    <!-- SAME: 128 KB -->
     <string name="d86_128_kb_bb8543">128 KB</string>
-    <!-- EN: 12 MB -->
+    <!-- SAME: 12 MB -->
     <string name="d86_12_mb_6674e6">12 MB</string>
     <!-- EN: 16-bit (bottom pins closed - AT-class 16-bit slots only) -->
     <string name="d86_16_bit_bottom_pins_closed_at_class_16_bi_85eac9">16 bits (contactos inferiores cerrados: solo ranuras AT de 16 bits)</string>
     <!-- EN: 16-bit -->
     <string name="d86_16_bit_dc4083">16 bits</string>
-    <!-- EN: 16 KB -->
+    <!-- SAME: 16 KB -->
     <string name="d86_16_kb_855689">16 KB</string>
-    <!-- EN: 16 MB -->
+    <!-- SAME: 16 MB -->
     <string name="d86_16_mb_77a260">16 MB</string>
     <!-- EN: 1990 BIOS -->
     <string name="d86_1990_bios_768ec7">BIOS de 1990</string>
     <!-- EN: 1991 BIOS (>1GB) -->
     <string name="d86_1991_bios_1gb_13dab4">BIOS de 1991 (&gt;1 GB)</string>
-    <!-- EN: 1 MB -->
+    <!-- SAME: 1 MB -->
     <string name="d86_1_mb_9b2252">1 MB</string>
-    <!-- EN: 2048 MB -->
+    <!-- SAME: 2048 MB -->
     <string name="d86_2048_mb_b361b6">2048 MB</string>
-    <!-- EN: 20 MB -->
+    <!-- SAME: 20 MB -->
     <string name="d86_20_mb_132890">20 MB</string>
-    <!-- EN: 24 MB -->
+    <!-- SAME: 24 MB -->
     <string name="d86_24_mb_233194">24 MB</string>
-    <!-- EN: 256 KB -->
+    <!-- SAME: 256 KB -->
     <string name="d86_256_kb_122ab2">256 KB</string>
-    <!-- EN: 28 MB -->
+    <!-- SAME: 28 MB -->
     <string name="d86_28_mb_dcf730">28 MB</string>
-    <!-- EN: 2 MB -->
+    <!-- SAME: 2 MB -->
     <string name="d86_2_mb_63f273">2 MB</string>
-    <!-- EN: 30 Hz (JMP2 = 1) -->
+    <!-- SAME: 30 Hz (JMP2 = 1) -->
     <string name="d86_30_hz_jmp2_1_7afe29">30 Hz (JMP2 = 1)</string>
-    <!-- EN: 32 KB -->
+    <!-- SAME: 32 KB -->
     <string name="d86_32_kb_895b11">32 KB</string>
-    <!-- EN: 32 MB -->
+    <!-- SAME: 32 MB -->
     <string name="d86_32_mb_eac42f">32 MB</string>
     <!-- EN: 45 Hz (JMP2 not populated) -->
     <string name="d86_45_hz_jmp2_not_populated_73ddb5">45 Hz (JMP2 no poblado)</string>
     <!-- EN: 4-bit -->
     <string name="d86_4_bit_41a020">4 bits</string>
-    <!-- EN: 4 MB -->
+    <!-- SAME: 4 MB -->
     <string name="d86_4_mb_b6de6b">4 MB</string>
     <!-- EN: 4th Order -->
     <string name="d86_4th_order_bbe85c">De 4º orden</string>
-    <!-- EN: 512 KB -->
+    <!-- SAME: 512 KB -->
     <string name="d86_512_kb_406c35">512 KB</string>
-    <!-- EN: 60 Hz (JMP2 = 2) -->
+    <!-- SAME: 60 Hz (JMP2 = 2) -->
     <string name="d86_60_hz_jmp2_2_ad41bf">60 Hz (JMP2 = 2)</string>
-    <!-- EN: 64 KB -->
+    <!-- SAME: 64 KB -->
     <string name="d86_64_kb_91ab95">64 KB</string>
-    <!-- EN: 64 MB -->
+    <!-- SAME: 64 MB -->
     <string name="d86_64_mb_a2319f">64 MB</string>
     <!-- EN: 6CH variant (6-channel) -->
     <string name="d86_6ch_variant_6_channel_6e13eb">Variante 6CH (6 canales)</string>
@@ -63,9 +63,9 @@
     <string name="d86_8_bit_a35efa">8 bits</string>
     <!-- EN: 8-bit (top pins closed - required for XT-class 8-bit slots) -->
     <string name="d86_8_bit_top_pins_closed_required_for_xt_cl_d879cd">8 bits (contactos superiores cerrados: necesario para ranuras XT de 8 bits)</string>
-    <!-- EN: 8 KB -->
+    <!-- SAME: 8 KB -->
     <string name="d86_8_kb_757334">8 KB</string>
-    <!-- EN: 8 MB -->
+    <!-- SAME: 8 MB -->
     <string name="d86_8_mb_decd79">8 MB</string>
     <!-- EN: A00 (Japanese) -->
     <string name="d86_a00_japanese_e0b607">A00 (japonés)</string>
@@ -117,15 +117,15 @@
     <string name="d86_chorus_waveform_88cf25">Forma de onda del coro</string>
     <!-- EN: Codec -->
     <string name="d86_codec_a33676">Códec</string>
-    <!-- EN: Color -->
+    <!-- SAME: Color -->
     <string name="d86_color_1d0c83">Color</string>
-    <!-- EN: Color 40x25 (5153/CGA) -->
+    <!-- SAME: Color 40x25 (5153/CGA) -->
     <string name="d86_color_40x25_5153_cga_386512">Color 40x25 (5153/CGA)</string>
-    <!-- EN: Color 80x25 (5153/CGA) -->
+    <!-- SAME: Color 80x25 (5153/CGA) -->
     <string name="d86_color_80x25_5153_cga_c28450">Color 80x25 (5153/CGA)</string>
     <!-- EN: Color (generic) -->
     <string name="d86_color_generic_cef0e9">Color (genérico)</string>
-    <!-- EN: Color (IBM 5153) -->
+    <!-- SAME: Color (IBM 5153) -->
     <string name="d86_color_ibm_5153_1c9d0b">Color (IBM 5153)</string>
     <!-- EN: Color Interlaced -->
     <string name="d86_color_interlaced_f7f834">Color entrelazado</string>
@@ -163,7 +163,7 @@
     <string name="d86_dither_subtraction_6f6adf">Sustracción de dither</string>
     <!-- EN: Dithering -->
     <string name="d86_dithering_67c0f2">Tramado</string>
-    <!-- EN: DMA -->
+    <!-- SAME: DMA -->
     <string name="d86_dma_1ba799">DMA</string>
     <!-- EN: Dot spacing -->
     <string name="d86_dot_spacing_23d5da">Separación de puntos</string>
@@ -235,7 +235,7 @@
     <string name="d86_high_dma_e34410">DMA alto</string>
     <!-- EN: Host ID -->
     <string name="d86_host_id_7e7bac">ID de anfitrión</string>
-    <!-- EN: Hz -->
+    <!-- SAME: Hz -->
     <string name="d86_hz_97aaf5">Hz</string>
     <!-- EN: IBM Nordic (CP 437-Nordic) -->
     <string name="d86_ibm_nordic_cp_437_nordic_9a7c8a">IBM Nórdico (CP 437-Nordic)</string>
@@ -245,7 +245,7 @@
     <string name="d86_initial_ram_size_7018b9">Tamaño inicial de RAM</string>
     <!-- EN: Interpolation Method -->
     <string name="d86_interpolation_method_e7ec55">Método de interpolación</string>
-    <!-- EN: IRQ -->
+    <!-- SAME: IRQ -->
     <string name="d86_irq_6dcf08">IRQ</string>
     <!-- EN: Korean (Kasan Hangulmadang-16 VGA) -->
     <string name="d86_korean_kasan_hangulmadang_16_vga_2b3a56">Coreano (Kasan Hangulmadang-16 VGA)</string>
@@ -305,7 +305,7 @@
     <string name="d86_output_gain_56f164">Ganancia de salida</string>
     <!-- EN: Parallel Port -->
     <string name="d86_parallel_port_019607">Puerto paralelo</string>
-    <!-- EN: Plug and Play -->
+    <!-- SAME: Plug and Play -->
     <string name="d86_plug_and_play_93ffca">Plug and Play</string>
     <!-- EN: RAM Address -->
     <string name="d86_ram_address_036c00">Dirección de RAM</string>

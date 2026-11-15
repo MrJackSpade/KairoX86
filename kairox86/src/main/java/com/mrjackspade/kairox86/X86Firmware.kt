@@ -3,6 +3,7 @@ package com.mrjackspade.kairox86
 import android.content.Context
 import com.mrjackspade.kairo.frontend.FirmwareSet
 import com.mrjackspade.kairo.frontend.UiText
+import com.mrjackspade.kairo.frontend.WebLink
 import java.io.File
 
 /**
@@ -41,8 +42,23 @@ object X86Firmware {
                 sizes = setOf(entry.size), sha1 = setOf(entry.sha1))
         }
         return FirmwareSet(folder, parts, requirements = emptyList(), note = UiText.res(R.string.firmware_rom_set_note),
-            listed = false)
+            listed = false, project = WebLink(UiText.res(R.string.firmware_source_86box), SOURCE))
     }
 
     const val INDEX = "firmware/86box-roms.tsv"
+
+    /**
+     * The free firmware the app ships, at its places in the ROM set (kairox86/build.gradle.kts stages it into
+     * assets/free-firmware): GLaBIOS, the MDA character ROM, and the free machine's SeaBIOS and its GD5446's
+     * SeaVGABIOS (KairoX86#446). It is in the ROM folder before 86Box is asked what hardware it has, so the
+     * hardware that runs on it counts as available from the first start (MainActivity.installFreeFirmware).
+     */
+    val FREE = listOf("machines/glabios/GLABIOS_0.4.0_8P.ROM", "machines/glabios/GLABIOS_0.4.0_VP.ROM",
+        "video/mda/mda.rom", "machines/kairo_pc/seabios.bin", "video/kairo/seavgabios_cirrus.bin")
+
+    /**
+     * 86Box's source, linked beside the firmware (KairoX86#438): the project, never its ROM repository, whose
+     * dumps are copyrighted by their makers (Google Play bars linking to copyrighted content).
+     */
+    const val SOURCE = "https://github.com/86Box/86Box"
 }

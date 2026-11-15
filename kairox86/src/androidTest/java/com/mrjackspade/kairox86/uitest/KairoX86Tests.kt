@@ -1,7 +1,9 @@
 package com.mrjackspade.kairox86.uitest
 
+import android.view.KeyEvent
 import com.mrjackspade.kairo.frontend.PcKey
 import com.mrjackspade.kairo.uitest.AppUnderTest
+import com.mrjackspade.kairo.uitest.By
 import com.mrjackspade.kairo.uitest.AppUnderTest.BiosSet
 import com.mrjackspade.kairo.uitest.AppUnderTest.MediaSwap
 import com.mrjackspade.kairo.uitest.KairoUiTest
@@ -32,8 +34,9 @@ object KairoX86App : AppUnderTest() {
     override val name = "KairoX86"
     override val brand = "KAIROX86"
     override val biosTitle = "IBM PC compatible BIOS"
-    // The ROM set is one row; the test BIOS folder installs the 486 board's BIOS and its S3 card's (KairoX86#90).
-    override val biosSets = listOf(BiosSet(0, 2))
+    // The ROM set is one row; the test BIOS folder installs the 486 board's BIOS and its S3 card's (KairoX86#90), beside
+    // the three of the set's files the app ships and installs at start (GLaBIOS's two and the MDA/CGA font, KairoX86#446).
+    override val biosSets = listOf(BiosSet(0, 5))
     override val bootGame = "xt"
     override val bootGameFile = "games/xt/86box.cfg"
     // A library entry is the machine folder, not its 86box.cfg.
@@ -94,6 +97,54 @@ class X86Tests : KairoUiTest() {
     /** The 486 starts on the player's 86Box ROM set, imported from a folder and found by content. */
     @Test
     fun aMachineStartsOnTheImportedFirmware() = startsAndDraws(KairoX86App.otherGame, "486ap4", importBios = true)
+
+    /**
+     * Every default preset, made with New game on a fresh install with no firmware imported, starts on the
+     * firmware the app ships (KairoX86#446): the XT on GLaBIOS, the 486 and the Pentium on the free machine
+     * (SeaBIOS, SeaVGABIOS). Each boots FreeDOS from the test resources' floppy in drive A and draws.
+     */
+    @Test
+    fun everyPresetStartsWithNothingImported() {
+        val library = screens.completeFirstRun(importBios = false)
+        for ((preset, board) in listOf("xt" to "ibmpc82", "486" to "kairo_pc", "pentium" to "kairo_pc")) {
+            val name = "Preset $preset"
+            createFromPreset(preset, name, floppy = "xt/fd13-720k.img")
+            library.open(name).play()
+            driver.waitFrames(600)
+            val probe = driver.probe()
+            expect.equal("the board the $preset preset starts on", board, probe.details["core.machine"])
+            expect.that("the $preset preset boots its floppy", "fd13" in probe.details["media.Floppy A"].orEmpty().lowercase()) {
+                probe.details["media.Floppy A"].orEmpty()
+            }
+            val picture = driver.pictures.game("preset-$preset")
+            expect.that("the $preset preset draws", picture.drawn()) { "lit ${picture.litFraction()}" }
+            screens.endGame()
+        }
+    }
+
+    /** New game from the library: [preset]'s hardware as it comes, [floppy] in drive A, named [name]. */
+    private fun createFromPreset(preset: String, name: String, floppy: String) {
+        driver.find(By.id("library.new-game")).tap()
+        val kinds = driver.page("New game").waitUntilShown()
+        kinds.find(By.item("o:preset-$preset")).tap()
+        kinds.find(By.id("footer:next")).tap()
+        // The preset's hardware pages, as it fills them; no firmware page, as it needs nothing imported
+        for (title in listOf("Machine", "Processor and memory", "Cards")) {
+            driver.page(title).waitUntilShown().find(By.id("footer:next")).tap()
+        }
+        val disks = driver.page("Disks")
+        screens.choose(disks.waitUntilShown(), "new-drive-a", floppy)
+        disks.find(By.id("footer:next")).tap()
+        val naming = driver.page("new-game-name").waitUntilShown()
+        val field = naming.find(By.id("new-game.name"))
+        // The default name out, the game's in, as a player types it
+        field.type("")
+        driver.press(KeyEvent.KEYCODE_MOVE_END, fromKeyboard = true)
+        repeat(field.text().length) { driver.press(KeyEvent.KEYCODE_DEL, fromKeyboard = true) }
+        driver.type(name)
+        naming.find(By.id("footer:done")).tap()
+        screens.library.waitForGame(name)
+    }
 
     /** The floppy the machine's 86box.cfg names is in drive A when it starts. */
     @Test

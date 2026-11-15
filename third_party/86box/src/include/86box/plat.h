@@ -184,6 +184,8 @@ extern int fullscreen_ui_visible;
 /* System-related functions. */
 extern FILE    *plat_fopen(const char *path, const char *mode);
 extern FILE    *plat_fopen64(const char *path, const char *mode);
+/* KairoX86#447: a duplicate of the descriptor the app holds for path, -1 for any other path */
+extern int      plat_held_fd(const char *path);
 extern void     plat_remove(char *path);
 extern int      plat_getcwd(char *bufp, int max);
 extern int      plat_chdir(char *path);

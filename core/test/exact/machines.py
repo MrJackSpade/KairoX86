@@ -8,6 +8,8 @@ without the change.
 
 <test set> is the local UI test set (roms/uitest: xt/fd13-720k.img, dos486/freedos.img and
 dos486/nvr). <out folder> receives one folder per machine, and machines.json: each machine's frames.
+The free machine's (free-486, free-pentium) firmware is the app's own (firmware/), which tools/exact.ps1
+lays over the ROM set.
 The Windows 98 machines boot the reference disks kept on the device, <reference folder>/win98-486,
 <reference folder>/win98-pentium and <reference folder>/win98-voodoo3 (base.vhd and nvr/ each;
 docs/development.md): each run opens a new differencing disk over the base, so every run starts from
@@ -72,6 +74,21 @@ MACHINES = {
                 + "[S3 Trio64V2/DX PCI #1]\nbios = trio64v2dx_pci\n\n[Input devices]\nkeyboard_type = keyboard_ps2\nmouse_type = ps2\n\n"
                 + "[Sound]\nfm_driver = ymfm\nsndcard = sb16\n\n" + floppy(XT_FLOPPY, "35_2hd"), [("xt", XT_FLOPPY)], 1500),
 }
+
+
+def free(cpu, speed, multi, memory):
+    """The free machine (KairoX86#446): SeaBIOS on the 440FX/PIIX4 board, SeaVGABIOS on its GD5446, with
+    the presets' Sound Blaster 16, booting FreeDOS from floppy (its own boot order, A first)."""
+    return (GENERAL + machine("kairo_pc", cpu, speed, multi, memory, "cl_gd5446_migrated_pci",
+                              extra="cpu_use_dynarec = 1\nfpu_type = internal")
+            + "[Cirrus Logic GD5446 (PCI) #1]\nbios = cl_gd5446_free_pci\n\n"
+            + "[Input devices]\nkeyboard_type = keyboard_ps2\nmouse_type = ps2\n\n"
+            + "[Sound]\nfm_driver = ymfm\nsndcard = sb16\n\n[Storage controllers]\nhdc = internal\n\n"
+            + floppy(DOS_FLOPPY, "35_2hd") + "\n[KairoX86]\nboot_order = a,cd,c\n")
+
+
+MACHINES["free-486"] = (free("i486dx2", 66666666, 2, 16384), [("dos486", DOS_FLOPPY)], 1500)
+MACHINES["free-pentium"] = (free("pentium_p55c", 233333333, 3.5, 65536), [("dos486", DOS_FLOPPY)], 1500)
 
 
 def voodoo3(reference):

@@ -232,6 +232,30 @@ All three big items are required together; none alone reaches 15 s.
 Install notes: Award 4.51G BIOS needs IDE HDD AUTO DETECTION → LBA (128-head translation); no INT13
 extensions, so the FAT32 partition must be type 0x0B (CHS), not 0x0C.
 
+## The free machine (KairoX86#446, PC, 2026-11-14)
+
+The presets' board, `kairo_pc` (SeaBIOS, SeaVGABIOS on the GD5446), measured on the PC (`game_profile`, llvm-mingw
+build, dynarec on) against the real board it replaces, each booting the same FreeDOS floppy to its prompt
+(`.build/exact/machines/free-pentium`'s image), frames 1500-2400:
+
+| Board and card | Host frames/s (guest) |
+| --- | --- |
+| TX97 + S3 Trio64V2/DX (its own BIOSes) | 39.1 (71.43) |
+| TX97 + GD5446 (Cirrus's BIOS) | 39.2 (66.67) |
+| kairo_pc + GD5446 (SeaBIOS, SeaVGABIOS) | 43.7 (66.67) |
+| kairo_pc + S3 Trio64V2/DX (SeaBIOS, S3's BIOS) | 59.7 (66.67) |
+
+The free machine costs no more than the board it replaces. The standard's `pentium` and `free-pentium` machines are not
+comparable to each other: they boot different FreeDOS images (`fd13-720k.img`, `freedos.img`).
+
+`tools/exact.ps1 -Local -Base origin/main` with the free machine's core changes (one A20 gate on `kairo_pc`): all nine
+machines exact; `-Unlinked` on `free-486` and `free-pentium`: exact.
+
+SeaVGABIOS wrote a planar pixel (INT 10h AH=0Ch) by reading and writing all four planes in turn; it now writes it
+through write mode 2 and the bit mask, as a VGA BIOS does (`kairox86-seabios`). core/test/free's mode 12h fill (one
+BIOS call a pixel, 486DX2-66): 76 rows of 480 a 300 frames before, 451 rows in its first 300 frames after; the
+reference board's S3 BIOS drew 347 rows in the same frames. Every pixel is the reference's (`check_free.py`).
+
 ## Findings
 
 | # | Area | Finding | Impact (Pentium 233 profile) | Status |

@@ -47,7 +47,7 @@ port_92_readb(uint16_t port, void *priv)
     if (port == 0x92) {
         /* Return bit 1 directly from mem_a20_alt, so the
            pin can be reset independently of the device. */
-        if (dev->flags & PORT_92_ONE)
+        if ((dev->flags & PORT_92_ONE) || mem_a20_single)
             ret = (dev->reg & ~0x03) | ((mem_a20_key | mem_a20_alt) & 2) | (cpu_alt_reset & 1);
         else if (dev->flags & PORT_92_KEY)
             ret = (dev->reg & ~0x03) | (mem_a20_key & 2) | (cpu_alt_reset & 1);
@@ -103,7 +103,7 @@ port_92_writeb(uint16_t port, uint8_t val, void *priv)
 
     dev->reg = val & 0x03;
 
-    if (dev->flags & PORT_92_ONE) {
+    if ((dev->flags & PORT_92_ONE) || mem_a20_single) {
         /* The one state: a write sets it whichever way it was set. */
         mem_a20_key = val & 2;
         mem_a20_alt = (mem_a20_alt & 0xfd) | (val & 2);

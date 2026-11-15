@@ -161,6 +161,7 @@ extern const device_t nvr_at_device;
 extern void rtc_tick(void);
 
 extern void  nvr_init(nvr_t *);
+extern nvr_t *nvr_get_current(void);
 extern int   nvr_load(void);
 extern void  nvr_close(void);
 extern void  nvr_set_ven_save(void (*ven_save)(void));

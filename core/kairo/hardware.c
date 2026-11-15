@@ -188,7 +188,9 @@ put_options(const device_t *device)
                      config->default_int);
             put_string(value);
         }
-        put(",\"binary\":%s,\"choices\":[", (type == CONFIG_BINARY) ? "true" : "false");
+        /* "bios": the device's firmware choice, whose files the "files" query lists (KairoX86#438) */
+        put(",\"binary\":%s,\"bios\":%s,\"choices\":[", (type == CONFIG_BINARY) ? "true" : "false",
+            (type == CONFIG_BIOS) ? "true" : "false");
         if (type == CONFIG_BINARY) {
             put_choice(true, "0", "", true);
             put_choice(false, "1", "", true);
@@ -388,6 +390,114 @@ put_machines(void)
     put("]");
 }
 
+/* The files a "files" query found (KairoX86#438): each once, with whether it is in the ROM set. */
+#define FILES_MAX 64
+static char probed[FILES_MAX][256]; /* copies: a device may name a file from a buffer of its own */
+static bool probed_present[FILES_MAX];
+static int  probed_count;
+
+static void
+add_file(const char *fn, bool present)
+{
+    for (int f = 0; f < probed_count; f++)
+        if (!strcmp(probed[f], fn))
+            return;
+    if (probed_count == FILES_MAX)
+        fatal("hardware: more than %d firmware files for one device\n", FILES_MAX);
+    if (strlen(fn) >= sizeof(probed[0]))
+        fatal("hardware: firmware file name too long: %s\n", fn);
+    strcpy(probed[probed_count], fn);
+    probed_present[probed_count] = present;
+    probed_count++;
+}
+
+/* rom_present while a "files" query runs an availability check: every file the check asks about is
+   noted and counted as there, so the check goes on to ask about the rest. */
+static int
+probe_file(const char *fn, int present)
+{
+    if (fn != NULL)
+        add_file(fn, present);
+    return 1;
+}
+
+/* [device]'s BIOS choices, when it picks its firmware from a list (its first option, as
+   machine_device_available reads it), else NULL. */
+static const device_config_t *
+bios_config(const device_t *device)
+{
+    const device_config_t *config = device ? device->config : NULL;
+    return ((config != NULL) && (config->type == CONFIG_BIOS)) ? config : NULL;
+}
+
+/* The files of BIOS choice [wanted] (its internal name), or of the default choice for NULL or a name it
+   does not have, as device_get_bios_file falls back. */
+static void
+add_bios_files(const device_config_t *config, const char *wanted)
+{
+    const device_config_bios_t *chosen = NULL;
+    for (const device_config_bios_t *bios = config->bios; bios->name && bios->internal_name && bios->files_no; bios++) {
+        if ((wanted != NULL) && !strcmp(bios->internal_name, wanted))
+            chosen = bios;
+        if ((chosen == NULL) && !strcmp(bios->internal_name, config->default_string))
+            chosen = bios;
+    }
+    if (chosen == NULL)
+        fatal("hardware: no default BIOS among %s's choices\n", config->name);
+    for (int8_t f = 0; f < chosen->files_no; f++)
+        add_file(chosen->files[f], rom_present(chosen->files[f]));
+}
+
+/* The firmware files [kind]'s [id] reads ("machine" for a board), with BIOS choice [bios] (NULL for
+   its default) where it has a list of them: [{"path","present"}], each path as the ROM set holds it
+   (without 86Box's "roms/"). Found by 86Box's own availability check, so they are exactly the files
+   whose absence makes it unavailable. */
+static bool
+put_files(const char *kind_name, const char *id, const char *bios)
+{
+    probed_count            = 0;
+    const device_t *device  = NULL;
+    int             m       = -1;
+    int             card    = -1;
+    const struct kind *kind = NULL;
+    if (!strcmp(kind_name, "machine")) {
+        if ((m = machine_named(id)) < 0)
+            return false;
+        device = machine_get_device(m);
+    } else {
+        for (size_t k = 0; (k < sizeof(kinds) / sizeof(kinds[0])) && (kind == NULL); k++)
+            if (!strcmp(kinds[k].name, kind_name))
+                kind = &kinds[k];
+        if (kind == NULL)
+            return false;
+        for (int c = 0; kind->internal_name(c) && kind->internal_name(c)[0]; c++)
+            if (!strcmp(kind->internal_name(c), id))
+                card = c;
+        if (card < 0)
+            return false;
+        device = kind->device(card);
+    }
+    const device_config_t *config = bios_config(device);
+    if (config != NULL)
+        add_bios_files(config, bios);
+    else {
+        rom_present_probe = probe_file;
+        if (m >= 0)
+            (void) machine_available(m);
+        else
+            (void) kind->available(card);
+        rom_present_probe = NULL;
+    }
+    put("[");
+    for (int f = 0; f < probed_count; f++) {
+        put(f ? ",{\"path\":" : "{\"path\":");
+        put_string(!strncmp(probed[f], "roms/", 5) ? (probed[f] + 5) : probed[f]);
+        put(",\"present\":%s}", probed_present[f] ? "true" : "false");
+    }
+    put("]");
+    return true;
+}
+
 /* The memory a machine has when its 86box.cfg names none (KairoX86#62): the most it takes up to a
    cap. Up to the 486 boards the cap is 16 MB, as on DOSBox: software in 286 protected mode (Windows
    3.0's standard mode, 16-bit DOS extenders) can crash with more than 15 MB of extended memory. From
@@ -491,7 +601,13 @@ hardware_query(const char *rom_folder, const char *query)
             return NULL;
     } else if (!strcmp(query, "all options"))
         put_all_options();
-    else
+    else if (!strncmp(query, "files ", 6)) {
+        /* "files <kind> <id>" or "files <kind> <id> <BIOS choice>" */
+        char kind_name[32], id[128], bios[128];
+        const int fields = sscanf(query + 6, "%31s %127s %127s", kind_name, id, bios);
+        if ((fields < 2) || !put_files(kind_name, id, (fields == 3) ? bios : NULL))
+            return NULL;
+    } else
         return NULL;
     return text;
 }

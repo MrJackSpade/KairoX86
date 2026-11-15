@@ -24,6 +24,7 @@ add_library(dev OBJECT
     bugger.c
     cartridge.c
     kairo_cassette.c
+    kairo_fw_cfg.c
     clock_ics9xxx.c
     dell_jumper.c
     hasp.c

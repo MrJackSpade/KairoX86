@@ -304,7 +304,9 @@ class MainActivity : MachineActivity<X86Entry>() {
      */
     /** New game (KairoX86#332): a preset or a custom PC through its hardware, or a blank floppy (X86NewGame). */
     override val newGameWorkflow by lazy {
-        X86NewGame.workflow(this, { tree?.let(machines::disks).orEmpty() }) { image -> machines.imageFiles(libraryTree(), image) }
+        X86NewGame.workflow(this, { tree?.let(machines::disks).orEmpty() }, { image -> machines.imageFiles(libraryTree(), image) }) {
+            firmwareSets.single().second
+        }
     }
 
     override val blankDisks: List<BlankDisk> by lazy {
@@ -414,6 +416,15 @@ class MainActivity : MachineActivity<X86Entry>() {
     /** The player's 86Box ROM set, imported by content into [firmwareFolder] (KairoX86#67). */
     override val firmwareSets by lazy { listOf(UiText.res(R.string.firmware_rom_set) to X86Firmware.set(this, firmwareFolder)) }
 
+    /**
+     * The hardware 86Box offers is asked again: whose firmware is there changed (KairoX86#438). A removed set
+     * can take the free firmware with it: it goes back first.
+     */
+    override fun firmwareFilesChanged() {
+        installFreeFirmware()
+        X86Hardware.firmwareChanged()
+    }
+
     override fun startGame(entry: X86Entry, game: CatalogGame, cancelled: AtomicBoolean, progress: (String) -> Unit) =
         start(entry, X86Catalog.startupCommands.value(game, emptyMap()), cancelled, progress)
 
@@ -433,6 +444,7 @@ class MainActivity : MachineActivity<X86Entry>() {
         // Each step's time, for the start's measure (KairoX86#42) and player reports.
         val began = SystemClock.elapsedRealtime()
         installFreeFirmware(progress)
+        ShippedAssets.install(this, "free-firmware/${X86SoundFonts.SHIPPED}", File(firmwareFolder, X86SoundFonts.SHIPPED), progress)
         val firmwareReady = SystemClock.elapsedRealtime()
         // An eXoWin9x game's machine folder, made from its collection the first time (KairoX86#219)
         if (entry.exo) machines.makeExoDisks(entry, tree, cancelled, progress)
@@ -460,12 +472,13 @@ class MainActivity : MachineActivity<X86Entry>() {
     override val keyboardNamed: (String) -> GuestKeyboardLayout = X86Keys::layoutFor
 
     /**
-     * The free firmware the app ships (assets/free-firmware: GLaBIOS, the character ROM), each file
-     * installed at its place in the ROM folder beside the player's own, with the shared install, which
-     * writes a file again only when the app changed.
+     * The free firmware the app ships (assets/free-firmware, X86Firmware.FREE), each file installed at its
+     * place in the ROM folder beside the player's own, with the shared install, which writes a file again
+     * only when the app changed or the file is gone. Small: it runs as the app starts, before 86Box is
+     * asked what hardware it has (KairoX86#446).
      */
-    private fun installFreeFirmware(progress: (String) -> Unit) {
-        for (file in FREE_FIRMWARE) ShippedAssets.install(this, "free-firmware/$file", File(firmwareFolder, file), progress)
+    private fun installFreeFirmware(progress: (String) -> Unit = {}) {
+        for (file in X86Firmware.FREE) ShippedAssets.install(this, "free-firmware/$file", File(firmwareFolder, file), progress)
     }
 
     /** The guest's MIDI can go to a MIDI port of the device: the MIDI out device "MIDI port" (KairoX86#305). */
@@ -483,6 +496,7 @@ class MainActivity : MachineActivity<X86Entry>() {
     override fun onCreate(savedInstanceState: Bundle?) {
         // The machine settings' hardware choices come from the player's ROM set (Kairo#143).
         X86Hardware.roms = firmwareFolder
+        installFreeFirmware()
         X86SoundFonts.files = X86SoundFonts.library(this)
         super.onCreate(savedInstanceState)
     }
@@ -512,10 +526,6 @@ class MainActivity : MachineActivity<X86Entry>() {
     private companion object {
         /** The wordmark's accent: the icon's (shared tools/app_icon/presets/kairox86.json). */
         const val BRAND_ACCENT = 0xff1FD6E8.toInt()
-
-        /** The free firmware's files, at their places in the ROM set (kairox86/build.gradle.kts). */
-        val FREE_FIRMWARE = listOf("machines/glabios/GLABIOS_0.4.0_8P.ROM", "machines/glabios/GLABIOS_0.4.0_VP.ROM",
-            "video/mda/mda.rom", X86SoundFonts.SHIPPED)
 
         /** The picker of a SoundFont for a game's FluidSynth (soundFontImport). */
         private const val SOUND_FONT_IMPORT_REQUEST = FIRST_PRODUCT_REQUEST

@@ -13,7 +13,10 @@
  *   "machine <id>"  what machine <id> takes: {"cpus":[{"family","name","speeds":[{"speed","multi","name"}]}],
  *                   "ram":{"min","max","step","default"} (KB), its cards of each kind ("video", "sound",
  *                   "network", "hdc", "scsi", "fdc") and mice ("mouse"): [{"id","name","available"}],
- *                   and the game port's joysticks ("joystick"), the same for every machine */
+ *                   and the game port's joysticks ("joystick"), the same for every machine
+ *   "files <kind> <id> [<BIOS>]"  the firmware files board ("machine") or card <id> of <kind> reads, with BIOS
+ *                   choice <BIOS> (its default when none) where it has a list of them: [{"path","present"}],
+ *                   each path inside the ROM set (KairoX86#438) */
 const char *hardware_query(const char *rom_folder, const char *query);
 
 /* The memory in KB machine [m] (86Box's machine index) has when its 86box.cfg names none (KairoX86#62). */

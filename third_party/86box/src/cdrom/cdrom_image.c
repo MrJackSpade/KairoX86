@@ -381,7 +381,11 @@ audio_init(const uint8_t id, const char *filename, UNUSED(int bom), int *error)
         audio->file = sf_wchar_open(filename_w, SFM_READ, &audio->info);
     } else
 #endif
-        audio->file = sf_open(filename, SFM_READ, &audio->info);
+    {
+        /* KairoX86#447: an audio track the app holds is read through its descriptor */
+        const int held = plat_held_fd(filename);
+        audio->file    = (held >= 0) ? sf_open_fd(held, SFM_READ, &audio->info, 1) : sf_open(filename, SFM_READ, &audio->info);
+    }
 
     if (audio->file == NULL) {
         image_log(tf->log, "Audio file open error: %s\n", sf_strerror(audio->file));

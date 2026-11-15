@@ -28,9 +28,16 @@
 
 # KairoX86
 
-**Build your own period PC on Android phones and handhelds.** KairoX86 is an Android emulator for IBM PC compatibles, from the 1981 IBM PC to Pentium-era machines. It is built on the [Kairo shared frontend](https://github.com/MrJackSpade/Kairo): the same library, controller and touch controls, on-screen keyboard, save states and settings as the other Kairo apps. It runs a pinned copy of [86Box](https://86box.net/), which models real machines with their own BIOS, chipset, video and sound cards. It is an independent project, not an official 86Box release.
+**Build your own period PC on Android phones and handhelds.** KairoX86 is an Android emulator for IBM PC compatibles, from the 1981 IBM PC to Pentium-era machines. It is built on the [Kairo shared frontend](https://github.com/MrJackSpade/Kairo): the same library, controller and touch controls, on-screen keyboard and settings as the other Kairo apps. It runs a pinned copy of [86Box](https://86box.net/), which models real machines with their own BIOS, chipset, video and sound cards. It is an independent project, not an official 86Box release.
 
-KairoX86 is in development and has no release yet.
+## Download
+
+<!-- kairo:download -->
+- **[Google Play](https://play.google.com/store/apps/details?id=com.loxifi.kairox86)** (paid): updates automatically. Buying it supports development.
+- **[GitHub Releases](https://github.com/MrJackSpade/KairoX86/releases)** (free): install the APK yourself.
+
+Both editions are built from the same source and have the same features. Requires an ARM64 device running Android 8.0 or newer.
+<!-- /kairo:download -->
 
 ## How it works
 

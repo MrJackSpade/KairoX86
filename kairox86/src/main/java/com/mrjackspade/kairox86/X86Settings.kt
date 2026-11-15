@@ -34,7 +34,8 @@ object X86Settings {
 
     private fun takes(values: Map<String, String>) = X86Hardware.takes(values[MACHINE_ID] ?: FIRST_MACHINE)
 
-    private val firmwareMissing = UiText.res(R.string.setting_firmware_missing)
+    /** Why a choice whose firmware the player's set lacks cannot be picked (New game takes it, KairoX86#438). */
+    val firmwareMissing = UiText.res(R.string.setting_firmware_missing)
 
     /** [machineChoices] and the machines they were made from. */
     private var machineChoices: Pair<List<X86Hardware.Machine>, List<ChoiceOption>>? = null

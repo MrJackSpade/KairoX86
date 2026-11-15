@@ -21,6 +21,13 @@ KairoX86's source. Its license follows.'''
 FONT_TERMS = '''KairoX86's character ROM (the MDA and CGA fonts, firmware/video/mda/mda.rom, written by
 tools/make_font_rom.py) is made from the PC fonts in SeaBIOS's vgasrc/vgafonts.c, which say:'''
 
+SEABIOS_TERMS = '''SeaBIOS is a free PC BIOS, with SeaVGABIOS for its video cards, distributed under the GNU
+Lesser General Public License, version 3. KairoX86 ships its 1.17.0 release built for KairoX86's free
+machine (firmware/machines/kairo_pc/seabios.bin) and SeaVGABIOS's Cirrus Logic build
+(firmware/video/kairo/seavgabios_cirrus.bin), which run inside the emulated PC as its firmware; their
+source, with KairoX86's two changes, is in third_party/seabios of KairoX86's source, and
+tools/seabios/build.sh builds them. The LGPL version 3 and the GPL version 3 it adds to follow.'''
+
 MUNT_TERMS = '''Munt's libmt32emu emulates the Roland MT-32 and CM-32L for a game's MIDI music (KairoX86 builds it
 from shared/third_party/munt). It is distributed under the GNU Lesser General Public License,
 version 2.1 or (at your option) any later version, which follows.'''
@@ -55,6 +62,8 @@ SECTIONS = [
      [GLABIOS_TERMS, text('glabios/LICENSE')]),
     ('PC fonts by Joseph Gil (public domain)', 'third_party/seabios-fonts/vgafonts.c (from SeaBIOS)',
      [FONT_TERMS, excerpt('seabios-fonts/vgafonts.c', 'These fonts come from', 'The individual fonts are public domain')]),
+    ('SeaBIOS 1.17.0 (LGPL-3.0)', 'https://www.seabios.org/, third_party/seabios',
+     [SEABIOS_TERMS, text('seabios/COPYING.LESSER'), text('seabios/COPYING')]),
     ('zlib 1.3.2', 'https://zlib.net/, shared/third_party/zlib', [text('../shared/third_party/zlib/LICENSE')]),
     ('libpng 1.6.59', 'http://www.libpng.org/pub/png/libpng.html, shared/third_party/libpng',
      [text('../shared/third_party/libpng/LICENSE')]),

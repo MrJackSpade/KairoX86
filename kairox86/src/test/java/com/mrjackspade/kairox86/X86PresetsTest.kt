@@ -9,21 +9,21 @@ import java.io.File
 /** The hardware presets a new machine starts from (KairoX86#184). */
 class X86PresetsTest {
     private fun folder(preset: X86Presets.Preset) = File("src/main/assets/presets/${preset.id}")
+    private fun config(preset: X86Presets.Preset) = IniText(File(folder(preset), X86Presets.CONFIG).readText())
 
     @Test
-    fun everyPresetFileShips() {
+    fun eachPresetShipsOnlyItsConfig() {
         for (preset in X86Presets.all) {
-            for (path in preset.files) assertTrue("${preset.id}/$path", File(folder(preset), path).isFile)
-            // Nothing else ships with it: no firmware, no flash copy.
+            // Nothing else ships with it: no firmware, no CMOS, no flash copy.
             val shipped = folder(preset).walkTopDown().filter { it.isFile }.map { it.relativeTo(folder(preset)).invariantSeparatorsPath }.toSet()
-            assertEquals(preset.id, preset.files.toSet(), shipped)
+            assertEquals(preset.id, setOf(X86Presets.CONFIG), shipped)
         }
     }
 
     @Test
     fun eachConfigIsTheHardwareThePresetChecks() {
         for (preset in X86Presets.all) {
-            val config = IniText(File(folder(preset), "86box.cfg").readText())
+            val config = config(preset)
             assertEquals(preset.id, preset.machine, config["Machine", "machine"])
             assertEquals(preset.id, preset.cards[X86Hardware.VIDEO], config["Video", "gfxcard"])
             assertEquals(preset.id, preset.cards[X86Hardware.SOUND], config["Sound", "sndcard"])
@@ -36,7 +36,7 @@ class X86PresetsTest {
     @Test
     fun aHardDiskIsNamedWithItsOwnGeometry() {
         for (preset in X86Presets.all) {
-            val config = IniText(File(folder(preset), "86box.cfg").readText())
+            val config = config(preset)
             val disk = preset.hardDisk
             if (disk == null) {
                 assertNull(preset.id, config["Hard disks", "hdd_01_fn"])
@@ -51,7 +51,33 @@ class X86PresetsTest {
 
     @Test
     fun theXtRunsOnTheFreeBios() {
-        val config = IniText(File(folder(X86Presets.XT), "86box.cfg").readText())
-        assertEquals("glabios_040_8088", config["IBM PC (1982)", "bios"])
+        assertEquals("glabios_040_8088", config(X86Presets.XT)["IBM PC (1982)", "bios"])
+    }
+
+    @Test
+    fun theOtherPresetsRunOnTheFreeMachineAndVideoBios() {
+        // KairoX86#446: SeaBIOS on the free machine, SeaVGABIOS on its GD5446; both ship with the app
+        for (preset in listOf(X86Presets.DOS_486, X86Presets.WIN9X)) {
+            val config = config(preset)
+            assertEquals(preset.id, X86Presets.FREE_MACHINE, config["Machine", "machine"])
+            assertEquals(preset.id, X86Presets.FREE_VIDEO, config["Video", "gfxcard"])
+            assertEquals(preset.id, "cl_gd5446_free_pci", config["Cirrus Logic GD5446 (PCI) #1", "bios"])
+        }
+        assertEquals(listOf(X86Presets.XT), X86Presets.all.filter { it.machine != X86Presets.FREE_MACHINE })
+    }
+
+    @Test
+    fun eachFreeMachinePresetKeepsItsBootOrder() {
+        // The 486 boots A then C; the Pentium A, the CD, then C (KairoX86#342)
+        assertEquals("a,c", config(X86Presets.DOS_486)["KairoX86", "boot_order"])
+        assertEquals("a,cd,c", config(X86Presets.WIN9X)["KairoX86", "boot_order"])
+    }
+
+    @Test
+    fun theFreeFirmwareShipsWithTheApp() {
+        for (path in listOf("machines/kairo_pc/seabios.bin", "video/kairo/seavgabios_cirrus.bin")) {
+            assertTrue(path, path in X86Firmware.FREE)
+            assertTrue(path, File("../firmware/$path").isFile)
+        }
     }
 }

@@ -114,6 +114,13 @@ config_kairo_int(const char *name, int def)
 {
     return ini_section_get_int(ini_find_section(config, "KairoX86"), name, def);
 }
+
+/* The free machine's boot order (kairo_pc.h): a setting of the [KairoX86] section, def when it has none */
+const char *
+config_kairo_string(const char *name, const char *def)
+{
+    return ini_section_get_string(ini_find_section(config, "KairoX86"), name, (char *) def);
+}
 static ini_t    global;
 static mutex_t *config_mutex = NULL;
 

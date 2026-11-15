@@ -66,6 +66,9 @@ add_library(mch OBJECT
     m_at_slot2.c
     m_at_socket370.c
     m_at_misc.c
+    m_kairo_pc.c
+    kairo_pc_acpi.c
+    kairo_pc_smbios.c
     tandy_vis/m_at_tandy_vis.c
     tandy_vis/m_tandy_vis_memcard.c
     tandy_vis/m_tandy_vis_ps2.c

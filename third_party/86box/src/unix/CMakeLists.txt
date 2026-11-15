@@ -10,6 +10,10 @@ else()
     target_sources(plat PRIVATE headless_main.c)
 endif()
 target_include_directories(plat PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/headless_sdl)
+# KairoX86#447: bionic declares funopen (sdl_plat.c's streams over held descriptors) for BSD sources
+if(ANDROID)
+    set_source_files_properties(sdl_plat.c PROPERTIES COMPILE_DEFINITIONS _BSD_SOURCE)
+endif()
 
 if(WIN32)
     target_sources(plat PRIVATE

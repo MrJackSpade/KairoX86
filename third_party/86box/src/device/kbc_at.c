@@ -795,7 +795,13 @@ write_p2(atkbc_t *dev, uint8_t val)
     uint8_t kbc_ven = dev->flags & KBC_VEN_MASK;
 
     /* AT, PS/2: Handle A20. */
-    if ((mem_a20_key ^ val) & 0x02) { /* A20 enable change */
+    if (mem_a20_single) {
+        /* One A20 state (the free machine): this write sets it whichever way it was set. */
+        mem_a20_key = val & 0x02;
+        mem_a20_alt = (mem_a20_alt & 0xfd) | (val & 0x02);
+        mem_a20_recalc();
+        flushmmucache();
+    } else if ((mem_a20_key ^ val) & 0x02) { /* A20 enable change */
         mem_a20_key = val & 0x02;
         mem_a20_recalc();
         flushmmucache();
@@ -882,7 +888,13 @@ write_p2_fast_a20(atkbc_t *dev, uint8_t val)
     kbc_at_log("ATkbc: write P2 in fast A20 mode: %02X (old: %02X)\n", val, dev->p2);
 
     /* AT, PS/2: Handle A20. */
-    if ((old ^ val) & 0x02) { /* A20 enable change */
+    if (mem_a20_single) {
+        /* One A20 state (the free machine): this write sets it whichever way it was set. */
+        mem_a20_key = val & 0x02;
+        mem_a20_alt = (mem_a20_alt & 0xfd) | (val & 0x02);
+        mem_a20_recalc();
+        flushmmucache();
+    } else if ((old ^ val) & 0x02) { /* A20 enable change */
         mem_a20_key = val & 0x02;
         mem_a20_recalc();
         flushmmucache();
