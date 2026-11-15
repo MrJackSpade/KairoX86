@@ -51,7 +51,6 @@ object KairoX86App : AppUnderTest() {
     // Machine settings are each machine folder's own (its 86box.cfg): no all-games defaults.
     override val machineDefaults = false
     override val searchTerm = "xt"
-    override val arrowKeys = listOf(PcKey.UP.scanCode, PcKey.DOWN.scanCode, PcKey.LEFT.scanCode, PcKey.RIGHT.scanCode)
     override val returnKey = PcKey.ENTER.scanCode
     override val spaceKey = PcKey.SPACE.scanCode
     // 86Box saves no state of a running machine (KairoX86#187).
