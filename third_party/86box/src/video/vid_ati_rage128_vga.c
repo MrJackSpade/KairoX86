@@ -107,21 +107,6 @@ rage128_aper_write(uint32_t addr, uint8_t val, void *priv)
     svga_write_linear(addr, val, &dev->svga);
 }
 
-/* KairoX86#441: the aperture's word or dword write when the card writes it plainly (svga->fast, no GPU touch, no address
-   translation): svga_writew/l_linear's fast path, the bus timing and the store. Returns 0, having done nothing,
-   otherwise. */
-static inline int
-rage128_aper_write_plain(rage128_t *dev, uint32_t addr, uint32_t val, int len)
-{
-    svga_t *svga = &dev->svga;
-
-    if (!svga->fast || (svga->kairo_touch != NULL) || (svga->translate_address != NULL))
-        return 0;
-    cycles -= (len == 2) ? svga->monitor->mon_video_timing_write_w : svga->monitor->mon_video_timing_write_l;
-    svga_vram_store_plain(svga, addr & svga->decode_mask, val, len);
-    return 1;
-}
-
 static void
 rage128_aper_writew(uint32_t addr, uint16_t val, void *priv)
 {
@@ -132,8 +117,7 @@ rage128_aper_writew(uint32_t addr, uint16_t val, void *priv)
         rage128_synctel_cpu_write(dev, addr, 2);
     if (dev->gpu)
         rage128_gpu_cpu_barrier(dev, addr, 2, 1);
-    if (!rage128_aper_write_plain(dev, addr, val, 2))
-        svga_writew_linear(addr, val, &dev->svga);
+    svga_writew_linear(addr, val, &dev->svga);
 }
 
 static void
@@ -146,8 +130,7 @@ rage128_aper_writel(uint32_t addr, uint32_t val, void *priv)
         rage128_synctel_cpu_write(dev, addr, 4);
     if (dev->gpu)
         rage128_gpu_cpu_barrier(dev, addr, 4, 1);
-    if (!rage128_aper_write_plain(dev, addr, val, 4))
-        svga_writel_linear(addr, val, &dev->svga);
+    svga_writel_linear(addr, val, &dev->svga);
 }
 
 /* B0000 / B8000 windows. The svga core resolves these through its
