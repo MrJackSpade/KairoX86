@@ -34,8 +34,9 @@ object KairoX86App : AppUnderTest() {
     override val name = "KairoX86"
     override val brand = "KAIROX86"
     override val biosTitle = "IBM PC compatible BIOS"
-    // The ROM set is one row; the test BIOS folder installs the 486 board's BIOS and its S3 card's (KairoX86#90).
-    override val biosSets = listOf(BiosSet(0, 2))
+    // The ROM set is one row; the test BIOS folder installs the 486 board's BIOS and its S3 card's (KairoX86#90), beside
+    // the three of the set's files the app ships and installs at start (GLaBIOS's two and the MDA/CGA font, KairoX86#446).
+    override val biosSets = listOf(BiosSet(0, 5))
     override val bootGame = "xt"
     override val bootGameFile = "games/xt/86box.cfg"
     // A library entry is the machine folder, not its 86box.cfg.
