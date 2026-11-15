@@ -39,6 +39,14 @@
 Both editions are built from the same source and have the same features. Requires an ARM64 device running Android 8.0 or newer.
 <!-- /kairo:download -->
 
+## Screenshots
+
+| Library | Details | Playing |
+| --- | --- | --- |
+| ![KairoX86 machine library](docs/screenshots/library.png) | ![Machine settings in KairoX86](docs/screenshots/game-details.png) | ![Windows 98 running in KairoX86](docs/screenshots/running-game.png) |
+
+Games shown in screenshots are user-provided and are not bundled with the app.
+
 ## How it works
 
 KairoX86 has no game catalog. Each library entry is a PC you set up: its hardware, its disk images and the media in its drives. It is kept as an 86Box machine folder (`86box.cfg`, its disks and its CMOS), so a machine made in desktop 86Box can be added as it is.
