@@ -320,12 +320,13 @@ aml_name_rt(aml_t *a, const char *name, aml_t *descriptors)
     aml_name_obj(a, name, &value);
 }
 
-/* A legacy ISA device: _HID and _CRS. */
+/* A legacy ISA device: _HID, _UID (which tells apart devices of one _HID, as the two serial ports) and _CRS. */
 static void
-isa_device(aml_t *isa, const char *name, const char *hid, aml_t *crs)
+isa_device(aml_t *isa, const char *name, const char *hid, int uid, aml_t *crs)
 {
     aml_t body = { 0 };
     aml_name_eisaid(&body, "_HID", hid);
+    aml_name_int(&body, "_UID", uid);
     aml_name_rt(&body, "_CRS", crs);
     aml_named_block(isa, 1, AML_EXT_DEVICE, name, &body);
 }
@@ -488,50 +489,50 @@ isa_bridge(aml_t *pci0)
     rt_io(&rt, 0x60, 1, 1);
     rt_io(&rt, 0x64, 1, 1);
     rt_irq(&rt, 1);
-    isa_device(&isa, "KBD", "PNP0303", &rt);
+    isa_device(&isa, "KBD", "PNP0303", 1, &rt);
     rt_irq(&rt, 12);
-    isa_device(&isa, "MOU", "PNP0F13", &rt);
+    isa_device(&isa, "MOU", "PNP0F13", 1, &rt);
     rt_io(&rt, 0x20, 1, 2);
     rt_io(&rt, 0xa0, 1, 2);
     rt_irq(&rt, 2);
-    isa_device(&isa, "PIC", "PNP0000", &rt);
+    isa_device(&isa, "PIC", "PNP0000", 1, &rt);
     rt_io(&rt, 0x40, 1, 4);
     rt_irq(&rt, 0);
-    isa_device(&isa, "TMR", "PNP0100", &rt);
+    isa_device(&isa, "TMR", "PNP0100", 1, &rt);
     rt_io(&rt, 0x70, 1, 2);
     rt_irq(&rt, 8);
-    isa_device(&isa, "RTC", "PNP0B00", &rt);
+    isa_device(&isa, "RTC", "PNP0B00", 1, &rt);
     rt_io(&rt, 0x00, 1, 16);
     rt_io(&rt, 0x80, 1, 16);
     rt_io(&rt, 0xc0, 1, 32);
     rt_dma(&rt, 4);
-    isa_device(&isa, "DMAC", "PNP0200", &rt);
+    isa_device(&isa, "DMAC", "PNP0200", 1, &rt);
     rt_io(&rt, 0x61, 1, 1);
-    isa_device(&isa, "SPKR", "PNP0800", &rt);
+    isa_device(&isa, "SPKR", "PNP0800", 1, &rt);
     rt_io(&rt, 0xf0, 1, 16);
     rt_irq(&rt, 13);
-    isa_device(&isa, "FPU", "PNP0C04", &rt);
+    isa_device(&isa, "FPU", "PNP0C04", 1, &rt);
     if (floppy_present()) {
         rt_io(&rt, 0x3f2, 0, 4);
         rt_io(&rt, 0x3f7, 0, 1);
         rt_irq(&rt, 6);
         rt_dma(&rt, 2);
-        isa_device(&isa, "FDC0", "PNP0700", &rt);
+        isa_device(&isa, "FDC0", "PNP0700", 1, &rt);
     }
     if (com_ports[0].enabled) {
         rt_io(&rt, 0x3f8, 0, 8);
         rt_irq(&rt, 4);
-        isa_device(&isa, "COM1", "PNP0501", &rt);
+        isa_device(&isa, "COM1", "PNP0501", 1, &rt);
     }
     if (com_ports[1].enabled) {
         rt_io(&rt, 0x2f8, 0, 8);
         rt_irq(&rt, 3);
-        isa_device(&isa, "COM2", "PNP0501", &rt);
+        isa_device(&isa, "COM2", "PNP0501", 2, &rt);
     }
     if (lpt_ports[0].enabled) {
         rt_io(&rt, 0x378, 0, 8);
         rt_irq(&rt, 7);
-        isa_device(&isa, "LPT1", "PNP0400", &rt);
+        isa_device(&isa, "LPT1", "PNP0400", 1, &rt);
     }
     /* The motherboard's other ports: port 92h, APM (B2h-B3h), the edge/level registers (4D0h),
        the fw_cfg ports, the PIIX4's power management and SMBus blocks. */
