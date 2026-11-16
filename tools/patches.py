@@ -7168,6 +7168,15 @@ KAIROX86_GPU_HANDOVER_ASYNC = [
      "frame_take(void)\n{\n    const bitmap_t *target = monitors[0].target_buffer;\n\n    if (kairo_gpu_on)\n        kairo_gpu_run_finish(); /* KairoX86#384: a hand-over's lines drawn before they are read */\n"),
 ]
 
+
+# # KairoX86#131: the ARM64 load stubs' fast paths no longer zero W1, which no caller reads.
+KAIROX86_LOAD_STUB_NO_W1 = [
+    ('86box/src/codegen/codegen_backend_arm64.c', '            host_arm64_LDR_REG_F64(block, REG_V_TEMP, REG_W1, REG_W0);\n        host_arm64_MOVZ_IMM(block, REG_W1, 0);',
+     "            host_arm64_LDR_REG_F64(block, REG_V_TEMP, REG_W1, REG_W0);\n        /* KairoX86#131: no W1 = 0: the callers don't read it (a C path that aborted leaves the block itself) */"),
+    ('86box/src/codegen/codegen_backend_arm64.c', '        host_arm64_LDRH_REG(block, REG_W0, REG_W1, REG_W0);\n        host_arm64_MOVZ_IMM(block, REG_W1, 0);\n        host_arm64_RET(block, REG_X30);',
+     '        host_arm64_LDRH_REG(block, REG_W0, REG_W1, REG_W0);\n        host_arm64_RET(block, REG_X30); /* KairoX86#131: no W1 = 0, as above */'),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -7356,6 +7365,7 @@ PATCHES = {
     'kairox86-held-descriptors': KAIROX86_HELD_DESCRIPTORS,
     'kairox86-a20-single': KAIROX86_A20_SINGLE,
     'kairox86-gpu-handover-async': KAIROX86_GPU_HANDOVER_ASYNC,
+    'kairox86-load-stub-no-w1': KAIROX86_LOAD_STUB_NO_W1,
 }
 
 ADDED = [

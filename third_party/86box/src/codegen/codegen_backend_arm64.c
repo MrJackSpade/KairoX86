@@ -263,7 +263,7 @@ build_load_routine(codeblock_t *block, int size, int is_float, int ea_rule, int 
             host_arm64_LDR_REG_F32(block, REG_V_TEMP, REG_W1, REG_W0);
         else if (size == 8)
             host_arm64_LDR_REG_F64(block, REG_V_TEMP, REG_W1, REG_W0);
-        host_arm64_MOVZ_IMM(block, REG_W1, 0);
+        /* KairoX86#131: no W1 = 0: the callers don't read it (a C path that aborted leaves the block itself) */
         host_arm64_RET(block, REG_X30);
         s->branch_offset     = branch_offset;
         s->misaligned_offset = misaligned_offset;
@@ -307,8 +307,7 @@ build_load_routine(codeblock_t *block, int size, int is_float, int ea_rule, int 
         host_arm64_STR_IMM_W(block, REG_W3, REG_CPUSTATE, (int) ((uintptr_t) &cpu_state._cycles - (uintptr_t) &cpu_state));
         host_arm64_branch_set_offset(aligned, &block_write_data[block_pos]);
         host_arm64_LDRH_REG(block, REG_W0, REG_W1, REG_W0);
-        host_arm64_MOVZ_IMM(block, REG_W1, 0);
-        host_arm64_RET(block, REG_X30);
+        host_arm64_RET(block, REG_X30); /* KairoX86#131: no W1 = 0, as above */
         misaligned_offset = page_end;
         host_arm64_branch_set_offset(not_ram, &block_write_data[block_pos]);
     }
