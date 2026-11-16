@@ -7146,6 +7146,28 @@ KAIROX86_A20_SINGLE = [
      '    if (mem_a20_single) {\n        /* One A20 state (the free machine): this write sets it whichever way it was set. */\n        mem_a20_key = val & 0x02;\n        mem_a20_alt = (mem_a20_alt & 0xfd) | (val & 0x02);\n        mem_a20_recalc();\n        flushmmucache();\n    } else if ((old ^ val) & 0x02) { /* A20 enable change */\n'),
 ]
 
+
+# KairoX86#384: with the frames handed over on the GPU, the hand-over's scanout drain (svga_doblit, video_blit_memtoscreen)
+# submits without waiting; the slot copy behind it on the queue waits for both (core/kairo/gpu.c, gpu_scanout.c).
+KAIROX86_GPU_HANDOVER_ASYNC = [
+    ('86box/src/include/86box/kairo_gpu.h', '/* Runs kernel over groups_x x groups_y x groups_z work groups with its buffers (as many as it binds)\n   and push constants, and waits for it. */\nvoid kairo_gpu_run(kairo_gpu_kernel_t *kernel, kairo_gpu_buffer_t *const *buffers, const void *push, uint32_t groups_x,\n                   uint32_t groups_y, uint32_t groups_z);',
+     "/* Runs kernel over groups_x x groups_y x groups_z work groups with its buffers (as many as it binds)\n   and push constants, and waits for it. */\nvoid kairo_gpu_run(kairo_gpu_kernel_t *kernel, kairo_gpu_buffer_t *const *buffers, const void *push, uint32_t groups_x,\n                   uint32_t groups_y, uint32_t groups_z);\n/* KairoX86#384: kairo_gpu_run without the wait: the run stays pending until kairo_gpu_run_finish, the next run, or a\n   later submit's fence on the same queue (the frame slot's copy). Every run waits for a pending one first. */\nvoid kairo_gpu_run_async(kairo_gpu_kernel_t *kernel, kairo_gpu_buffer_t *const *buffers, const void *push, uint32_t groups_x,\n                         uint32_t groups_y, uint32_t groups_z);\n/* Waits for a pending run, if any */\nvoid kairo_gpu_run_finish(void);\n/* The frames go to the presenter as GPU copies of the bitmap (the frontend, KairoX86#330): set while they do */\nextern bool kairo_gpu_frames_handover;"),
+    ('86box/src/include/86box/kairo_gpu.h', '/* Draws every queued line and waits until they are drawn. */\nvoid kairo_gpu_scan_drain(void);',
+     "/* Draws every queued line and waits until they are drawn. */\nvoid kairo_gpu_scan_drain(void);\n/* The frame's hand-over: kairo_gpu_scan_drain, without the wait while the frames are handed over on the GPU (the slot\n   copy, behind it on the queue, waits for both: KairoX86#384) */\nvoid kairo_gpu_scan_handover(void);"),
+    ('86box/src/video/video.c', '    /* KairoX86#233: the lines the GPU draws, drawn before the frame is shown */\n    if (kairo_gpu_on)\n        kairo_gpu_scan_drain();',
+     "    /* KairoX86#233: the lines the GPU draws, drawn before the frame is shown (#384: with the frames handed over on the\n       GPU, the slot's copy waits for them) */\n    if (kairo_gpu_on)\n        kairo_gpu_scan_handover();"),
+    ('86box/src/include/86box/vid_svga_render.h', 'extern void svga_render_drain(void);',
+     "extern void svga_render_drain(void);\n/* The frame's hand-over (svga_doblit): svga_render_drain, the GPU's lines with kairo_gpu_scan_handover (KairoX86#384) */\nextern void svga_render_handover(void);"),
+    ('86box/src/video/vid_svga_render.c', 'void\nsvga_render_drain(void)\n{',
+     'void\nsvga_render_handover(void)\n{\n    if (kairo_gpu_on)\n        kairo_gpu_scan_handover();\n    else\n        svga_render_drain();\n}\n\nvoid\nsvga_render_drain(void)\n{'),
+    ('86box/src/video/vid_svga.c', 'svga_doblit(int wx, int wy, svga_t *svga)\n{\n    svga_render_drain();',
+     'svga_doblit(int wx, int wy, svga_t *svga)\n{\n    svga_render_handover(); /* KairoX86#384 */'),
+    ('86box/src/automation.c', '#include <86box/plat.h>\n',
+     '#include <86box/plat.h>\n#include <86box/kairo_gpu.h> /* KairoX86#384 */\n'),
+    ('86box/src/automation.c', 'frame_take(void)\n{\n    const bitmap_t *target = monitors[0].target_buffer;\n',
+     "frame_take(void)\n{\n    const bitmap_t *target = monitors[0].target_buffer;\n\n    if (kairo_gpu_on)\n        kairo_gpu_run_finish(); /* KairoX86#384: a hand-over's lines drawn before they are read */\n"),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -7333,6 +7355,7 @@ PATCHES = {
     'kairox86-seabios': KAIROX86_SEABIOS,
     'kairox86-held-descriptors': KAIROX86_HELD_DESCRIPTORS,
     'kairox86-a20-single': KAIROX86_A20_SINGLE,
+    'kairox86-gpu-handover-async': KAIROX86_GPU_HANDOVER_ASYNC,
 }
 
 ADDED = [

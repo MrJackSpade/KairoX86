@@ -76,6 +76,7 @@ typedef int sock_t;
 #include <86box/path.h>
 #include <86box/pci.h>
 #include <86box/plat.h>
+#include <86box/kairo_gpu.h> /* KairoX86#384 */
 #include <86box/thread.h>
 #include <86box/ui.h>
 #include <86box/video.h>
@@ -213,6 +214,9 @@ static void
 frame_take(void)
 {
     const bitmap_t *target = monitors[0].target_buffer;
+
+    if (kairo_gpu_on)
+        kairo_gpu_run_finish(); /* KairoX86#384: a hand-over's lines drawn before they are read */
 
     if (!frame_pending || !target)
         return;

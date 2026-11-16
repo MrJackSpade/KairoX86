@@ -7,6 +7,7 @@
  */
 #include <pthread.h>
 #include <stdarg.h>
+#include <stdatomic.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -134,6 +135,10 @@ kairo_gpu_queue_unlock(void)
 /* One kernel runs at a time: they share the command buffer and the fence (callers are the card's
    threads: the CPU's, a renderer's, the blit's). */
 static pthread_mutex_t run_lock = PTHREAD_MUTEX_INITIALIZER;
+/* KairoX86#384: a run submitted and not yet waited for (kairo_gpu_run_async); set and cleared under run_lock */
+static atomic_bool run_pending;
+/* KairoX86#384: the frames go to the presenter as GPU copies (set by the frontend, kairo_gpu.h) */
+bool kairo_gpu_frames_handover;
 
 struct kairo_gpu_kernel {
     const char           *name;
@@ -359,6 +364,7 @@ void
 kairo_gpu_close(void)
 {
     if (gpu.device != VK_NULL_HANDLE) {
+        kairo_gpu_run_finish(); /* KairoX86#384 */
         kairo_gpu_frames_close();
         kairo_gpu_scanout_close();
         kairo_gpu_voodoo_close();
@@ -559,11 +565,35 @@ kairo_gpu_kernel_free(kairo_gpu_kernel_t *kernel)
     free(kernel);
 }
 
-void
-kairo_gpu_run(kairo_gpu_kernel_t *kernel, kairo_gpu_buffer_t *const *buffers, const void *push, uint32_t groups_x,
-              uint32_t groups_y, uint32_t groups_z)
+/* KairoX86#384: the pending run, waited for, with run_lock held. Polled, not slept on: a run is short next to waking a
+   sleeping thread, and the caller has nothing to do until it ends. */
+static void
+run_wait_locked(const char *name)
 {
+    if (!atomic_load_explicit(&run_pending, memory_order_relaxed))
+        return;
+    VkResult status;
+    while ((status = vkGetFenceStatus(gpu.device, gpu.done)) == VK_NOT_READY)
+        ;
+    vk_check(status, name);
+    atomic_store_explicit(&run_pending, false, memory_order_release);
+}
+
+void
+kairo_gpu_run_finish(void)
+{
+    if (!atomic_load_explicit(&run_pending, memory_order_acquire))
+        return;
     pthread_mutex_lock(&run_lock);
+    run_wait_locked("the pending run");
+    pthread_mutex_unlock(&run_lock);
+}
+
+/* The run recorded and submitted, with run_lock held and no run pending */
+static void
+run_submit_locked(kairo_gpu_kernel_t *kernel, kairo_gpu_buffer_t *const *buffers, const void *push, uint32_t groups_x,
+                  uint32_t groups_y, uint32_t groups_z)
+{
     VkDescriptorBufferInfo infos[8];
     VkWriteDescriptorSet   writes[8];
     for (int i = 0; i < kernel->buffers; i++) {
@@ -597,11 +627,27 @@ kairo_gpu_run(kairo_gpu_kernel_t *kernel, kairo_gpu_buffer_t *const *buffers, co
     const VkResult submitted = vkQueueSubmit(gpu.queue, 1, &submit, gpu.done);
     kairo_gpu_queue_unlock();
     vk_check(submitted, kernel->name);
-    /* KairoX86#384: polled, not slept on: the run is short next to waking a sleeping thread, and the caller (the
-       emulation thread) has nothing to do until it ends */
-    VkResult status;
-    while ((status = vkGetFenceStatus(gpu.device, gpu.done)) == VK_NOT_READY)
-        ;
-    vk_check(status, kernel->name);
+}
+
+void
+kairo_gpu_run(kairo_gpu_kernel_t *kernel, kairo_gpu_buffer_t *const *buffers, const void *push, uint32_t groups_x,
+              uint32_t groups_y, uint32_t groups_z)
+{
+    pthread_mutex_lock(&run_lock);
+    run_wait_locked(kernel->name);
+    run_submit_locked(kernel, buffers, push, groups_x, groups_y, groups_z);
+    atomic_store_explicit(&run_pending, true, memory_order_relaxed);
+    run_wait_locked(kernel->name);
+    pthread_mutex_unlock(&run_lock);
+}
+
+void
+kairo_gpu_run_async(kairo_gpu_kernel_t *kernel, kairo_gpu_buffer_t *const *buffers, const void *push, uint32_t groups_x,
+                    uint32_t groups_y, uint32_t groups_z)
+{
+    pthread_mutex_lock(&run_lock);
+    run_wait_locked(kernel->name);
+    run_submit_locked(kernel, buffers, push, groups_x, groups_y, groups_z);
+    atomic_store_explicit(&run_pending, true, memory_order_release);
     pthread_mutex_unlock(&run_lock);
 }

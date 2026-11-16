@@ -1001,6 +1001,15 @@ render_thread_func(UNUSED(void *priv))
 }
 
 void
+svga_render_handover(void)
+{
+    if (kairo_gpu_on)
+        kairo_gpu_scan_handover();
+    else
+        svga_render_drain();
+}
+
+void
 svga_render_drain(void)
 {
     if (kairo_gpu_on) {

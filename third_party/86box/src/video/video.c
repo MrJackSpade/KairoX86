@@ -456,9 +456,10 @@ video_blit_memtoscreen_monitor(int x, int y, int w, int h, int monitor_index)
 
     video_wait_for_blit_monitor(monitor_index);
 
-    /* KairoX86#233: the lines the GPU draws, drawn before the frame is shown */
+    /* KairoX86#233: the lines the GPU draws, drawn before the frame is shown (#384: with the frames handed over on the
+       GPU, the slot's copy waits for them) */
     if (kairo_gpu_on)
-        kairo_gpu_scan_drain();
+        kairo_gpu_scan_handover();
 
     automation_frame(x, y, w, h, monitor_index);
 

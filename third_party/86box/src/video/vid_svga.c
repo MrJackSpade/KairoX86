@@ -2764,7 +2764,7 @@ svga_read_linear(uint32_t addr, void *priv)
 void
 svga_doblit(int wx, int wy, svga_t *svga)
 {
-    svga_render_drain();
+    svga_render_handover(); /* KairoX86#384 */
     int       y_add;
     int       x_add;
     int       y_start;

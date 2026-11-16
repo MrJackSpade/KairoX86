@@ -603,6 +603,9 @@ blit(int x, int y, int w, int h, int monitor_index)
         else
             picture_width = picture_height = 0; /* nothing to show, as the processor's copy records it */
     }
+    /* KairoX86#384: a hand-over that copied nothing still ends with its scanout drawn */
+    if (frames_on)
+        kairo_gpu_run_finish();
     video_blit_complete_monitor(monitor_index);
 }
 
@@ -623,7 +626,8 @@ api_gpu_frames(void)
 {
     if (!kairo_gpu_frames_available())
         return false;
-    frames_on = true;
+    frames_on                 = true;
+    kairo_gpu_frames_handover = true; /* KairoX86#384: the hand-over's drain need not wait: the slot copy does */
     fprintf(stderr, "kairo-gpu: frames handed over on the GPU (hardware buffers)\n");
     return true;
 }
@@ -1641,6 +1645,7 @@ release_machine(void)
         frame_slots[i] = NULL;
     }
     frames_on    = false;
+    kairo_gpu_frames_handover = false;
     frame_next   = -1;
     frame_slot   = -1;
     frame_buffer = NULL;

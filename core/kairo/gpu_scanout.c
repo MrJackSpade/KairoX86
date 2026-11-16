@@ -57,9 +57,10 @@ kairo_gpu_scan_tables(const uint32_t *t15, const uint32_t *t16)
     memcpy(table16->data, t16, TABLE_BYTES);
 }
 
-/* The drain, with the queue locked */
+/* The drain: the queued lines drawn by one run of the kernel, waited for unless wait is 0 (KairoX86#384: the frame's
+   hand-over, its slot copy waiting for both) */
 static void
-drain_locked(void)
+drain(int wait)
 {
     if (line_count == 0)
         return;
@@ -69,7 +70,10 @@ drain_locked(void)
         scanout = kairo_gpu_kernel("scanout", scanout_spirv, sizeof(scanout_spirv), 6, 4);
     kairo_gpu_buffer_t *const buffers[6] = { lines, words, palettes, table15, table16, queued_bitmap_gpu };
     const uint32_t            unused     = 0;
-    kairo_gpu_run(scanout, buffers, &unused, line_count, 1, 1);
+    if (wait)
+        kairo_gpu_run(scanout, buffers, &unused, line_count, 1, 1);
+    else
+        kairo_gpu_run_async(scanout, buffers, &unused, line_count, 1, 1);
     lines_drawn += line_count;
     line_count    = 0;
     words_used    = 0;
@@ -79,14 +83,21 @@ drain_locked(void)
 void
 kairo_gpu_scan_drain(void)
 {
-    drain_locked();
+    drain(1);
+}
+
+void
+kairo_gpu_scan_handover(void)
+{
+    drain(!kairo_gpu_frames_handover);
 }
 
 void
 kairo_gpu_scan_forget(const void *bitmap)
 {
     if ((line_count != 0) && (queued_bitmap == bitmap))
-        drain_locked();
+        drain(1);
+    kairo_gpu_run_finish(); /* the bitmap is freed next: no run may still draw on it */
     if (queued_bitmap == bitmap)
         queued_bitmap = NULL;
 }
@@ -94,13 +105,14 @@ kairo_gpu_scan_forget(const void *bitmap)
 void
 kairo_gpu_scan_touch(const void *bitmap, uint32_t start, uint32_t count)
 {
+    kairo_gpu_run_finish(); /* KairoX86#384: the CPU's drawing lands after a hand-over's lines */
     /* The lines come in order: pixels past the last queued one's end touch none (the usual case, the
        CPU drawing the line about to be queued) */
     if ((line_count != 0) && (queued_bitmap == bitmap) && (start < queued_end)) {
         const kairo_gpu_scan_t *queued = lines->data;
         for (uint32_t i = 0; i < line_count; i++)
             if ((queued[i].out < (start + count)) && (start < (queued[i].out + queued[i].count))) {
-                drain_locked();
+                drain(1);
                 break;
             }
     }
@@ -177,6 +189,7 @@ kairo_gpu_scan(const void *bitmap, kairo_gpu_buffer_t *bitmap_gpu, uint32_t out,
 {
     if (bitmap_gpu == NULL)
         fatal("GPU scanout: a line for a bitmap the GPU does not share\n");
+    kairo_gpu_run_finish(); /* KairoX86#384: a hand-over's run may still read the queue */
     if ((word_count > WORDS) || (palette_count > 256))
         fatal("GPU scanout: a line of %u dwords and %u colours\n", (unsigned) word_count, (unsigned) palette_count);
     if (lines == NULL) {
@@ -188,7 +201,7 @@ kairo_gpu_scan(const void *bitmap, kairo_gpu_buffer_t *bitmap_gpu, uint32_t out,
     if ((line_count != 0)
         && ((bitmap != queued_bitmap) || (out <= queued_out) || (line_count == LINES)
             || ((words_used + word_count) > WORDS) || ((palette != NULL) && (palettes_used == PALETTES))))
-        drain_locked();
+        drain(1);
     if ((line_count == 0) || (bitmap != queued_bitmap) || ((out + count) > queued_end))
         queued_end = out + count;
     queued_bitmap     = bitmap;
@@ -228,6 +241,7 @@ kairo_gpu_scan(const void *bitmap, kairo_gpu_buffer_t *bitmap_gpu, uint32_t out,
 void
 kairo_gpu_scanout_close(void)
 {
+    kairo_gpu_run_finish();
     /* How much the GPU drew, for the graphics batch (core/test/gpu/compare.py reports it per card) */
     fprintf(stderr, "kairo-gpu: %llu lines drawn\n", lines_drawn);
     lines_drawn = 0;

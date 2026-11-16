@@ -230,6 +230,11 @@ kairo_gpu_frame_copy(kairo_gpu_frame_t *frame, const kairo_gpu_buffer_t *bitmap,
     const VkCommandBufferBeginInfo begin = { .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
                                              .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT };
     frame_check(vkBeginCommandBuffer(frames.command, &begin), "vkBeginCommandBuffer");
+    /* KairoX86#384: the hand-over's scanout run, submitted before this copy and not waited for, drawn first */
+    const VkMemoryBarrier drawn = { .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER, .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
+                                    .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT };
+    vkCmdPipelineBarrier(frames.command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &drawn, 0,
+                         NULL, 0, NULL);
     const VkImageSubresourceRange whole = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
     /* The whole image is written: what it held before does not matter */
     const VkImageMemoryBarrier to_copy = { .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER, .srcAccessMask = 0,

@@ -40,6 +40,8 @@ extern void svga_recalc_remap_func(svga_t *svga);
 extern void svga_render_null(svga_t *svga);
 /* Wait until every queued line is drawn (vid_svga_render.c) */
 extern void svga_render_drain(void);
+/* The frame's hand-over (svga_doblit): svga_render_drain, the GPU's lines with kairo_gpu_scan_handover (KairoX86#384) */
+extern void svga_render_handover(void);
 extern void svga_render_close(void); /* KairoX86: ends the drawing thread */
 extern void svga_render_blank(svga_t *svga);
 /* KairoX86#233, #248: a line of pixels of bits bits each (most significant first, over the bytes in the order the card

@@ -122,6 +122,14 @@ void                kairo_gpu_kernel_free(kairo_gpu_kernel_t *kernel);
    and push constants, and waits for it. */
 void kairo_gpu_run(kairo_gpu_kernel_t *kernel, kairo_gpu_buffer_t *const *buffers, const void *push, uint32_t groups_x,
                    uint32_t groups_y, uint32_t groups_z);
+/* KairoX86#384: kairo_gpu_run without the wait: the run stays pending until kairo_gpu_run_finish, the next run, or a
+   later submit's fence on the same queue (the frame slot's copy). Every run waits for a pending one first. */
+void kairo_gpu_run_async(kairo_gpu_kernel_t *kernel, kairo_gpu_buffer_t *const *buffers, const void *push, uint32_t groups_x,
+                         uint32_t groups_y, uint32_t groups_z);
+/* Waits for a pending run, if any */
+void kairo_gpu_run_finish(void);
+/* The frames go to the presenter as GPU copies of the bitmap (the frontend, KairoX86#330): set while they do */
+extern bool kairo_gpu_frames_handover;
 
 /* ---- The scanout (KairoX86#233 and the cards' own displays) ---- */
 
@@ -236,6 +244,9 @@ kairo_gpu_patch_pixel(uint32_t v, const uint32_t *axkv, uint32_t key, uint32_t k
 }
 /* Draws every queued line and waits until they are drawn. */
 void kairo_gpu_scan_drain(void);
+/* The frame's hand-over: kairo_gpu_scan_drain, without the wait while the frames are handed over on the GPU (the slot
+   copy, behind it on the queue, waits for both: KairoX86#384) */
+void kairo_gpu_scan_handover(void);
 /* The CPU is about to draw pixels start to start + count - 1 of bitmap: a queued line that draws any of
    them is drawn first, so the CPU's drawing, the later one, stays. */
 void kairo_gpu_scan_touch(const void *bitmap, uint32_t start, uint32_t count);
