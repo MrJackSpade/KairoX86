@@ -46,6 +46,9 @@ typedef struct codegen_link_slot_t {
       accepts every status that block accepts (set when the way is filled): the routine skips its status compare*/
     uint8_t      src_status_kept;
     uint8_t      status_known;
+#if defined(__aarch64__) || defined(_M_ARM64)
+    uint8_t      is_ret;      /*KairoX86#359, way 0 only: the exit ends a RET, so the return cache is tried after the ways*/
+#endif
     uint64_t     page_mask;   /*block->page_mask*/
     uint64_t    *dirty_mask;  /*block->dirty_mask*/
     /*Off the hit path*/
@@ -84,6 +87,18 @@ extern uint32_t k9x_link_phys(uint32_t virt);
 
 /*Indexed by the number of the block whose exit uses them.*/
 extern codegen_link_slot_t codegen_link_slots[BLOCK_SIZE][CODEGEN_LINK_SLOTS][CODEGEN_LINK_WAYS];
+
+#if defined(__aarch64__) || defined(_M_ARM64)
+/*KairoX86#359: the return cache. Slots shared by every RET exit, one per return address (cs + pc, direct-mapped),
+  tried by the link routine when none of a RET exit's ways has the target. A RET exit whose ways are all taken fills
+  its target here instead of retargeting one, so a subroutine returning to more callers than an exit has ways still
+  links to each. Filled and emptied like any slot (on its target's list).*/
+#    define CODEGEN_LINK_RC           1024
+#    define CODEGEN_LINK_RC_INDEX(va) ((((va) >> 12) ^ (va)) & (CODEGEN_LINK_RC - 1))
+#    define CODEGEN_LINK_HAS_RC
+extern codegen_link_slot_t codegen_link_rc[CODEGEN_LINK_RC];
+extern int                 codegen_block_ret_exit; /*the instruction compiled last is a near or far RET*/
+#endif
 
 /*Byte offset of the link entry from &block->data[BLOCK_START]: the first
   instruction after the prologue's register saves.*/

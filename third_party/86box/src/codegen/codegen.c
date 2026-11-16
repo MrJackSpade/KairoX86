@@ -160,6 +160,8 @@ codegen_changes_status(uint16_t op, uint8_t modrm)
 
 /* KairoX86#414: 1 while no instruction of the block being compiled can change the status (codegen_changes_status) */
 int codegen_block_status_kept;
+/* KairoX86#359: the instruction compiled last is a near or far RET (C2, C3, CA, CB): the block's end exit is a return */
+int codegen_block_ret_exit;
 
 int has_ea;
 extern uint32_t codegen_endpc;
@@ -1058,6 +1060,7 @@ generate_call:
         codegen_block_status_kept = 1;
     if (codegen_changes_status(opcode | ((op_table == x86_dynarec_opcodes_0f) ? 0x100 : 0), fetchdat & 0xff))
         codegen_block_status_kept = 0;
+    codegen_block_ret_exit = (op_table == x86_dynarec_opcodes) && ((opcode & 0xf6) == 0xc2); /* KairoX86#359 */
     codegen_instructions[block->ins].pc        = cpu_state.oldpc;
     codegen_instructions[block->ins].op_ssegs  = last_op_ssegs;
     codegen_instructions[block->ins].op_ea_seg = last_op_ea_seg;

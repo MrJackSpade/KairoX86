@@ -277,6 +277,9 @@ void
 codegen_link_reset(void)
 {
     memset(codegen_link_slots, 0, sizeof(codegen_link_slots));
+#    ifdef CODEGEN_LINK_HAS_RC
+    memset(codegen_link_rc, 0, sizeof(codegen_link_rc)); /* KairoX86#359 */
+#    endif
     memset(link_in_head, 0, sizeof(link_in_head));
 }
 
@@ -288,6 +291,9 @@ codegen_link_reset_used(void)
     memset(codegen_link_slots[0], 0, sizeof(codegen_link_slots[0]));
     if (block_touched_low < BLOCK_SIZE)
         memset(codegen_link_slots[block_touched_low], 0, (BLOCK_SIZE - block_touched_low) * sizeof(codegen_link_slots[0]));
+#    ifdef CODEGEN_LINK_HAS_RC
+    memset(codegen_link_rc, 0, sizeof(codegen_link_rc)); /* KairoX86#359: its slots are on the lists emptied here */
+#    endif
     memset(link_in_head, 0, sizeof(link_in_head));
 }
 
@@ -391,6 +397,49 @@ codegen_link_page_written(page_t *page)
     link_page_blocks_changed(page);
 }
 
+/*Fill slot (one of from's ways, or a return-cache slot) to link to block, at virt from physical address phys*/
+static void
+link_slot_fill(codegen_link_slot_t *slot, codegen_link_slot_t *from, codeblock_t *block, uint32_t phys, uint32_t virt,
+               uintptr_t *xlat, uintptr_t xlat_val)
+{
+    slot->entry      = NULL;
+    slot->exit_pc    = cpu_state.pc;
+    slot->exit_cs    = cs;
+    slot->block      = block;
+    slot->gen        = block->link_gen;
+    slot->status     = cpu_cur_status;
+    slot->npxc       = cpu_state.npxc & 0x0f00;
+    slot->cr0_bits   = cr0 & 0xc0000000;
+    slot->virt       = virt;
+    slot->phys_page  = phys & ~0xfff;
+    slot->rammask    = rammask;
+    slot->xlat       = xlat;
+    slot->xlat_val   = xlat_val;
+    slot->mem_exec   = &_mem_exec[phys >> MEM_GRANULARITY_BITS];
+    slot->map_gen    = mem_mapping_gen;
+    slot->hash       = &codeblock_hash[HASH(phys)];
+    slot->block_nr   = get_block_nr(block);
+    slot->top_mask   = (block->flags & CODEBLOCK_STATIC_TOP) ? 7 : 0;
+    slot->top        = (block->flags & CODEBLOCK_STATIC_TOP) ? block->TOP : 0;
+    slot->two_page   = !!block->page_mask2;
+    slot->page_mask  = block->page_mask;
+    slot->dirty_mask = block->dirty_mask;
+    link_in_remove(slot);
+    link_in_insert(block, slot);
+#    ifdef CODEGEN_LINK_HAS_RC
+    /* KairoX86#359: a return-cache slot serves every RET exit, so it can't vouch for one exit's status */
+    if ((slot >= codegen_link_rc) && (slot < &codegen_link_rc[CODEGEN_LINK_RC]))
+        slot->src_status_kept = 0;
+#    endif
+    { /* KairoX86#414: the exit's block (the one owning these slots) keeps its status, and the target accepts every
+         status that block accepts: the same FLAGS bits, and MASK bits that include the block's */
+        const codeblock_t *src = &codeblock[(from - &codegen_link_slots[0][0][0]) / (CODEGEN_LINK_SLOTS * CODEGEN_LINK_WAYS)];
+        slot->status_known = slot->src_status_kept && !((src->status ^ block->status) & CPU_STATUS_FLAGS) &&
+                             !(src->status & CPU_STATUS_MASK & ~block->status);
+    }
+    slot->entry = &block->data[BLOCK_START + CODEGEN_LINK_ENTRY_OFFSET];
+}
+
 void
 codegen_link_patch(codegen_link_slot_t *from, codeblock_t *block, uint32_t phys)
 {
@@ -398,6 +447,7 @@ codegen_link_patch(codegen_link_slot_t *from, codeblock_t *block, uint32_t phys)
     uintptr_t           *xlat     = NULL;
     uintptr_t            xlat_val = 0;
     codegen_link_slot_t *slot;
+    int                  retarget = 0;
 
     /*Only a compiled block the hash already points to.*/
     if ((block->flags & (CODEBLOCK_WAS_RECOMPILED | CODEBLOCK_IN_DIRTY_LIST)) != CODEBLOCK_WAS_RECOMPILED)
@@ -431,6 +481,7 @@ codegen_link_patch(codegen_link_slot_t *from, codeblock_t *block, uint32_t phys)
     if (slot == NULL) {
         slot         = &from[from->victim];
         from->victim = (from->victim + 1) % CODEGEN_LINK_WAYS;
+        retarget     = 1;
     }
 #ifdef K9X_DIAG
     {
@@ -444,38 +495,13 @@ codegen_link_patch(codegen_link_slot_t *from, codeblock_t *block, uint32_t phys)
             k9x_patch_retarget++;
     }
 #endif
-
-    slot->entry      = NULL;
-    slot->exit_pc    = cpu_state.pc;
-    slot->exit_cs    = cs;
-    slot->block      = block;
-    slot->gen        = block->link_gen;
-    slot->status     = cpu_cur_status;
-    slot->npxc       = cpu_state.npxc & 0x0f00;
-    slot->cr0_bits   = cr0 & 0xc0000000;
-    slot->virt       = virt;
-    slot->phys_page  = phys & ~0xfff;
-    slot->rammask    = rammask;
-    slot->xlat       = xlat;
-    slot->xlat_val   = xlat_val;
-    slot->mem_exec   = &_mem_exec[phys >> MEM_GRANULARITY_BITS];
-    slot->map_gen    = mem_mapping_gen;
-    slot->hash       = &codeblock_hash[HASH(phys)];
-    slot->block_nr   = get_block_nr(block);
-    slot->top_mask   = (block->flags & CODEBLOCK_STATIC_TOP) ? 7 : 0;
-    slot->top        = (block->flags & CODEBLOCK_STATIC_TOP) ? block->TOP : 0;
-    slot->two_page   = !!block->page_mask2;
-    slot->page_mask  = block->page_mask;
-    slot->dirty_mask = block->dirty_mask;
-    link_in_remove(slot);
-    link_in_insert(block, slot);
-    { /* KairoX86#414: the exit's block (the one owning these slots) keeps its status, and the target accepts every
-         status that block accepts: the same FLAGS bits, and MASK bits that include the block's */
-        const codeblock_t *src = &codeblock[(from - &codegen_link_slots[0][0][0]) / (CODEGEN_LINK_SLOTS * CODEGEN_LINK_WAYS)];
-        slot->status_known = slot->src_status_kept && !((src->status ^ block->status) & CPU_STATUS_FLAGS) &&
-                             !(src->status & CPU_STATUS_MASK & ~block->status);
-    }
-    slot->entry = &block->data[BLOCK_START + CODEGEN_LINK_ENTRY_OFFSET];
+    link_slot_fill(slot, from, block, phys, virt, xlat, xlat_val);
+#    ifdef CODEGEN_LINK_HAS_RC
+    /* KairoX86#359: a RET exit whose ways were all taken links to its target through the return cache too, so a
+       subroutine returning to more callers than an exit has ways still finds each */
+    if (retarget && from->is_ret)
+        link_slot_fill(&codegen_link_rc[CODEGEN_LINK_RC_INDEX(virt)], from, block, phys, virt, xlat, xlat_val);
+#    endif
 }
 #else
 const int codegen_has_block_link = 0;
