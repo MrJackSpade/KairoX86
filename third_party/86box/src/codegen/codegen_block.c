@@ -397,65 +397,11 @@ codegen_link_page_written(page_t *page)
     link_page_blocks_changed(page);
 }
 
-void
-codegen_link_patch(codegen_link_slot_t *from, codeblock_t *block, uint32_t phys)
+/*Fill slot (one of from's ways, or a return-cache slot) to link to block, at virt from physical address phys*/
+static void
+link_slot_fill(codegen_link_slot_t *slot, codegen_link_slot_t *from, codeblock_t *block, uint32_t phys, uint32_t virt,
+               uintptr_t *xlat, uintptr_t xlat_val)
 {
-    const uint32_t       virt     = cs + cpu_state.pc;
-    uintptr_t           *xlat     = NULL;
-    uintptr_t            xlat_val = 0;
-    codegen_link_slot_t *slot;
-
-    /*Only a compiled block the hash already points to.*/
-    if ((block->flags & (CODEBLOCK_WAS_RECOMPILED | CODEBLOCK_IN_DIRTY_LIST)) != CODEBLOCK_WAS_RECOMPILED)
-        return;
-    if (codeblock_hash[HASH(phys)] != get_block_nr(block))
-        return;
-    if (cr0 >> 31) {
-        /*The routine can only redo the translation from readlookup2.*/
-        xlat = &readlookup2[virt >> 12];
-        if ((int) *xlat == -1)
-            return;
-        xlat_val = *xlat;
-    }
-    /*phys may have come from get_phys()'s one-entry cache, which can be
-      stale. Only fill if a fresh translation gives the same page.*/
-    if (cr0 >> 31) {
-        if ((((uint32_t) ((xlat_val + (virt & ~0xfff)) - (uintptr_t) ram)) & ~0xfff) != (phys & ~0xfff))
-            return;
-    } else if (((virt & rammask) & ~0xfff) != (phys & ~0xfff))
-        return;
-
-    /*The exit's way that already has this target, or else an empty one, or
-      else the ways take turns*/
-    slot = NULL;
-    for (int w = 0; (w < CODEGEN_LINK_WAYS) && (slot == NULL); w++)
-        if ((from[w].block != NULL) && (from[w].exit_pc == cpu_state.pc) && (from[w].exit_cs == cs))
-            slot = &from[w];
-    for (int w = 0; (w < CODEGEN_LINK_WAYS) && (slot == NULL); w++)
-        if (from[w].entry == NULL)
-            slot = &from[w];
-#    ifdef CODEGEN_LINK_HAS_RC
-    /* KairoX86#359: a RET exit with every way taken fills the return cache's slot for the target instead */
-    if ((slot == NULL) && from->is_ret)
-        slot = &codegen_link_rc[CODEGEN_LINK_RC_INDEX(virt)];
-#    endif
-    if (slot == NULL) {
-        slot         = &from[from->victim];
-        from->victim = (from->victim + 1) % CODEGEN_LINK_WAYS;
-    }
-#ifdef K9X_DIAG
-    {
-        extern uint64_t k9x_link_patches, k9x_patch_first, k9x_patch_same, k9x_patch_retarget;
-        k9x_link_patches++;
-        if (slot->block == NULL)
-            k9x_patch_first++;
-        else if ((slot->exit_pc == cpu_state.pc) && (slot->exit_cs == cs))
-            k9x_patch_same++;
-        else
-            k9x_patch_retarget++;
-    }
-#endif
-
     slot->entry      = NULL;
     slot->exit_pc    = cpu_state.pc;
     slot->exit_cs    = cs;
@@ -492,6 +438,70 @@ codegen_link_patch(codegen_link_slot_t *from, codeblock_t *block, uint32_t phys)
                              !(src->status & CPU_STATUS_MASK & ~block->status);
     }
     slot->entry = &block->data[BLOCK_START + CODEGEN_LINK_ENTRY_OFFSET];
+}
+
+void
+codegen_link_patch(codegen_link_slot_t *from, codeblock_t *block, uint32_t phys)
+{
+    const uint32_t       virt     = cs + cpu_state.pc;
+    uintptr_t           *xlat     = NULL;
+    uintptr_t            xlat_val = 0;
+    codegen_link_slot_t *slot;
+    int                  retarget = 0;
+
+    /*Only a compiled block the hash already points to.*/
+    if ((block->flags & (CODEBLOCK_WAS_RECOMPILED | CODEBLOCK_IN_DIRTY_LIST)) != CODEBLOCK_WAS_RECOMPILED)
+        return;
+    if (codeblock_hash[HASH(phys)] != get_block_nr(block))
+        return;
+    if (cr0 >> 31) {
+        /*The routine can only redo the translation from readlookup2.*/
+        xlat = &readlookup2[virt >> 12];
+        if ((int) *xlat == -1)
+            return;
+        xlat_val = *xlat;
+    }
+    /*phys may have come from get_phys()'s one-entry cache, which can be
+      stale. Only fill if a fresh translation gives the same page.*/
+    if (cr0 >> 31) {
+        if ((((uint32_t) ((xlat_val + (virt & ~0xfff)) - (uintptr_t) ram)) & ~0xfff) != (phys & ~0xfff))
+            return;
+    } else if (((virt & rammask) & ~0xfff) != (phys & ~0xfff))
+        return;
+
+    /*The exit's way that already has this target, or else an empty one, or
+      else the ways take turns*/
+    slot = NULL;
+    for (int w = 0; (w < CODEGEN_LINK_WAYS) && (slot == NULL); w++)
+        if ((from[w].block != NULL) && (from[w].exit_pc == cpu_state.pc) && (from[w].exit_cs == cs))
+            slot = &from[w];
+    for (int w = 0; (w < CODEGEN_LINK_WAYS) && (slot == NULL); w++)
+        if (from[w].entry == NULL)
+            slot = &from[w];
+    if (slot == NULL) {
+        slot         = &from[from->victim];
+        from->victim = (from->victim + 1) % CODEGEN_LINK_WAYS;
+        retarget     = 1;
+    }
+#ifdef K9X_DIAG
+    {
+        extern uint64_t k9x_link_patches, k9x_patch_first, k9x_patch_same, k9x_patch_retarget;
+        k9x_link_patches++;
+        if (slot->block == NULL)
+            k9x_patch_first++;
+        else if ((slot->exit_pc == cpu_state.pc) && (slot->exit_cs == cs))
+            k9x_patch_same++;
+        else
+            k9x_patch_retarget++;
+    }
+#endif
+    link_slot_fill(slot, from, block, phys, virt, xlat, xlat_val);
+#    ifdef CODEGEN_LINK_HAS_RC
+    /* KairoX86#359: a RET exit whose ways were all taken links to its target through the return cache too, so a
+       subroutine returning to more callers than an exit has ways still finds each */
+    if (retarget && from->is_ret)
+        link_slot_fill(&codegen_link_rc[CODEGEN_LINK_RC_INDEX(virt)], from, block, phys, virt, xlat, xlat_val);
+#    endif
 }
 #else
 const int codegen_has_block_link = 0;
