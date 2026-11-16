@@ -66,6 +66,7 @@ void *codegen_rep_rout[2][3][2];
 
 #    ifdef CODEGEN_BACKEND_HAS_BLOCK_LINK
 codegen_link_slot_t codegen_link_slots[BLOCK_SIZE][CODEGEN_LINK_SLOTS][CODEGEN_LINK_WAYS];
+codegen_link_slot_t codegen_link_rc[CODEGEN_LINK_RC]; /* KairoX86#359 */
 #    endif
 #    ifdef CODEGEN_BACKEND_HAS_BLOCK_LINK
 static void *codegen_link_rout;
@@ -1233,6 +1234,7 @@ build_rep_routine(codeblock_t *block, int is_stos, int shift, int a32, int (*ele
 enum {
     LINK_LIT_HOT,
     LINK_LIT_READLOOKUP2,
+    LINK_LIT_RC, /* KairoX86#359: codegen_link_rc */
 
     LINK_LIT_COUNT
 };
@@ -1318,6 +1320,8 @@ build_link_routine(codeblock_t *block)
     uint32_t *xlat_same;
     uint32_t *other_way;
     uint32_t *way_match[CODEGEN_LINK_WAYS];
+    uint32_t *rc_try;   /* KairoX86#359 */
+    uint8_t  *rc_found; /* KairoX86#359 */
     uint8_t  *way_found;
     uint32_t *walk_no_slice;
     uint8_t  *timer_done;
@@ -1344,6 +1348,7 @@ build_link_routine(codeblock_t *block)
 
     lit[LINK_LIT_HOT]         = (uint64_t) (uintptr_t) __start_k9xhot;
     lit[LINK_LIT_READLOOKUP2] = (uint64_t) (uintptr_t) readlookup2;
+    lit[LINK_LIT_RC]          = (uint64_t) (uintptr_t) codegen_link_rc;
 
     codegen_link_rout = &block_write_data[block_pos];
 
@@ -1646,12 +1651,29 @@ build_link_routine(codeblock_t *block)
         if (w < (CODEGEN_LINK_WAYS - 1))
             way_match[w] = host_arm64_BEQ_SHORT_(block);
         else
-            miss[nr_miss++] = host_arm64_BNE_SHORT_(block);
+            rc_try = host_arm64_BNE_SHORT_(block);
     }
     for (int w = 1; w < (CODEGEN_LINK_WAYS - 1); w++)
         host_arm64_short_branch_set_offset(way_match[w], &block_write_data[block_pos]);
+    rc_found = &block_write_data[block_pos];
     miss[nr_miss++] = host_arm64_CBZ_SHORT_(block, REG_X15);
     host_arm64_B(block, way_found);
+
+    /*KairoX86#359: no way has the target. A RET exit (way 0's is_ret) tries the return cache's slot for the target,
+      X1 = &codegen_link_rc[CODEGEN_LINK_RC_INDEX(W2)], checked from there as a way is*/
+    host_arm64_short_branch_set_offset(rc_try, &block_write_data[block_pos]);
+    host_arm64_LDRB_IMM_W(block, REG_W6, REG_X0, LINK_SLOT(is_ret));
+    miss[nr_miss++] = host_arm64_CBZ_SHORT_(block, REG_W6);
+    host_arm64_MOV_REG_LSR(block, REG_W6, REG_W2, 12);
+    host_arm64_EOR_REG(block, REG_W6, REG_W6, REG_W2, 0);
+    host_arm64_UBFX(block, REG_W6, REG_W6, 0, 10);
+    host_arm64_MOV_REG(block, REG_W6, REG_W6, 7);
+    host_arm64_LDR_IMM_X(block, REG_X1, REG_X17, LINK_LIT(LINK_LIT_RC));
+    host_arm64_ADDX_REG_UXTW(block, REG_X1, REG_X1, REG_W6);
+    host_arm64_LDP_IMM_X(block, REG_X5, REG_X15, REG_X1, LINK_SLOT(exit_pc));
+    host_arm64_CMPX_REG(block, REG_X5, REG_X4);
+    miss[nr_miss++] = host_arm64_BNE_SHORT_(block);
+    host_arm64_B(block, rc_found);
 
     /*nmi set: miss only if nmi_enable is too, and nmi_mask or an NMI from
       the local APIC (nmi bit 1, which port 70h does not gate)*/
@@ -1952,6 +1974,7 @@ codegen_link_exit(codeblock_t *block)
         slot[w].src_status_kept = (uint8_t) codegen_block_status_kept;
         slot[w].status_known    = 0;
     }
+    slot[0].is_ret = (uint8_t) codegen_block_ret_exit; /* KairoX86#359 */
     codegen_alloc(block, 20);
     host_arm64_MOVX_IMM(block, REG_X0, (uint64_t) (uintptr_t) slot);
     host_arm64_B(block, codegen_link_rout);

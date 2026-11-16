@@ -277,6 +277,9 @@ void
 codegen_link_reset(void)
 {
     memset(codegen_link_slots, 0, sizeof(codegen_link_slots));
+#    ifdef CODEGEN_LINK_HAS_RC
+    memset(codegen_link_rc, 0, sizeof(codegen_link_rc)); /* KairoX86#359 */
+#    endif
     memset(link_in_head, 0, sizeof(link_in_head));
 }
 
@@ -288,6 +291,9 @@ codegen_link_reset_used(void)
     memset(codegen_link_slots[0], 0, sizeof(codegen_link_slots[0]));
     if (block_touched_low < BLOCK_SIZE)
         memset(codegen_link_slots[block_touched_low], 0, (BLOCK_SIZE - block_touched_low) * sizeof(codegen_link_slots[0]));
+#    ifdef CODEGEN_LINK_HAS_RC
+    memset(codegen_link_rc, 0, sizeof(codegen_link_rc)); /* KairoX86#359: its slots are on the lists emptied here */
+#    endif
     memset(link_in_head, 0, sizeof(link_in_head));
 }
 
@@ -428,6 +434,11 @@ codegen_link_patch(codegen_link_slot_t *from, codeblock_t *block, uint32_t phys)
     for (int w = 0; (w < CODEGEN_LINK_WAYS) && (slot == NULL); w++)
         if (from[w].entry == NULL)
             slot = &from[w];
+#    ifdef CODEGEN_LINK_HAS_RC
+    /* KairoX86#359: a RET exit with every way taken fills the return cache's slot for the target instead */
+    if ((slot == NULL) && from->is_ret)
+        slot = &codegen_link_rc[CODEGEN_LINK_RC_INDEX(virt)];
+#    endif
     if (slot == NULL) {
         slot         = &from[from->victim];
         from->victim = (from->victim + 1) % CODEGEN_LINK_WAYS;
@@ -469,6 +480,11 @@ codegen_link_patch(codegen_link_slot_t *from, codeblock_t *block, uint32_t phys)
     slot->dirty_mask = block->dirty_mask;
     link_in_remove(slot);
     link_in_insert(block, slot);
+#    ifdef CODEGEN_LINK_HAS_RC
+    /* KairoX86#359: a return-cache slot serves every RET exit, so it can't vouch for one exit's status */
+    if ((slot >= codegen_link_rc) && (slot < &codegen_link_rc[CODEGEN_LINK_RC]))
+        slot->src_status_kept = 0;
+#    endif
     { /* KairoX86#414: the exit's block (the one owning these slots) keeps its status, and the target accepts every
          status that block accepts: the same FLAGS bits, and MASK bits that include the block's */
         const codeblock_t *src = &codeblock[(from - &codegen_link_slots[0][0][0]) / (CODEGEN_LINK_SLOTS * CODEGEN_LINK_WAYS)];
