@@ -164,6 +164,7 @@
 - **`kairox86-voodoo-cmdfifo-settle` group:** the Banshee/Voodoo3's command FIFO read pointers, depths and status (`cmdRdPtrL0/1`, `cmdFifoDepth0/1`, `cmdStatus0/1`) settle the FIFO and render threads before they are read (`voodoo_settle`), as the status reads do (#436's class). They are moved by the FIFO thread, so a guest reading them saw host scheduling: win98-voodoo3 parted from itself between frames 2660 and 2680 in one run of four; 16 runs of 16 are now identical.
 - **`kairox86-rom-probe` group:** `rom_present` answers through `rom_present_probe` while it is set, given each file asked about and whether it is there; the hardware query's `files` sets it while it runs a board's or card's availability check, to list the files the check asks about (KairoX86#438). NULL otherwise, so 86Box's own checks are unchanged. Exact by `tools/exact.ps1 -Local`.
 - **`kairox86-load-stub-no-w1` group:** the ARM64 load stubs no longer set W1 = 0 on their fast paths, where nothing reads it (KairoX86#131: win98-486 +0.47%, win98-pentium +0.44% on the RG DS, exact on all 13 linked and unlinked).
+- **`kairox86-mach64-plain-rect` group:** the Mach64 engine's plain solid fills and same-size screen copies draw each pixel without `mach64_rect_draw`'s switches on the source, the mix and the mask (KairoX86#445); the walk is unchanged.
 
 ## 86Box's translations
 
