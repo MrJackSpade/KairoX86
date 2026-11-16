@@ -165,6 +165,7 @@
 - **`kairox86-rom-probe` group:** `rom_present` answers through `rom_present_probe` while it is set, given each file asked about and whether it is there; the hardware query's `files` sets it while it runs a board's or card's availability check, to list the files the check asks about (KairoX86#438). NULL otherwise, so 86Box's own checks are unchanged. Exact by `tools/exact.ps1 -Local`.
 - **`kairox86-load-stub-no-w1` group:** the ARM64 load stubs no longer set W1 = 0 on their fast paths, where nothing reads it (KairoX86#131: win98-486 +0.47%, win98-pentium +0.44% on the RG DS, exact on all 13 linked and unlinked).
 - **`kairox86-link-rc` and `kairox86-link-rc-both` groups:** a return cache beside the ARM64 link ways (KairoX86#359): 1024 link slots keyed by the return address, tried by the link routine after a RET exit's ways miss (way 0's `is_ret`, set from `codegen_block_ret_exit`), and filled, as any slot is and on its target's list, whenever a RET exit retargets a way (`link_slot_fill`).
+- **`kairox86-mach64-plain-rect` group:** the Mach64 engine's plain solid fills and same-size screen copies draw each pixel without `mach64_rect_draw`'s switches on the source, the mix and the mask (KairoX86#445); the walk is unchanged.
 
 ## 86Box's translations
 

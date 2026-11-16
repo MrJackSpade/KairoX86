@@ -2073,6 +2073,60 @@ mach64_pixel(mach64_t *mach64, uint32_t host)
     return mach64_rect_advance(mach64);
 }
 
+/* KairoX86#445: a rectangle operation mach64_rect_draw makes plain: 1 a solid fill (the foreground colour), 2 a
+   screen copy of the destination's own width; 0 any other. Mono source 1 and mix 7 (the source), no 24 bpp rotation
+   or polygon fill, the colour compare off (mach64_blit_calc_cmp_clr answers 0 but for functions 1, 4 and 5), and the
+   write mask covering the destination's width, so each pixel is its source value, stored as WRITE stores it. */
+static int
+mach64_rect_plain(const mach64_t *mach64)
+{
+    static const uint32_t width_mask[3] = { 0xff, 0xffff, 0xffffffff };
+    const int             fn            = mach64->accel.clr_cmp_fn;
+
+    if ((mach64->accel.op != OP_RECT) || (mach64->dst_cntl & (DST_24_ROT_EN | DST_POLYGON_EN)) ||
+        (mach64->accel.source_mix != MONO_SRC_1) || (mach64->accel.mix_fg != 7) || (fn == 1) || (fn == 4) || (fn == 5) ||
+        (mach64->accel.dst_size < 0) || (mach64->accel.dst_size > 2) ||
+        ((mach64->accel.write_mask & width_mask[mach64->accel.dst_size]) != width_mask[mach64->accel.dst_size]))
+        return 0;
+    if (mach64->accel.source_fg == SRC_FG)
+        return 1;
+    if ((mach64->accel.source_fg == SRC_BLITSRC) && (mach64->accel.src_size == mach64->accel.dst_size) &&
+        !((mach64->accel.src_size == 0) && (mach64->type == MACH64_VT3) && (mach64->src_cntl & SRC_8x8x8_BRUSH)))
+        return 2;
+    return 0;
+}
+
+/* KairoX86#445: the rest of a plain rectangle operation (mach64_rect_plain's kind), pixel by pixel as mach64_pixel
+   runs it, each pixel without mach64_rect_draw's switches */
+static void
+mach64_rect_plain_run(mach64_t *mach64, int kind)
+{
+    svga_t  *svga = &mach64->svga;
+    uint32_t dest_dat;
+
+    do {
+        const int dst_x = mach64->accel.dst_x + mach64->accel.dst_x_start;
+        const int dst_y = mach64->accel.dst_y + mach64->accel.dst_y_start;
+
+        if ((dst_x >= mach64->accel.sc_left) && (dst_x <= mach64->accel.sc_right) &&
+            (dst_y >= mach64->accel.sc_top) && (dst_y <= mach64->accel.sc_bottom)) {
+            if (kind == 1)
+                dest_dat = mach64->accel.dp_frgd_clr;
+            else {
+                const int src_y = mach64->accel.src_y + mach64->accel.src_y_start;
+
+                if (mach64->src_cntl & SRC_LINEAR_EN) {
+                    READ(mach64->accel.src_offset + mach64->accel.src_x, dest_dat, mach64->accel.src_size);
+                } else {
+                    READ(mach64->accel.src_offset + (src_y * mach64->accel.src_pitch) + mach64->accel.src_x + mach64->accel.src_x_start,
+                         dest_dat, mach64->accel.src_size);
+                }
+            }
+            WRITE(mach64->accel.dst_offset + (dst_y * mach64->accel.dst_pitch) + dst_x, mach64->accel.dst_size);
+        }
+    } while (!mach64_rect_advance(mach64) && mach64->accel.busy);
+}
+
 /* ---- KairoX86#237: the 2D engine on the GPU (86box/kairo_gpu_seg.h; core/kairo/shaders/mach64_2d.comp) ----
 
    With Hardware acceleration on, an operation is recorded where it starts (its record from the engine's state) and
@@ -2571,8 +2625,13 @@ mach64_blit(uint32_t cpu_dat, int count, mach64_t *mach64)
     }
 
     if (count == -1) {
-        while (mach64->accel.busy && !mach64_pixel(mach64, 0))
-            ;
+        const int plain = mach64_rect_plain(mach64); /* KairoX86#445 */
+
+        if (plain && mach64->accel.busy)
+            mach64_rect_plain_run(mach64, plain);
+        else
+            while (mach64->accel.busy && !mach64_pixel(mach64, 0))
+                ;
         return;
     }
 
