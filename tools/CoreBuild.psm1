@@ -79,4 +79,22 @@ function Push-ToDevice([string]$Device, [string]$Local, [string]$Remote) {
     if ($LASTEXITCODE -ne 0) { throw "adb could not push $Local to $Remote on $Device" }
 }
 
-Export-ModuleMember -Function Get-CoreTools, Build-Core, Build-LocalCore, Push-ToDevice
+# One measurement or exactness run on a device at a time. Two at once share the CPU and the run folders and spoil
+# both. The lock is a folder (mkdir is atomic) holding a note of who took it. A run that finds it taken stops at once,
+# naming the holder. A run killed from outside leaves the lock, and the next run stops on it: check that nothing
+# runs (ps -A | grep game_profile), then remove /data/local/tmp/kx86/run.lock by hand.
+$script:DeviceLock = '/data/local/tmp/kx86/run.lock'
+function Enter-DeviceLock([string]$Device, [string]$What) {
+    $note = "$What, host pid $PID, $(Get-Date -Format s)"
+    & $script:Adb -s $Device shell "su 0 sh -c 'mkdir $script:DeviceLock 2>/dev/null && echo ""$note"" > $script:DeviceLock/owner'" | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        $owner = (& $script:Adb -s $Device shell "cat $script:DeviceLock/owner 2>/dev/null") -join ' '
+        throw "$Device is running another measurement ($owner): $script:DeviceLock is held"
+    }
+}
+function Exit-DeviceLock([string]$Device) {
+    & $script:Adb -s $Device shell "su 0 sh -c 'rm -rf $script:DeviceLock'" | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "could not release $script:DeviceLock on $Device" }
+}
+
+Export-ModuleMember -Function Get-CoreTools, Build-Core, Build-LocalCore, Push-ToDevice, Enter-DeviceLock, Exit-DeviceLock

@@ -45,6 +45,9 @@ $machines = Join-Path $work 'machines'
 & python (Join-Path $root 'core\test\exact\machines.py') (Join-Path $root 'roms\uitest') $machines "$remote/ref"
 if ($LASTEXITCODE -ne 0) { throw 'machines.py failed' }
 $frames = Get-Content -Raw (Join-Path $machines 'machines.json') | ConvertFrom-Json
+# One run on the device at a time (CoreBuild.psm1); the lock goes with the run, however it ends
+Enter-DeviceLock $Device "ab.ps1 $($Machine -join ',')"
+try {
 & $adb -s $Device shell "su 0 sh -c 'rm -rf $remote/machines $remote/ab-a $remote/ab-b; mkdir -p $remote/ab-a $remote/ab-b'"
 if ($LASTEXITCODE -ne 0) { throw "could not prepare $remote on $Device" }
 Push-ToDevice $Device $machines "$remote/"
@@ -79,4 +82,5 @@ foreach ($m in ($Machine | ForEach-Object { $_ -split ',' })) {
     '{0,-14} median A {1:N2} ({2:N2}-{3:N2})  B {4:N2} ({5:N2}-{6:N2})  B-A {7:+0.0;-0.0;0.0}%' -f $m, $ma, $sa.Minimum, $sa.Maximum, $mb, $sb.Minimum, $sb.Maximum, (($mb / $ma - 1) * 100)
 }
 & $adb -s $Device shell "su 0 sh -c 'rm -rf $remote/ab-a $remote/ab-b'" | Out-Null
+} finally { Exit-DeviceLock $Device }
 if ($different) { throw "The cores ran the guest differently: $($different -join ', ')" }

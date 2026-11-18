@@ -107,6 +107,9 @@ $machineReference = if ($Local) { $Reference.Replace('\', '/') } else { "$remote
 if ($LASTEXITCODE -ne 0) { throw 'machines.py failed' }
 $frames = Get-Content -Raw (Join-Path $machines 'machines.json') | ConvertFrom-Json
 $names = if ($Machine) { $Machine -split ',' } else { $frames.PSObject.Properties.Name }
+# One run on the device at a time (CoreBuild.psm1); the lock goes with the run, however it ends
+if (-not $Local) { Enter-DeviceLock $Device "exact.ps1 $($names -join ',')$(if ($Unlinked) { ' unlinked' })" }
+try {
 if ($Local) {
     # Each build's own folder: an unlinked run's base and tree are one build, whose hashes must not meet.
     $runs = [ordered]@{}
@@ -154,5 +157,6 @@ foreach ($m in $names) {
     "{0,-14} {1,-8} base {2,-18} tree {3,-18} {4}" -f $m, $frames.$m, (& $speed $lines.base), (& $speed $lines.tree),
         $(if ($same) { 'exact' } else { 'DIFFERS' })
 }
+} finally { if (-not $Local) { Exit-DeviceLock $Device } }
 if ($failed) { throw "Not exact on: $($failed -join ', ')" }
 "Every machine runs alike under both cores."
