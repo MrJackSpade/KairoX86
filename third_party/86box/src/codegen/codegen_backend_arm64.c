@@ -41,6 +41,11 @@
 #    include <string.h>
 
 void *codegen_mem_load_byte;
+/* KairoX86#131 (step 9): the dword load stub once per allocatable register, loading straight into it (no MOV after
+   the call); [n] is for codegen_host_reg_list[n] (X19 + n) */
+void *codegen_mem_load_long_to[CODEGEN_HOST_REGS];
+/* The register build_load_routine() puts a plain dword load in, while it builds codegen_mem_load_long_to[] */
+static int load_long_dest = REG_W0;
 void *codegen_mem_load_word;
 void *codegen_mem_load_long;
 void *codegen_mem_load_word_ea;
@@ -260,7 +265,7 @@ build_load_routine(codeblock_t *block, int size, int is_float, int ea_rule, int 
         else if (size == 2 && !is_float)
             host_arm64_LDRH_REG(block, REG_W0, REG_W1, REG_W0);
         else if (size == 4 && !is_float)
-            host_arm64_LDR_REG(block, REG_W0, REG_W1, REG_W0);
+            host_arm64_LDR_REG(block, ea_rule ? REG_W0 : load_long_dest, REG_W1, REG_W0);
         else if (size == 4 && is_float)
             host_arm64_LDR_REG_F32(block, REG_V_TEMP, REG_W1, REG_W0);
         else if (size == 8)
@@ -329,6 +334,8 @@ build_load_routine(codeblock_t *block, int size, int is_float, int ea_rule, int 
     else
         fatal("build_load_routine - unknown size %i\n", size);
     codegen_direct_read_8(block, REG_W1, &cpu_state.abrt);
+    if ((size == 4) && !is_float && !ea_rule && (load_long_dest != REG_W0))
+        host_arm64_MOV_REG(block, load_long_dest, REG_W0, 0); /* KairoX86#131: into the variant's register */
     if (size == 4 && is_float)
         host_arm64_FMOV_S_W(block, REG_V_TEMP, REG_W0);
     else if (size == 8)
@@ -638,6 +645,7 @@ build_loadstore_routines(codeblock_t *block)
 {
     /* KairoX86#430: every fast path first, each on its own line, side by side (order B), then every slow path */
     stub_slow_t slow[14];
+    stub_slow_t slow_to[CODEGEN_HOST_REGS]; /* KairoX86#131 */
 
     stub_line(block);
     codegen_mem_load_long = &block_write_data[block_pos];
@@ -681,6 +689,14 @@ build_loadstore_routines(codeblock_t *block)
     stub_line(block);
     codegen_mem_store_double = &block_write_data[block_pos];
     build_store_routine(block, 8, 1, 0, &slow[13]);
+    /* KairoX86#131 (step 9): the dword load into each allocatable register */
+    for (int r = 0; r < CODEGEN_HOST_REGS; r++) {
+        load_long_dest = codegen_host_reg_list[r].reg;
+        stub_line(block);
+        codegen_mem_load_long_to[r] = &block_write_data[block_pos];
+        build_load_routine(block, 4, 0, 0, 0, &slow_to[r]);
+    }
+    load_long_dest = REG_W0;
 
     build_load_routine(block, 4, 0, 0, 1, &slow[0]);
     build_store_routine(block, 4, 0, 1, &slow[1]);
@@ -696,6 +712,11 @@ build_loadstore_routines(codeblock_t *block)
     build_store_routine(block, 4, 1, 1, &slow[11]);
     build_load_routine(block, 8, 1, 0, 1, &slow[12]);
     build_store_routine(block, 8, 1, 1, &slow[13]);
+    for (int r = 0; r < CODEGEN_HOST_REGS; r++) {
+        load_long_dest = codegen_host_reg_list[r].reg;
+        build_load_routine(block, 4, 0, 0, 1, &slow_to[r]);
+    }
+    load_long_dest = REG_W0;
 }
 
 static void

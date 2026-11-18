@@ -1044,7 +1044,10 @@ codegen_MEM_LOAD_REG(codeblock_t *block, uop_t *uop)
     } else if (REG_IS_W(dest_size)) {
         host_arm64_call(block, codegen_mem_load_word);
     } else if (REG_IS_L(dest_size)) {
-        host_arm64_call(block, codegen_mem_load_long);
+        /* KairoX86#131 (step 9): the stub that loads straight into dest_reg */
+        if ((dest_reg < REG_X19) || (dest_reg >= REG_X19 + CODEGEN_HOST_REGS))
+            fatal("MEM_LOAD_REG - dest %i not an allocatable register\n", dest_reg);
+        host_arm64_call(block, codegen_mem_load_long_to[dest_reg - REG_X19]);
     } else if (REG_IS_Q(dest_size)) {
         host_arm64_call(block, codegen_mem_load_quad);
     } else
@@ -1055,8 +1058,6 @@ codegen_MEM_LOAD_REG(codeblock_t *block, uop_t *uop)
         host_arm64_BFI(block, dest_reg, REG_X0, 8, 8);
     } else if (REG_IS_W(dest_size)) {
         host_arm64_BFI(block, dest_reg, REG_X0, 0, 16);
-    } else if (REG_IS_L(dest_size)) {
-        host_arm64_MOV_REG(block, dest_reg, REG_X0, 0);
     } else if (REG_IS_Q(dest_size)) {
         host_arm64_FMOV_D_D(block, dest_reg, REG_V_TEMP);
     }

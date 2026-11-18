@@ -167,6 +167,7 @@
 - **`kairox86-link-ret-ways` group:** a RET at a block's end gets eight ARM64 link ways, the slot line after its own as ways 4-7, when that line is free (KairoX86#359; way 0's `is_ret` 2, set from `codegen_block_ret_exit`). The link routine tries them after the first four; the slot fill is `link_slot_fill`.
 - **`kairox86-mach64-plain-rect` group:** the Mach64 engine's plain solid fills and same-size screen copies draw each pixel without `mach64_rect_draw`'s switches on the source, the mix and the mask (KairoX86#445); the walk is unchanged.
 - **`kairox86-stub-device-write` group:** with paging off, the ARM64 store stub calls a device mapping's `write_w`/`write_l` itself for an aligned word or dword store (no debug breakpoint armed, no `page_lookup` entry), setting `mem_logical_addr` and `high_page` as `writememwl`/`writememll` do (KairoX86#397).
+- **`kairox86-load-long-to` group:** the ARM64 dword load stub is built once per allocatable register (`codegen_mem_load_long_to[]`), loading straight into it, and `codegen_MEM_LOAD_REG` calls the one for its destination (KairoX86#131 step 9).
 
 ## 86Box's translations
 
