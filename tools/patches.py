@@ -7238,6 +7238,29 @@ KAIROX86_STUB_DEVICE_WRITE = [
      "        int       nr_to_c = build_store_tracked(block, size, to_c);\n\n        for (int c = 0; c < nr_to_c; c++)\n            host_arm64_branch_set_offset(to_c[c], &block_write_data[block_pos]);\n    }\n    if ((size == 2 || size == 4) && !is_float) {\n        /* KairoX86#397: an aligned word or dword store to device memory with paging off, as writememwl()/writememll()\n           make it: no debug breakpoint armed, no page_lookup entry, then write_mapping[] of the address after rammask\n           and the mapping's own write_w/write_l, called directly. mem_logical_addr and high_page are set as there;\n           addr64a[] is left alone, as build_store_tracked() leaves it (every user fills it before reading it).\n           Anything else (paging on, a mapping without a handler of this width) goes to the C call below. */\n        uint32_t *to_c[5];\n        int       nr_to_c = 0;\n\n        host_arm64_MOVX_IMM(block, REG_X3, (uint64_t) &cr0);\n        host_arm64_LDR_IMM_W(block, REG_W3, REG_X3, 0);\n        host_arm64_TST_IMM(block, REG_W3, 0x80000000);\n        to_c[nr_to_c++] = host_arm64_BNE_(block);\n        host_arm64_MOVX_IMM(block, REG_X3, (uint64_t) &cpu_dr_armed);\n        host_arm64_LDR_IMM_W(block, REG_W3, REG_X3, 0);\n        host_arm64_CMP_IMM(block, REG_W3, 0);\n        to_c[nr_to_c++] = host_arm64_BNE_(block);\n        host_arm64_MOV_REG_LSR(block, REG_W2, REG_W0, 12);\n        host_arm64_MOVX_IMM(block, REG_X3, (uint64_t) page_lookup);\n        host_arm64_LDRX_REG_LSL3(block, REG_X4, REG_X3, REG_X2);\n        host_arm64_CMPX_IMM(block, REG_X4, 0);\n        to_c[nr_to_c++] = host_arm64_BNE_(block);\n        /*W5 = the address after rammask, X4 = its mapping, X6 = the handler*/\n        host_arm64_MOVX_IMM(block, REG_X3, (uint64_t) &rammask);\n        host_arm64_LDR_IMM_W(block, REG_W3, REG_X3, 0);\n        host_arm64_AND_REG(block, REG_W5, REG_W0, REG_W3, 0);\n        host_arm64_MOV_REG_LSR(block, REG_W2, REG_W5, MEM_GRANULARITY_BITS);\n        host_arm64_MOVX_IMM(block, REG_X3, (uint64_t) write_mapping);\n        host_arm64_LDRX_REG_LSL3(block, REG_X4, REG_X3, REG_X2);\n        host_arm64_CMPX_IMM(block, REG_X4, 0);\n        to_c[nr_to_c++] = host_arm64_BEQ_(block);\n        host_arm64_LDR_IMM_X(block, REG_X6, REG_X4, (size == 4) ? offsetof(mem_mapping_t, write_l) : offsetof(mem_mapping_t, write_w));\n        host_arm64_CMPX_IMM(block, REG_X6, 0);\n        to_c[nr_to_c++] = host_arm64_BEQ_(block);\n\n        host_arm64_MOVX_IMM(block, REG_X3, (uint64_t) &mem_logical_addr);\n        host_arm64_STR_IMM_W(block, REG_W0, REG_X3, 0);\n        host_arm64_MOVX_IMM(block, REG_X3, (uint64_t) &high_page);\n        host_arm64_STRB_IMM(block, REG_WZR, REG_X3, 0);\n        host_arm64_LDR_IMM_X(block, REG_X2, REG_X4, offsetof(mem_mapping_t, priv));\n        host_arm64_STP_PREIDX_X(block, REG_X29, REG_X30, REG_XSP, -16);\n        host_arm64_MOV_REG(block, REG_W0, REG_W5, 0);\n        host_arm64_BLR(block, REG_X6);\n        codegen_direct_read_8(block, REG_W1, &cpu_state.abrt);\n        host_arm64_LDP_POSTIDX_X(block, REG_X29, REG_X30, REG_XSP, 16);\n        stub_abort_exit(block);\n        host_arm64_RET(block, REG_X30);"),
 ]
 
+
+# # KairoX86#131 (step 9): a dword load stub per allocatable register, loading straight into it, so the call site has no MOV after it.
+KAIROX86_LOAD_LONG_TO = [
+    ('86box/src/codegen/codegen_backend_arm64.c', 'void *codegen_mem_load_byte;',
+     'void *codegen_mem_load_byte;\n/* KairoX86#131 (step 9): the dword load stub once per allocatable register, loading straight into it (no MOV after\n   the call); [n] is for codegen_host_reg_list[n] (X19 + n) */\nvoid *codegen_mem_load_long_to[CODEGEN_HOST_REGS];\n/* The register build_load_routine() puts a plain dword load in, while it builds codegen_mem_load_long_to[] */\nstatic int load_long_dest = REG_W0;'),
+    ('86box/src/codegen/codegen_backend_arm64.c', '        else if (size == 4 && !is_float)\n            host_arm64_LDR_REG(block, REG_W0, REG_W1, REG_W0);',
+     '        else if (size == 4 && !is_float)\n            host_arm64_LDR_REG(block, ea_rule ? REG_W0 : load_long_dest, REG_W1, REG_W0);'),
+    ('86box/src/codegen/codegen_backend_arm64.c', '    codegen_direct_read_8(block, REG_W1, &cpu_state.abrt);\n    if (size == 4 && is_float)',
+     "    codegen_direct_read_8(block, REG_W1, &cpu_state.abrt);\n    if ((size == 4) && !is_float && !ea_rule && (load_long_dest != REG_W0))\n        host_arm64_MOV_REG(block, load_long_dest, REG_W0, 0); /* KairoX86#131: into the variant's register */\n    if (size == 4 && is_float)"),
+    ('86box/src/codegen/codegen_backend_arm64.c', '    stub_slow_t slow[14];',
+     '    stub_slow_t slow[14];\n    stub_slow_t slow_to[CODEGEN_HOST_REGS]; /* KairoX86#131 */'),
+    ('86box/src/codegen/codegen_backend_arm64.c', '    build_store_routine(block, 8, 1, 0, &slow[13]);',
+     '    build_store_routine(block, 8, 1, 0, &slow[13]);\n    /* KairoX86#131 (step 9): the dword load into each allocatable register */\n    for (int r = 0; r < CODEGEN_HOST_REGS; r++) {\n        load_long_dest = codegen_host_reg_list[r].reg;\n        stub_line(block);\n        codegen_mem_load_long_to[r] = &block_write_data[block_pos];\n        build_load_routine(block, 4, 0, 0, 0, &slow_to[r]);\n    }\n    load_long_dest = REG_W0;'),
+    ('86box/src/codegen/codegen_backend_arm64.c', '    build_store_routine(block, 8, 1, 1, &slow[13]);',
+     '    build_store_routine(block, 8, 1, 1, &slow[13]);\n    for (int r = 0; r < CODEGEN_HOST_REGS; r++) {\n        load_long_dest = codegen_host_reg_list[r].reg;\n        build_load_routine(block, 4, 0, 0, 1, &slow_to[r]);\n    }\n    load_long_dest = REG_W0;'),
+    ('86box/src/codegen/codegen_backend_arm64_defs.h', 'extern void *codegen_mem_load_long_ea;',
+     'extern void *codegen_mem_load_long_ea;\nextern void *codegen_mem_load_long_to[]; /* KairoX86#131: the dword load straight into X19 + n */'),
+    ('86box/src/codegen/codegen_backend_arm64_uops.c', '    } else if (REG_IS_L(dest_size)) {\n        host_arm64_call(block, codegen_mem_load_long);\n    } else if (REG_IS_Q(dest_size)) {',
+     '    } else if (REG_IS_L(dest_size)) {\n        /* KairoX86#131 (step 9): the stub that loads straight into dest_reg */\n        if ((dest_reg < REG_X19) || (dest_reg >= REG_X19 + CODEGEN_HOST_REGS))\n            fatal("MEM_LOAD_REG - dest %i not an allocatable register\\n", dest_reg);\n        host_arm64_call(block, codegen_mem_load_long_to[dest_reg - REG_X19]);\n    } else if (REG_IS_Q(dest_size)) {'),
+    ('86box/src/codegen/codegen_backend_arm64_uops.c', '        host_arm64_BFI(block, dest_reg, REG_X0, 0, 16);\n    } else if (REG_IS_L(dest_size)) {\n        host_arm64_MOV_REG(block, dest_reg, REG_X0, 0);\n    } else if (REG_IS_Q(dest_size)) {',
+     '        host_arm64_BFI(block, dest_reg, REG_X0, 0, 16);\n    } else if (REG_IS_Q(dest_size)) {'),
+]
+
 PATCHES = {
     'kairo9x-build': KAIRO9X_BUILD,
     'kairo9x-platform': KAIRO9X_PLATFORM,
@@ -7430,6 +7453,7 @@ PATCHES = {
     'kairox86-mach64-plain-rect': KAIROX86_MACH64_PLAIN_RECT,
     'kairox86-link-ret-ways': KAIROX86_LINK_RET_WAYS,
     'kairox86-stub-device-write': KAIROX86_STUB_DEVICE_WRITE,
+    'kairox86-load-long-to': KAIROX86_LOAD_LONG_TO,
 }
 
 ADDED = [
