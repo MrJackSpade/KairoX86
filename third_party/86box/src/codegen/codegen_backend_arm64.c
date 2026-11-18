@@ -535,12 +535,63 @@ build_store_routine(codeblock_t *block, int size, int is_float, int phase, stub_
     }
     branch_offset     = s->branch_offset;
     misaligned_offset = s->misaligned_offset;
-    codegen_alloc(block, 640);
+    codegen_alloc(block, 900); /* KairoX86#397: the tracked RAM path, the device path and the C call */
     host_arm64_branch_set_offset(branch_offset, &block_write_data[block_pos]);
 #    if !defined(USE_GDBSTUB)
     if (size <= 4 && !is_float) {
         uint32_t *to_c[6];
         int       nr_to_c = build_store_tracked(block, size, to_c);
+
+        for (int c = 0; c < nr_to_c; c++)
+            host_arm64_branch_set_offset(to_c[c], &block_write_data[block_pos]);
+    }
+    if ((size == 2 || size == 4) && !is_float) {
+        /* KairoX86#397: an aligned word or dword store to device memory with paging off, as writememwl()/writememll()
+           make it: no debug breakpoint armed, no page_lookup entry, then write_mapping[] of the address after rammask
+           and the mapping's own write_w/write_l, called directly. mem_logical_addr and high_page are set as there;
+           addr64a[] is left alone, as build_store_tracked() leaves it (every user fills it before reading it).
+           Anything else (paging on, a mapping without a handler of this width) goes to the C call below. */
+        uint32_t *to_c[5];
+        int       nr_to_c = 0;
+
+        host_arm64_MOVX_IMM(block, REG_X3, (uint64_t) &cr0);
+        host_arm64_LDR_IMM_W(block, REG_W3, REG_X3, 0);
+        host_arm64_TST_IMM(block, REG_W3, 0x80000000);
+        to_c[nr_to_c++] = host_arm64_BNE_(block);
+        host_arm64_MOVX_IMM(block, REG_X3, (uint64_t) &cpu_dr_armed);
+        host_arm64_LDR_IMM_W(block, REG_W3, REG_X3, 0);
+        host_arm64_CMP_IMM(block, REG_W3, 0);
+        to_c[nr_to_c++] = host_arm64_BNE_(block);
+        host_arm64_MOV_REG_LSR(block, REG_W2, REG_W0, 12);
+        host_arm64_MOVX_IMM(block, REG_X3, (uint64_t) page_lookup);
+        host_arm64_LDRX_REG_LSL3(block, REG_X4, REG_X3, REG_X2);
+        host_arm64_CMPX_IMM(block, REG_X4, 0);
+        to_c[nr_to_c++] = host_arm64_BNE_(block);
+        /*W5 = the address after rammask, X4 = its mapping, X6 = the handler*/
+        host_arm64_MOVX_IMM(block, REG_X3, (uint64_t) &rammask);
+        host_arm64_LDR_IMM_W(block, REG_W3, REG_X3, 0);
+        host_arm64_AND_REG(block, REG_W5, REG_W0, REG_W3, 0);
+        host_arm64_MOV_REG_LSR(block, REG_W2, REG_W5, MEM_GRANULARITY_BITS);
+        host_arm64_MOVX_IMM(block, REG_X3, (uint64_t) write_mapping);
+        host_arm64_LDRX_REG_LSL3(block, REG_X4, REG_X3, REG_X2);
+        host_arm64_CMPX_IMM(block, REG_X4, 0);
+        to_c[nr_to_c++] = host_arm64_BEQ_(block);
+        host_arm64_LDR_IMM_X(block, REG_X6, REG_X4, (size == 4) ? offsetof(mem_mapping_t, write_l) : offsetof(mem_mapping_t, write_w));
+        host_arm64_CMPX_IMM(block, REG_X6, 0);
+        to_c[nr_to_c++] = host_arm64_BEQ_(block);
+
+        host_arm64_MOVX_IMM(block, REG_X3, (uint64_t) &mem_logical_addr);
+        host_arm64_STR_IMM_W(block, REG_W0, REG_X3, 0);
+        host_arm64_MOVX_IMM(block, REG_X3, (uint64_t) &high_page);
+        host_arm64_STRB_IMM(block, REG_WZR, REG_X3, 0);
+        host_arm64_LDR_IMM_X(block, REG_X2, REG_X4, offsetof(mem_mapping_t, priv));
+        host_arm64_STP_PREIDX_X(block, REG_X29, REG_X30, REG_XSP, -16);
+        host_arm64_MOV_REG(block, REG_W0, REG_W5, 0);
+        host_arm64_BLR(block, REG_X6);
+        codegen_direct_read_8(block, REG_W1, &cpu_state.abrt);
+        host_arm64_LDP_POSTIDX_X(block, REG_X29, REG_X30, REG_XSP, 16);
+        stub_abort_exit(block);
+        host_arm64_RET(block, REG_X30);
 
         for (int c = 0; c < nr_to_c; c++)
             host_arm64_branch_set_offset(to_c[c], &block_write_data[block_pos]);
