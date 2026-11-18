@@ -166,6 +166,7 @@
 - **`kairox86-load-stub-no-w1` group:** the ARM64 load stubs no longer set W1 = 0 on their fast paths, where nothing reads it (KairoX86#131: win98-486 +0.47%, win98-pentium +0.44% on the RG DS, exact on all 13 linked and unlinked).
 - **`kairox86-link-ret-ways` group:** a RET at a block's end gets eight ARM64 link ways, the slot line after its own as ways 4-7, when that line is free (KairoX86#359; way 0's `is_ret` 2, set from `codegen_block_ret_exit`). The link routine tries them after the first four; the slot fill is `link_slot_fill`.
 - **`kairox86-mach64-plain-rect` group:** the Mach64 engine's plain solid fills and same-size screen copies draw each pixel without `mach64_rect_draw`'s switches on the source, the mix and the mask (KairoX86#445); the walk is unchanged.
+- **`kairox86-stub-device-write` group:** with paging off, the ARM64 store stub calls a device mapping's `write_w`/`write_l` itself for an aligned word or dword store (no debug breakpoint armed, no `page_lookup` entry), setting `mem_logical_addr` and `high_page` as `writememwl`/`writememll` do (KairoX86#397).
 
 ## 86Box's translations
 
