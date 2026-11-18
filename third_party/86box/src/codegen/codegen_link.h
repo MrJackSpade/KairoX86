@@ -47,7 +47,8 @@ typedef struct codegen_link_slot_t {
     uint8_t      src_status_kept;
     uint8_t      status_known;
 #if defined(__aarch64__) || defined(_M_ARM64)
-    uint8_t      is_ret;      /*KairoX86#359, way 0 only: the exit ends a RET, so the return cache is tried after the ways*/
+    uint8_t      is_ret;      /*KairoX86#359, way 0 only: 2 when the exit, a RET at the block's end, has eight ways (the
+                                slot line after its own as ways 4-7), 1 for any other RET exit*/
 #endif
     uint64_t     page_mask;   /*block->page_mask*/
     uint64_t    *dirty_mask;  /*block->dirty_mask*/
@@ -89,15 +90,12 @@ extern uint32_t k9x_link_phys(uint32_t virt);
 extern codegen_link_slot_t codegen_link_slots[BLOCK_SIZE][CODEGEN_LINK_SLOTS][CODEGEN_LINK_WAYS];
 
 #if defined(__aarch64__) || defined(_M_ARM64)
-/*KairoX86#359: the return cache. Slots shared by every RET exit, one per return address (cs + pc, direct-mapped),
-  tried by the link routine when none of a RET exit's ways has the target. A RET exit whose ways are all taken fills
-  its target here instead of retargeting one, so a subroutine returning to more callers than an exit has ways still
-  links to each. Filled and emptied like any slot (on its target's list).*/
-#    define CODEGEN_LINK_RC           1024
-#    define CODEGEN_LINK_RC_INDEX(va) ((((va) >> 12) ^ (va)) & (CODEGEN_LINK_RC - 1))
-#    define CODEGEN_LINK_HAS_RC
-extern codegen_link_slot_t codegen_link_rc[CODEGEN_LINK_RC];
-extern int                 codegen_block_ret_exit; /*the instruction compiled last is a near or far RET*/
+/*KairoX86#359: a RET exit returns to every caller of its subroutine, so a RET at a block's end gets eight ways
+  (CODEGEN_LINK_EXIT_WAYS) when a slot line after its own is free*/
+#    define CODEGEN_LINK_HAS_RET_WAYS
+extern int codegen_block_ret_exit; /*the instruction compiled last is a near or far RET*/
+/*KairoX86#359: the ways of an exit (way 0), eight for a RET exit given two slot lines*/
+#    define CODEGEN_LINK_EXIT_WAYS(from) (((from)->is_ret == 2) ? 2 * CODEGEN_LINK_WAYS : CODEGEN_LINK_WAYS)
 #endif
 
 /*Byte offset of the link entry from &block->data[BLOCK_START]: the first
