@@ -47,6 +47,10 @@
 //                   Fails unless the machine hands its frames over so (Hardware acceleration on, Android).
 //   --slot-hashes 1 with --gpu-frames 1: each frame's picture read back from its slot (after the frame's timing)
 //                   and hashed as the processor's picture is, to compare with a run that hands frames over on it.
+//   --audio-thread <ms>  the sound read by a thread of its own every ms milliseconds, as the app's audio callback
+//                   reads it (KairoX86#387), instead of by the emulation thread after each frame: the two then
+//                   contend for the core's sound queue as they do in the app. For speed only: the frames' sound
+//                   hashes are then 0, and --audio is not written.
 //
 // Prints one line starting "start ": how long the machine took to start; and one starting "host ":
 // the frames per second the host reached, the guest's rate and the frame time distribution. At the
@@ -62,6 +66,8 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <atomic>
+#include <thread>
 #include <vector>
 
 #include "kairo/startup_typer.h"
@@ -354,6 +360,7 @@ int main(int argc, char **argv) {
     uint32_t seed = 1;
     std::string hashes_path;
     std::string audio_path;
+    long audio_thread_ms = 0;
     std::string midi_path;
     std::vector<MediaEvent> media;
     std::vector<std::array<long, 3>> places;
@@ -370,6 +377,7 @@ int main(int argc, char **argv) {
         else if (option == "--shots") shots = std::atol(value.c_str());
         else if (option == "--hashes") hashes_path = value;
         else if (option == "--audio") audio_path = value;
+        else if (option == "--audio-thread") audio_thread_ms = std::stol(value);
         else if (option == "--midi") midi_path = value;
         else if (option == "--seed") seed = uint32_t(std::strtoul(value.c_str(), nullptr, 0));
         else if (option == "--runs") runs = std::atol(value.c_str());
@@ -440,6 +448,27 @@ int main(int argc, char **argv) {
             if (!audio_out) return fail("cannot write " + audio_path);
             std::printf("audio %d Hz stereo 16-bit\n", machine->sample_rate());
         }
+        /* KairoX86#387: the app's audio callback, reading the sound on its own thread every audio_thread_ms */
+        /* stopped and joined however the run ends (a fail() return included), before the machine goes */
+        struct AudioReader {
+            std::atomic<bool> stop{false};
+            std::thread       thread;
+            ~AudioReader() {
+                stop.store(true);
+                if (thread.joinable()) thread.join();
+            }
+        } audio_reader;
+        if (audio_thread_ms > 0) {
+            if (!audio_path.empty()) return fail("--audio-thread and --audio together");
+            audio_reader.thread = std::thread([&machine, &audio_reader, audio_thread_ms] {
+                std::vector<int16_t> buffer(48000 * 2);
+                while (!audio_reader.stop.load()) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(audio_thread_ms));
+                    while (machine->read_audio(buffer.data(), uint32_t(buffer.size() / 2)) > 0) {
+                    }
+                }
+            });
+        }
         std::vector<double> times;
         times.reserve(size_t(frames));
         long loading = 0, last_loading = -1;
@@ -507,7 +536,7 @@ int main(int argc, char **argv) {
             }
             uint32_t got, total = 0;
             uint64_t sound = 1469598103934665603ull;
-            while ((got = machine->read_audio(audio.data(), uint32_t(audio.size() / 2))) > 0) {
+            while (audio_thread_ms == 0 && (got = machine->read_audio(audio.data(), uint32_t(audio.size() / 2))) > 0) {
                 total += got;
                 if (audio_out && std::fwrite(audio.data(), 4, got, audio_out) != got) return fail("cannot write " + audio_path);
                 sound = hash(reinterpret_cast<const uint8_t *>(audio.data()), size_t(got) * 4, sound);
@@ -570,6 +599,8 @@ int main(int argc, char **argv) {
         std::snprintf(state, sizeof(state), "state %016llx", (unsigned long long) machine->state());
         std::printf("%s\n", state);
         lines[size_t(run)].push_back(state);
+        audio_reader.stop.store(true);
+        if (audio_reader.thread.joinable()) audio_reader.thread.join();
         if (audio_out && std::fclose(audio_out) != 0) return fail("cannot write " + audio_path);
         machine->close();
         // After the close, which sends what the MIDI port still held
